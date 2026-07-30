@@ -1,0 +1,21 @@
+# colcon 构建产物
+build/
+install/
+log/
+
+# 由 scripts/setup_env.sh 生成，含机器相关的 UID/GID
+.env
+
+# 数据（rosbag 可能很大，不进 git）
+logs/
+*.mcap
+*.db3
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
