@@ -1,0 +1,56 @@
+# =============================================================================
+#  环境 B：云端 Vast.ai GPU 实例 + CARLA（SPEC §4.1）
+#
+#  ⚠️ 骨架，P0b 落地时完善。当前 P0a 阶段用 docker-compose.local.yml。
+#
+#  与本地版的差异只有三处：GPU 从 /dev/dri 换成 NVIDIA runtime、
+#  图形通路从 WSLg 换成虚拟 X server (noVNC)、多暴露一个 6080 端口。
+#  **镜像本身完全相同** —— 这是双环境方案能成立的前提（SPEC §4.1）。
+# =============================================================================
+name: ads
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+    image: ads-dev:jazzy
+    container_name: ads-dev
+
+    # -------------------------------------------------------------------------
+    # NVIDIA GPU
+    # -------------------------------------------------------------------------
+    # capabilities 必须包含 graphics —— CARLA 是 Unreal 应用，要 Vulkan。
+    # 只给 compute/utility 的话，nvidia-smi 正常、CUDA 正常，但 CARLA 一启动就崩。
+    # 在 Vast.ai 上还需在实例的 Docker Create/Run Options 里设
+    # `-e NVIDIA_DRIVER_CAPABILITIES=all`（见 SPEC §4.1）。
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, graphics, utility, compute]
+
+    volumes:
+      - ..:/workspace:cached
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      DISPLAY: ":99"                     # Xvfb / x11vnc，P0b 补
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+
+    ports:
+      - "6080:6080"                      # noVNC
+
+    shm_size: "2gb"
+    ipc: host
+    network_mode: host
+
+    stdin_open: true
+    tty: true
+    command: sleep infinity
