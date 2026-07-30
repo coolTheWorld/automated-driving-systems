@@ -6,6 +6,32 @@
 
 ---
 
+## 🔖 下次从这里继续
+
+**当前位置**：S1 ✓、S2 ✓ 均已提交；**下一步是 S3 的 3.1**（建 colcon 工作区骨架）。
+S3 结束是 **CP2**，其中 **3.4 是整个双环境方案的技术枢纽**——把 Gazebo 原生话题名
+翻译成 SPEC §4.1 的规范名，P0b 的 `carla_bridge` 之后要做完全相同的翻译。
+
+**代码在分支 `p0a-s1-env` 上，尚未合回 main，也未 push。**
+
+恢复环境（宿主机执行）：
+
+```bash
+cd ~/work/automated-driving-systems
+export COMPOSE_FILE=docker/docker-compose.local.yml
+docker compose up -d                                    # 镜像已构建好，直接起
+docker compose exec dev /workspace/scripts/verify_gpu.sh   # 确认 GPU 仍是 D3D12（10 项）
+docker compose exec dev /workspace/scripts/verify_sim.sh   # 确认仿真基线仍成立（6 项）
+```
+
+两个脚本都退出码 0 才往下做。**若 `verify_gpu.sh` 挂了，先看它是不是又变回 llvmpipe**
+——Windows 侧驱动更新或 WSL 重启后 `/dev/dxg` 的存在性值得重新确认。
+
+容器内跑任何 `gz` 命令前需 `source /opt/ros/jazzy/setup.bash`
+（Gazebo 装在 ROS 前缀下），脚本里 source 时要临时 `set +u`。
+
+---
+
 ## S1　容器 + GPU + GUI　【检查点 CP1：go / no-go】
 
 - [x] **1.1** 宿主机安装 Docker
