@@ -1,2 +1,2 @@
-# AutomatedDrivingSystems
-AutomatedDrivingSystems
+# automated-driving-systems
+automated-driving-systems
