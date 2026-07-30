@@ -1,0 +1,89 @@
+# =============================================================================
+#  环境 A：本机 WSL2 + Gazebo（SPEC §4.1）
+#
+#  用法（在仓库根目录执行）：
+#      ./scripts/setup_env.sh                              # 生成 .env
+#      export COMPOSE_FILE=docker/docker-compose.local.yml
+#      docker compose build && docker compose up -d
+#      docker compose exec dev bash
+# =============================================================================
+# 显式指定项目名。不写的话 compose 会取 compose 文件所在目录名（"docker"），
+# 于是网络、卷全带 docker- 前缀，和 Docker 自身的东西混在一起很难认。
+name: ads
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+    image: ads-dev:jazzy
+    container_name: ads-dev
+
+    # -------------------------------------------------------------------------
+    # GPU 直通
+    # -------------------------------------------------------------------------
+    # WSL2 下 GPU 不是普通的 Linux DRM 设备，真正的通路是 dxgkrnl 暴露的 /dev/dxg：
+    #
+    #     Mesa d3d12_dri.so ──dlopen──▶ libdxcore.so ──ioctl──▶ /dev/dxg ──▶ Windows GPU
+    #
+    # /dev/dri/{card0,renderD128} 也在，但那只是 WSL 摆出来的兼容外观；
+    # 只映射 /dev/dri 而漏掉 /dev/dxg，表现是 glxinfo 报 llvmpipe + Accelerated: no，
+    # 而且**不报任何错误** —— 这正是 P0a 1.4 第一次跑出来的症状。
+    devices:
+      - /dev/dxg:/dev/dxg                    # ← 硬件加速的实际通路，漏了就是软件渲染
+      - /dev/dri:/dev/dri                    # card0(video 组) + renderD128(render 组)
+
+    # 内核只认数字 GID，不认组名。宿主的 render GID(990) 与容器内同名组不同，
+    # 所以必须按数字注入，否则 /dev/dri/renderD128 打不开 → 静默退化软件渲染。
+    # 数值由 scripts/setup_env.sh 从宿主读出后写进 .env。
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-990}"
+
+    volumes:
+      - ..:/workspace:cached
+      # --- WSLg 图形通路 ---
+      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 socket
+      - /mnt/wslg:/mnt/wslg                  # WSLg 运行时目录
+      - /usr/lib/wsl:/usr/lib/wsl:ro         # libdxcore.so 等，Mesa d3d12 驱动要 dlopen
+
+    environment:
+      DISPLAY: "${DISPLAY:-:0}"
+      WAYLAND_DISPLAY: "${WAYLAND_DISPLAY:-wayland-0}"
+      XDG_RUNTIME_DIR: /mnt/wslg/runtime-dir
+      PULSE_SERVER: /mnt/wslg/PulseServer
+
+      # d3d12_dri.so 用 dlopen 加载 libdxcore.so，没有 DT_NEEDED 记录，
+      # 链接器不会自动找 —— 必须显式指路。漏了这条 = 软件渲染。
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib
+
+      # 显式指定 gallium 驱动。**不能省。**
+      #
+      # 宿主是 Ubuntu 26.04 / Mesa 26.0.3，能自动探测到 WSL 的 d3d12 设备；
+      # 容器是 Ubuntu 24.04 / Mesa 25.2.8（Jazzy 绑死 24.04，见 SPEC §4 版本约束链），
+      # 自动探测不生效，会安静地落到 llvmpipe。实测：同一个容器里
+      #     glxinfo -B                      → llvmpipe,  Accelerated: no
+      #     GALLIUM_DRIVER=d3d12 glxinfo -B → D3D12 (AMD Radeon 780M), Accelerated: yes
+      # 驱动文件两边完全一样（都是 libdril_dri.so 的软链），差的只是自动选择逻辑。
+      GALLIUM_DRIVER: d3d12
+
+      # 显式关掉软件渲染兜底。宁可报错，也不要「悄悄能跑但很慢」——
+      # 后者会让你把几天时间浪费在错误的方向上。
+      LIBGL_ALWAYS_SOFTWARE: "0"
+
+      # 单机开发用固定 DOMAIN_ID，避免和局域网内其他 ROS 2 实例串话
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+
+    # ROS 2 节点间用共享内存传大消息（点云），默认 64 MB 不够
+    shm_size: "2gb"
+    ipc: host
+
+    # 让容器内的 ROS 2 节点能与宿主/其他容器直接 DDS 发现
+    network_mode: host
+
+    stdin_open: true
+    tty: true
+    command: sleep infinity
