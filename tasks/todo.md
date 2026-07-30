@@ -1,7 +1,7 @@
 # P0a 任务清单
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
-> 状态：**S1 进行中（CP1 已通过）**　|　更新：2026-07-30（已切换到 Jazzy + Ubuntu 24.04）
+> 状态：**S1 ✓ / S2 ✓，下一步 S3**　|　更新：2026-07-30（已切换到 Jazzy + Ubuntu 24.04）
 > 技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 
 ---
@@ -46,18 +46,30 @@
 
 ## S2　Gazebo 世界 + 车能动
 
-- [ ] **2.1** Dockerfile 加装 `ros-jazzy-ros-gz`（**官方组合**，自动拉 Harmonic）
-      　　✅ `gz sim --versions` 显示 Harmonic
-- [ ] **2.2** `worlds/campus_minimal.sdf`：地面 + 一段直路 + 静态方块障碍
-      　　✅ `gz sim` 能加载并显示
-- [ ] **2.3** `models/ego_vehicle/`：车体 + 四轮 + `AckermannSteering` 插件
-      　　✅ 车出现在世界中
-- [ ] **2.4** `config/vehicle_params.yaml`（**单一来源**，SPEC §4.1 强制）
-      　　✅ 轴距 / 最大转角 / 质量 / 加减速限值齐全，**全部带单位后缀**
-- [ ] **2.5** 用 gz 原生话题驱动车辆
-      　　✅ 发指令后车前进 / 转向
-- [ ] **2.6** 测量实时率
-      　　✅ **RTF ≥ 0.8**　❌ 不达标先简化几何，不要往下做
+- [x] **2.1** Dockerfile 加装 `ros-jazzy-ros-gz`（**官方组合**，自动拉 Harmonic）
+      　　✅ `gz sim --versions` → **8.11.0**（= Harmonic）
+      　　ℹ️ 走 `ros-jazzy-gz-sim-vendor`，`gz` 在 ROS 前缀下，脚本里必须先 source
+- [x] **2.2** `worlds/campus_minimal.sdf`：地面 + 100 m 直路 + 3 个交错方块 + 一堵墙
+      　　✅ `gz sim` 加载正常，GUI 中肉眼确认
+      　　ℹ️ 障碍摆成左右交错，S4 的「绕障一圈」才需要真的打方向
+      　　ℹ️ 墙是给 S3 激光雷达用的大面积回波目标
+- [x] **2.3** `models/ego_vehicle/`：车体 + 四轮 + `AckermannSteering` 插件
+      　　✅ 车出现在世界中，四轮姿态正确
+      　　⚠️ `model.sdf` 是**生成物**，由 `scripts/gen_vehicle_model.py` 从 YAML 生成
+      　　ℹ️ `base_link` 在后轴中心、地面高度（Autoware 惯例）
+- [x] **2.4** `config/vehicle_params.yaml`（**单一来源**，SPEC §4.1 强制）
+      　　✅ 轴距 2.7 m / 轮距 1.55 m / 质量 1500 kg / 最大转角 0.6 rad 等齐全，全部带单位后缀
+      　　✅ 生成器带 `--check` 模式，S5 的 CI 可用它卡住「改了 YAML 忘了重新生成」
+- [x] **2.5** 用 gz 原生话题驱动车辆
+      　　✅ 直行：6 s 前进 **15.478 m**（`verify_sim.sh` 步骤 4）
+      　　✅ 转向：6 s 侧移 **10.988 m**（步骤 5，驱动与转向是两条独立链路，都要测）
+- [x] **2.6** 测量实时率
+      　　✅ headless 纯物理 **RTF = 1.000**；带 GUI 渲染 **RTF = 0.999**
+      　　ℹ️ 用 `scripts/verify_sim.sh` 从 `/world/*/stats` 取 12 帧均值，不读 GUI 状态栏
+
+> **参数确实传导到了模型里**：指令 3 m/s、`max_accel_mps2: 1.5` →
+> 加速到位需 2 s 走 3 m，其后 4 s × 3 m/s = 12 m，理论 15 m，实测 15.478 m。
+> 这比「车动了」有信息量得多 —— 它证明的是 YAML 里的限值真的生效，而不只是模型能跑。
 
 ---
 
@@ -119,9 +131,9 @@
 ## 进度
 
 ```
-S1 █████  5/5 ✓   S2 ░░░░░░  0/6     S3 ░░░░░░░░  0/8
+S1 █████  5/5 ✓   S2 ██████  6/6 ✓   S3 ░░░░░░░░  0/8
 S4 ░░░░  0/4      S5 ░░░░░░  0/6
-                                          总计  5/29
+                                          总计  11/29
 ```
 
 ## 待办（非当前阶段，记下免得忘）

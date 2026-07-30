@@ -59,7 +59,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# 4. DDS 锁定 —— SPEC §4「不可自行改动的三条」第 3 条
+# 4. Gazebo Harmonic + ROS 2 桥接
+# -----------------------------------------------------------------------------
+# 这里**只装 ros-jazzy-ros-gz** 这一个元包，不单独装 gz-harmonic。
+# 原因：Jazzy 的 ros-gz 由官方按「Jazzy 配 Harmonic」编译，它的依赖会把配套版本的
+# Gazebo 一起拉进来。如果反过来先从 packages.osrfoundation.org 装 gz-harmonic
+# 再装 ros-gz，两条源的版本容易错位，症状是桥接节点起来了但话题一条都不通。
+#
+# 装在工具链层之后，是为了不让前面那几个大 apt 层（desktop 约 2 GB）失效。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros-gz \
+    && rm -rf /var/lib/apt/lists/*
+
+# Gazebo 的渲染后端也走 OGRE→OpenGL，同样吃 compose 里设的 GALLIUM_DRIVER=d3d12。
+# 若这里出现软件渲染，先回去跑 scripts/verify_gpu.sh，别在 Gazebo 侧瞎调。
+
+# -----------------------------------------------------------------------------
+# 5. DDS 锁定 —— SPEC §4「不可自行改动的三条」第 3 条
 # -----------------------------------------------------------------------------
 # CARLA 0.9.16 的原生 ROS 2 接口内嵌 Fast DDS，**只支持 Fast DDS**。
 # 换成 CycloneDDS 的症状是：本地 Gazebo 一切正常，一上 CARLA 完全收不到数据。
@@ -67,7 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # -----------------------------------------------------------------------------
-# 5. 非 root 用户
+# 6. 非 root 用户
 # -----------------------------------------------------------------------------
 # 若以 root 运行，容器写进挂载卷的文件在宿主上属主会变成 root，
 # 之后你在 WSL 里改自己的代码都要 sudo。UID/GID 与宿主对齐可避免。
@@ -91,7 +107,7 @@ RUN if getent passwd ${UID} >/dev/null; then \
 # 换机器时只改 .env 即可，不用重建镜像。
 
 # -----------------------------------------------------------------------------
-# 6. shell 环境
+# 7. shell 环境
 # -----------------------------------------------------------------------------
 RUN { \
       echo 'source /opt/ros/jazzy/setup.bash'; \
@@ -104,8 +120,7 @@ USER ${USERNAME}
 WORKDIR /workspace
 
 # =============================================================================
-#  后续阶段将在此追加（现在不装，是为了让 S1 的 go/no-go 尽快出结果）：
-#    S2   ros-jazzy-ros-gz        Jazzy + Harmonic 官方组合，会自动带上 gz-harmonic
+#  后续阶段将在此追加：
 #    S3   ros-jazzy-pcl-ros / libpcl-dev
 #    P0b  CARLA 0.9.16 PythonAPI wheel（Python 3.12）
 # =============================================================================

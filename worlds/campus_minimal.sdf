@@ -1,0 +1,187 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================================
+     campus_minimal —— P0a 的最小可用世界
+
+     刻意做得极简：地面 + 一段直路 + 几个方块障碍。原因见 tasks/plan.md §3 ——
+     这个阶段要验证的是「仿真链路通不通」，不是场景像不像。世界越简单，
+     RTF 越高、启动越快、出问题时变量越少。真实的园区场景等 P1 有了地图再说。
+
+     命名前缀 campus_ 是为了和后面的 campus_full / campus_intersection 归成一类。
+     =========================================================================== -->
+<sdf version="1.9">
+  <world name="campus_minimal">
+
+    <!-- =====================================================================
+         物理
+         =====================================================================
+         步长 1 ms 是带轮胎接触的车辆仿真的常规值。步长放大到 5 ms 以上，
+         轮胎接触力的求解会不稳定，表现是车在静止时自己抖动、缓慢漂移。
+
+         real_time_factor 设 1.0 表示「尽量按真实时间跑」。任务 2.6 要测的
+         实测 RTF 就是拿实际速度跟这个目标比。 -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- =====================================================================
+         系统插件
+
+         这里只挂 S2 需要的三个。传感器相关的 Sensors / Imu 系统等 S3 加装 ——
+         Sensors 会拉起渲染线程，现在挂上会让 2.6 测出来的 RTF 不能反映
+         「纯物理」的基准值，后面加传感器时就分不清帧率是被谁拖下去的。 -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.82 0.9 1</background>
+      <!-- 关阴影。ODD 限定白天晴朗（SPEC §2），阴影对算法毫无价值，
+           但它是 RTF 的头号消耗项之一。 -->
+      <shadows>false</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.4 0.3 -0.9</direction>
+    </light>
+
+    <!-- 地面 -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
+          <material>
+            <ambient>0.35 0.45 0.32 1</ambient>
+            <diffuse>0.4 0.52 0.36 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- =====================================================================
+         直路：100 m × 7 m，双车道宽度。
+         用一块薄板贴在地面上，纯视觉参照物，不参与碰撞（没有 collision 标签）——
+         省下一份接触计算。 -->
+    <model name="road">
+      <static>true</static>
+      <pose>40 0 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="surface">
+          <geometry><box><size>100 7 0.01</size></box></geometry>
+          <material>
+            <ambient>0.22 0.22 0.24 1</ambient>
+            <diffuse>0.28 0.28 0.3 1</diffuse>
+          </material>
+        </visual>
+        <!-- 中心分道线 -->
+        <visual name="center_line">
+          <pose>0 0 0.006 0 0 0</pose>
+          <geometry><box><size>100 0.15 0.01</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.8 1</ambient>
+            <diffuse>0.95 0.95 0.9 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- =====================================================================
+         静态障碍物
+
+         摆成左右交错，这样 S4 的「键盘开车绕障碍物一圈」需要真的打方向，
+         而不是一脚油门直着开过去 —— 摆成一排的话那个验收等于没验。
+         尺寸取 1 m 见方，比车小，撞上去是明确的失败信号而不是卡死。 -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>15 1.6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1 1 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1 1 1</size></box></geometry>
+          <material>
+            <ambient>0.7 0.35 0.1 1</ambient><diffuse>0.85 0.45 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>30 -1.6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1 1 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1 1 1</size></box></geometry>
+          <material>
+            <ambient>0.7 0.35 0.1 1</ambient><diffuse>0.85 0.45 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obstacle_3">
+      <static>true</static>
+      <pose>45 1.6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1 1 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1 1 1</size></box></geometry>
+          <material>
+            <ambient>0.7 0.35 0.1 1</ambient><diffuse>0.85 0.45 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 一堵墙，给 S3 的激光雷达一个大面积回波目标。
+         点云调试时，平整的大面比零散小方块好判断对错得多。 -->
+    <model name="wall">
+      <static>true</static>
+      <pose>70 0 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4 12 3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 12 3</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.55 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- =====================================================================
+         自车。模型本体在 models/ego_vehicle/，靠 GZ_SIM_RESOURCE_PATH 找到
+         （已在 docker-compose.local.yml 里设成 /workspace/models）。
+
+         起点放在路的起始端、道路中心线右侧半个车道处，车头朝 +x。 -->
+    <include>
+      <uri>model://ego_vehicle</uri>
+      <name>ego_vehicle</name>
+      <pose>0 -1.75 0 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>
