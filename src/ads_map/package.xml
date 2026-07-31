@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_map</name>
+  <version>0.1.0</version>
+  <description>
+    园区地图：OpenDRIVE 解析 → 车道级有向图 → 全局路由（SPEC §3.2）。
+
+    地图数据本身不在本包内，而在仓库根的 maps/campus.xodr —— 那是
+    **两个仿真环境共用**的单一来源（SPEC §4.1 强制要求第 2 条），
+    由 config/campus_map.yaml 经 scripts/gen_map.py 生成。
+    本包是它的消费者之一，CARLA 侧（P0b）是另一个。
+
+    按 SPEC §3.3 分层：lib/ 是纯 C++17 无 ROS 依赖的算法，node/ 是 ROS 包装层。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <!-- L1 测试用 pytest：被测的是 scripts/gen_map.py 里的纯 Python 函数，
+       以及它产出的 maps/campus.xodr 的几何自洽性。不需要 ROS 图。 -->
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
