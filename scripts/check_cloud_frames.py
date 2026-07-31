@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""校验 /lidar/points 是否满足 SPEC §4.1 的契约：坐标系、频率、以及**真的做了变换**。
+"""校验 /lidar/points 是否满足 SPEC §4.1 的契约。
 
-为什么这三项要放在一个 Python 脚本里，而不是用 ros2 命令行拼
-------------------------------------------------------------
+四项判据：
+    1. frame_id == base_link
+    2. 点云**真的做了坐标变换**（不是只改了标签）—— 见下
+    3. 自车反射点已滤净（盒内 0 点）
+    4. 频率 ≥ 9 Hz
+
+为什么放在一个 Python 脚本里，而不是用 ros2 命令行拼
+----------------------------------------------------
 1. `ros2 topic hz` / `tf2_echo` 输出到管道时是全缓冲的，被 timeout 打断时
    缓冲区直接丢弃，表现为「测不到数据」，但其实数据一直在。
 2. 每个 ros2 命令都要新建节点，而这套环境里一次 DDS 发现要十几秒。
@@ -50,10 +56,25 @@ OUT_TOPIC = "/lidar/points"
 TARGET_FRAME = "base_link"
 
 
-def cloud_extent(msg: PointCloud2) -> dict | None:
-    """统计一帧点云的坐标范围，跳过无效点。"""
+def ego_box(params: dict) -> dict:
+    """自车包围盒（base_link 系）。与 launch 里的 ego_box_params 必须一致。"""
+    geo = params["geometry"]
+    half_width = geo["width_m"] / 2.0
+    return {
+        "x_min": -geo["rear_overhang_m"],
+        "x_max": geo["wheelbase_m"] + geo["front_overhang_m"],
+        "y_min": -half_width,
+        "y_max": half_width,
+        "z_min": 0.0,
+        "z_max": geo["height_m"],
+    }
+
+
+def cloud_extent(msg: PointCloud2, box: dict | None = None) -> dict | None:
+    """统计一帧点云的坐标范围，跳过无效点；可选统计落在自车盒内的点数。"""
     xs, ys, zs = [], [], []
     n_invalid = 0
+    n_in_ego = 0
     for x, y, z in point_cloud2.read_points(
             msg, field_names=("x", "y", "z"), skip_nans=True):
         # ⚠️ skip_nans 挡不住无穷大。
@@ -70,21 +91,30 @@ def cloud_extent(msg: PointCloud2) -> dict | None:
         xs.append(float(x))
         ys.append(float(y))
         zs.append(float(z))
+        if box is not None and (
+                box["x_min"] <= x <= box["x_max"]
+                and box["y_min"] <= y <= box["y_max"]
+                and box["z_min"] <= z <= box["z_max"]):
+            n_in_ego += 1
     if not zs:
         return None
     return {
         "frame_id": msg.header.frame_id,
         "n": len(zs),
         "n_invalid": n_invalid,
+        "n_in_ego": n_in_ego,
+        "is_dense": msg.is_dense,
+        "height": msg.height,
         "x_min": min(xs), "x_max": max(xs),
         "z_min": min(zs), "z_max": max(zs),
     }
 
 
 class CloudContractChecker(Node):
-    def __init__(self, want_frames: int) -> None:
+    def __init__(self, want_frames: int, box: dict) -> None:
         super().__init__("check_cloud_frames")
         self.want_frames = want_frames
+        self.box = box
         self.extent: dict[str, dict] = {}
         # 频率统计用两条时间轴：
         #   sim  —— 消息头里的时间戳，反映**传感器被配置成多少 Hz**
@@ -114,7 +144,9 @@ class CloudContractChecker(Node):
     def _make_cb(self, topic: str):
         def cb(msg: PointCloud2) -> None:
             if topic not in self.extent:
-                ext = cloud_extent(msg)
+                # 只对输出话题统计自车盒内的点：输入话题在 lidar_link 系，
+                # 用 base_link 系的盒子去套没有意义。
+                ext = cloud_extent(msg, self.box if topic == OUT_TOPIC else None)
                 if ext is not None:
                     self.extent[topic] = ext
             if len(self.sim_stamps[topic]) < self.want_frames:
@@ -153,8 +185,10 @@ def main() -> int:
                     help="z 偏移的允许误差 m。地面不是绝对平的，留一点余量")
     args = ap.parse_args()
 
+    box = ego_box(params)
+
     rclpy.init()
-    node = CloudContractChecker(args.frames)
+    node = CloudContractChecker(args.frames, box)
     try:
         deadline = time.monotonic() + args.timeout
         while rclpy.ok() and not node.done() and time.monotonic() < deadline:
@@ -182,7 +216,9 @@ def main() -> int:
         s = extent[topic]
         print(f"  {topic}")
         print(f"    frame_id = {s['frame_id']}   有效点 = {s['n']}   "
-              f"无回波(±inf) = {s['n_invalid']}")
+              f"无回波(±inf) = {s['n_invalid']}   "
+              f"{'有序' if s['height'] > 1 else '无序'}"
+              f"{'/dense' if s['is_dense'] else ''}")
         print(f"    z ∈ [{s['z_min']:+.3f}, {s['z_max']:+.3f}]   "
               f"x ∈ [{s['x_min']:+.3f}, {s['x_max']:+.3f}]")
 
@@ -209,7 +245,34 @@ def main() -> int:
     else:
         print("  （数值确实变了，不是仅改标签）")
 
-    # ---- 判据 3：频率 ----
+    # ---- 判据 3：自车反射点必须被滤干净 ----
+    #
+    # 为什么这条要单列判据：雷达装在 z=1.6，车顶在 z=1.5，只高 10 cm，
+    # 实测有 34% 的点打在自己车顶上。这在物理上是对的（真车也这样），
+    # 但如果不滤掉，感知会把自车车顶识别成一个**零距离障碍物**，
+    # 直接触发急刹 —— 而且车永远甩不掉它。
+    n_ego = out["n_in_ego"]
+    print(f"\n  自车包围盒 x[{box['x_min']:+.2f}, {box['x_max']:+.2f}] "
+          f"y[{box['y_min']:+.2f}, {box['y_max']:+.2f}] "
+          f"z[{box['z_min']:+.2f}, {box['z_max']:+.2f}]")
+    if n_ego == 0:
+        print("✓ 自车反射点已滤净（盒内 0 点）")
+    else:
+        print(f"✗ 仍有 {n_ego} 个点落在自车包围盒内")
+        print("   检查 launch 是否把 ego_box.* 参数传给了 lidar_preprocessor，"
+              "以及 margin 是否够大。")
+        ok = False
+
+    # 无序 + dense 是滤除动作的必然结果，顺带核对一下，
+    # 免得哪天滤除逻辑被绕过了却没人发现。
+    if out["is_dense"] and out["height"] == 1:
+        print("✓ 输出为无序 dense 点云（滤除已生效）")
+    else:
+        print(f"✗ 输出仍是 height={out['height']} / is_dense={out['is_dense']}，"
+              "滤除似乎没执行")
+        ok = False
+
+    # ---- 判据 4：频率 ----
     print()
     for topic in (RAW_TOPIC, OUT_TOPIC):
         sim_hz, wall_hz, n = rates[topic]
@@ -232,7 +295,7 @@ def main() -> int:
         if raw_hz is not None and raw_hz - out_hz > 0.5:
             print(f"   瓶颈在**桥接之后**：raw {raw_hz:.2f} Hz → out {out_hz:.2f} Hz，"
                   "中途丢了帧。")
-            print("   查 pointcloud_to_base_link 的耗时告警，以及 QoS 队列深度。")
+            print("   查 lidar_preprocessor 的耗时告警，以及 QoS 队列深度。")
         else:
             print("   瓶颈在**传感器渲染**：raw 本身就只有这么快，GPU 跟不上。")
             print("   降 horizontal_samples 或 channels（config/vehicle_params.yaml）；"
