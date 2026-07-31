@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    全栈启动入口。唯一职责是**装配** —— 根据 sim 参数选择仿真数据源，
+    再把算法节点挂上去。这里不含任何算法逻辑，也不定义任何参数默认值。
+
+    它存在的理由是 SPEC §4.1「切换仿真源 = 换一个 launch 参数」：
+    上游算法节点只认 ROS 话题，换 Gazebo / CARLA / bag 回放不该改任何代码。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 仿真数据源的各个实现。目前只有 gazebo_bridge 存在；
+       carla_bridge（P0b）和 bag_replay 出现后加在这里。
+       用 exec_depend 而非 depend：本包不编译任何代码，只在运行时 include
+       它们的 launch 文件。 -->
+  <exec_depend>gazebo_bridge</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
