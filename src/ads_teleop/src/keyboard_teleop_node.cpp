@@ -145,6 +145,27 @@ public:
     const double rate_hz = declare_parameter<double>("publish_rate_hz", 20.0);
 
     pub_ = create_publisher<ads_msgs::msg::VehicleCmd>("/vehicle_cmd", 10);
+
+    // ⚠️ 这里用 create_wall_timer（墙上时钟），而下游 vehicle_cmd_bridge 用的是
+    //    create_timer + 节点时钟（仿真钟）。**两者不一致是有意的**，但有一个
+    //    成立条件，写在这里免得将来有人踩：
+    //
+    //    用墙钟的理由：本节点的驱动源是**人按键盘**，而人是按真实时间反应的。
+    //    改用仿真钟的话，RTF 掉到 0.1 时轮询频率也跟着掉到 2 Hz（墙上时间），
+    //    手感会变成按一下等半秒才响应。下游 bridge 则相反 —— 它做的是
+    //    v += a·dt 的积分，必须走仿真钟，否则 RTF 偏离 1 时积出来的速度就是错的。
+    //
+    //    成立条件：看门狗按**仿真时间**判超时（阈值 cmd_timeout_s = 0.5 仿真秒），
+    //    而本节点的发布间隔换算成仿真时间是 (1/rate_hz) × RTF。于是
+    //
+    //        (1 / 20) × RTF > 0.5   ⟹   RTF > 10   → 看门狗持续误触发，车永远刹停
+    //
+    //    当前实测 RTF = 1.000，余量 10 倍；而且人也不可能在 10 倍速下开车，
+    //    所以现状安全。**但这是个隐含假设**：如果将来有人把本节点拿去做
+    //    加速回放下的指令注入（RTF 远大于 1），就会撞上它，
+    //    症状是「指令明明在发，车却一直被看门狗刹住」。
+    //    届时的正确改法是把这里换成节点时钟，而不是去调大看门狗阈值 ——
+    //    调大阈值等于削弱失联保护，那是安全逻辑（SPEC §11）。
     timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / rate_hz), std::bind(&KeyboardTeleop::on_timer, this));
 
