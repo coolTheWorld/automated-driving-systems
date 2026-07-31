@@ -1,3 +1,17 @@
+# Copyright 2026 孙帅
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # =============================================================================
 #  gazebo_sim.launch.py —— 一条命令拉起「Gazebo + 桥接 + TF + RViz」
 #
@@ -12,17 +26,18 @@
 
 from pathlib import Path
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+import yaml
 
 
 def ego_box_params(vehicle_params: dict) -> dict:
-    """由车辆几何参数算出自车包围盒（base_link 系，单位 m）。
+    """
+    由车辆几何参数算出自车包围盒（base_link 系，单位 m）.
 
     base_link 在**后轴中心、地面高度**，所以车身占据：
 
@@ -37,54 +52,55 @@ def ego_box_params(vehicle_params: dict) -> dict:
     ⚠️ 这里只做算术，不引入任何新数字。所有输入都来自
     config/vehicle_params.yaml（SPEC §4.1 车辆参数单一来源）。
     """
-    geo = vehicle_params["geometry"]
-    half_width = geo["width_m"] / 2.0
+    geo = vehicle_params['geometry']
+    half_width = geo['width_m'] / 2.0
     return {
-        "ego_box.x_min": -geo["rear_overhang_m"],
-        "ego_box.x_max": geo["wheelbase_m"] + geo["front_overhang_m"],
-        "ego_box.y_min": -half_width,
-        "ego_box.y_max": half_width,
-        "ego_box.z_min": 0.0,
-        "ego_box.z_max": geo["height_m"],
+        'ego_box.x_min': -geo['rear_overhang_m'],
+        'ego_box.x_max': geo['wheelbase_m'] + geo['front_overhang_m'],
+        'ego_box.y_min': -half_width,
+        'ego_box.y_max': half_width,
+        'ego_box.z_min': 0.0,
+        'ego_box.z_max': geo['height_m'],
     }
 
 
 def vehicle_limit_params(vehicle_params: dict) -> dict:
-    """vehicle_cmd_bridge 需要的车辆参数。
+    """
+    vehicle_cmd_bridge 需要的车辆参数.
 
     同样只是搬运，不引入任何新数字 —— 全部来自 config/vehicle_params.yaml。
     参数名保持和 YAML 里的层级一致（geometry.* / limits.*），
     这样看到日志里的参数名就知道去 YAML 的哪一段改。
     """
-    geo = vehicle_params["geometry"]
-    lim = vehicle_params["limits"]
+    geo = vehicle_params['geometry']
+    lim = vehicle_params['limits']
     return {
-        "geometry.wheelbase_m": geo["wheelbase_m"],
-        "limits.max_steer_angle_rad": lim["max_steer_angle_rad"],
-        "limits.max_speed_mps": lim["max_speed_mps"],
-        "limits.max_accel_mps2": lim["max_accel_mps2"],
-        "limits.max_decel_mps2": lim["max_decel_mps2"],
-        "limits.emergency_decel_mps2": lim["emergency_decel_mps2"],
+        'geometry.wheelbase_m': geo['wheelbase_m'],
+        'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
+        'limits.max_speed_mps': lim['max_speed_mps'],
+        'limits.max_accel_mps2': lim['max_accel_mps2'],
+        'limits.max_decel_mps2': lim['max_decel_mps2'],
+        'limits.emergency_decel_mps2': lim['emergency_decel_mps2'],
     }
 
 
 def generate_launch_description():
-    bridge_share = get_package_share_directory("gazebo_bridge")
-    viz_share = get_package_share_directory("ads_visualization")
+    bridge_share = get_package_share_directory('gazebo_bridge')
+    viz_share = get_package_share_directory('ads_visualization')
 
-    bridge_config = str(Path(bridge_share) / "config" / "bridge_topics.yaml")
-    urdf_file = Path(viz_share) / "urdf" / "ego_vehicle.urdf"
-    rviz_config = str(Path(viz_share) / "rviz" / "default.rviz")
+    bridge_config = str(Path(bridge_share) / 'config' / 'bridge_topics.yaml')
+    urdf_file = Path(viz_share) / 'urdf' / 'ego_vehicle.urdf'
+    rviz_config = str(Path(viz_share) / 'rviz' / 'default.rviz')
 
     # robot_state_publisher 要的是 URDF 的**内容字符串**，不是路径。
     # 在这里一次读进来，比让节点自己去读省事，也能在文件缺失时立刻报错。
-    robot_description = urdf_file.read_text(encoding="utf-8")
+    robot_description = urdf_file.read_text(encoding='utf-8')
 
     # 车辆参数由 CMakeLists 装进本包 share（symlink-install 下就是仓库里那一份）。
     # 在 launch 里读、算好了传给节点，而不是让 C++ 节点自己解析 YAML ——
     # 这样节点不必依赖 yaml-cpp，也不必知道参数文件在哪。
     vehicle_params = yaml.safe_load(
-        (Path(bridge_share) / "config" / "vehicle_params.yaml").read_text(encoding="utf-8"))
+        (Path(bridge_share) / 'config' / 'vehicle_params.yaml').read_text(encoding='utf-8'))
 
     # -------------------------------------------------------------------------
     # 所有节点都必须 use_sim_time=true（SPEC §3.3）。
@@ -94,21 +110,21 @@ def generate_launch_description():
     # TF 会报 extrapolation 错误，多传感器同步会静默错配。
     # 而且这类问题在 RTF≈1.0 时几乎看不出来 —— 等场景变复杂 RTF 掉下去才爆发。
     # -------------------------------------------------------------------------
-    use_sim_time = {"use_sim_time": True}
+    use_sim_time = {'use_sim_time': True}
 
-    world = LaunchConfiguration("world")
-    gui = LaunchConfiguration("gui")
+    world = LaunchConfiguration('world')
+    gui = LaunchConfiguration('gui')
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            "world", default_value="campus_minimal.sdf",
-            description="世界文件名。靠 GZ_SIM_RESOURCE_PATH 解析，不用写绝对路径"),
+            'world', default_value='campus_minimal.sdf',
+            description='世界文件名。靠 GZ_SIM_RESOURCE_PATH 解析，不用写绝对路径'),
         DeclareLaunchArgument(
-            "gui", default_value="true",
-            description="是否开 Gazebo 图形界面。CI 里必须 false"),
+            'gui', default_value='true',
+            description='是否开 Gazebo 图形界面。CI 里必须 false'),
         DeclareLaunchArgument(
-            "rviz", default_value="true",
-            description="是否开 RViz2"),
+            'rviz', default_value='true',
+            description='是否开 RViz2'),
 
         # ---------------------------------------------------------------------
         # 1. Gazebo
@@ -121,14 +137,14 @@ def generate_launch_description():
         # 拼出来的空字符串会作为一个空参数传给 gz，gz 会把它当成文件名去找。
         # ---------------------------------------------------------------------
         ExecuteProcess(
-            cmd=["gz", "sim", "-r", world],
+            cmd=['gz', 'sim', '-r', world],
             condition=IfCondition(gui),
-            output="screen",
+            output='screen',
         ),
         ExecuteProcess(
-            cmd=["gz", "sim", "-s", "-r", world],
+            cmd=['gz', 'sim', '-s', '-r', world],
             condition=UnlessCondition(gui),
-            output="screen",
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
@@ -136,11 +152,11 @@ def generate_launch_description():
         #    翻译表在 config/bridge_topics.yaml，那个文件才是契约所在。
         # ---------------------------------------------------------------------
         Node(
-            package="ros_gz_bridge",
-            executable="parameter_bridge",
-            name="gazebo_bridge",
-            parameters=[{"config_file": bridge_config}, use_sim_time],
-            output="screen",
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            name='gazebo_bridge',
+            parameters=[{'config_file': bridge_config}, use_sim_time],
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
@@ -152,11 +168,11 @@ def generate_launch_description():
         #    当成一个零距离障碍物。
         # ---------------------------------------------------------------------
         Node(
-            package="gazebo_bridge",
-            executable="lidar_preprocessor",
-            name="lidar_preprocessor",
+            package='gazebo_bridge',
+            executable='lidar_preprocessor',
+            name='lidar_preprocessor',
             parameters=[ego_box_params(vehicle_params), use_sim_time],
-            output="screen",
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
@@ -170,11 +186,11 @@ def generate_launch_description():
         #     等于把仿真器的执行器细节泄漏进控制器。
         # ---------------------------------------------------------------------
         Node(
-            package="gazebo_bridge",
-            executable="vehicle_cmd_bridge",
-            name="vehicle_cmd_bridge",
+            package='gazebo_bridge',
+            executable='vehicle_cmd_bridge',
+            name='vehicle_cmd_bridge',
             parameters=[vehicle_limit_params(vehicle_params), use_sim_time],
-            output="screen",
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
@@ -183,11 +199,11 @@ def generate_launch_description():
         #    （含 base_link→lidar_link 这个外参，上面那个节点要用）。
         # ---------------------------------------------------------------------
         Node(
-            package="robot_state_publisher",
-            executable="robot_state_publisher",
-            name="robot_state_publisher",
-            parameters=[{"robot_description": robot_description}, use_sim_time],
-            output="screen",
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            parameters=[{'robot_description': robot_description}, use_sim_time],
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
@@ -202,28 +218,28 @@ def generate_launch_description():
         #    症状是车在 RViz 里疯狂跳动。
         # ---------------------------------------------------------------------
         Node(
-            package="tf2_ros",
-            executable="static_transform_publisher",
-            name="map_to_odom_identity",
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='map_to_odom_identity',
             arguments=[
-                "--x", "0", "--y", "0", "--z", "0",
-                "--roll", "0", "--pitch", "0", "--yaw", "0",
-                "--frame-id", "map", "--child-frame-id", "odom",
+                '--x', '0', '--y', '0', '--z', '0',
+                '--roll', '0', '--pitch', '0', '--yaw', '0',
+                '--frame-id', 'map', '--child-frame-id', 'odom',
             ],
             parameters=[use_sim_time],
-            output="screen",
+            output='screen',
         ),
 
         # ---------------------------------------------------------------------
         # 6. RViz2
         # ---------------------------------------------------------------------
         Node(
-            package="rviz2",
-            executable="rviz2",
-            name="rviz2",
-            arguments=["-d", rviz_config],
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            arguments=['-d', rviz_config],
             parameters=[use_sim_time],
-            condition=IfCondition(LaunchConfiguration("rviz")),
-            output="screen",
+            condition=IfCondition(LaunchConfiguration('rviz')),
+            output='screen',
         ),
     ])

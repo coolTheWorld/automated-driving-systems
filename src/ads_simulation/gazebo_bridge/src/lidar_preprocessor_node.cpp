@@ -1,3 +1,17 @@
+// Copyright 2026 孙帅
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // =============================================================================
 //  lidar_preprocessor —— 把仿真器原始点云整理成 SPEC §4.1 的 /lidar/points
 //
@@ -20,6 +34,8 @@
 //  共用组件，现在抽是过早抽象。
 // =============================================================================
 
+// include 分段规则（cpplint 强制）：C 标准库 → C++ 标准库 → 第三方，段间留空行。
+// .clang-format 设了 IncludeBlocks: Preserve，只在段内排序，不会合并三段。
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -27,12 +43,14 @@
 #include <memory>
 #include <string>
 
+// tf2_ros 用 .hpp 而不是 .h：Jazzy 里 .h 是待淘汰的兼容 shim，
+// 且 cpplint 按扩展名把 .h 当成 C 系统头，会误报 include 顺序错误。
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 
 namespace ads_simulation
@@ -46,9 +64,7 @@ struct EgoBox
   /// @brief 点是否落在盒内（闭区间）。
   bool contains(float x, float y, float z) const
   {
-    return x >= x_min && x <= x_max &&
-           y >= y_min && y <= y_max &&
-           z >= z_min && z <= z_max;
+    return x >= x_min && x <= x_max && y >= y_min && y <= y_max && z >= z_min && z <= z_max;
   }
 };
 
@@ -61,8 +77,7 @@ struct EgoBox
 class LidarPreprocessor : public rclcpp::Node
 {
 public:
-  LidarPreprocessor()
-  : Node("lidar_preprocessor")
+  LidarPreprocessor() : Node("lidar_preprocessor")
   {
     // ---- 话题 ----
     // 做成参数而不是写死，是为了 P0b 的 carla_bridge 能复用同一个节点。
@@ -116,17 +131,14 @@ public:
 
     pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(output_topic_, qos);
     sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      input_topic_, qos,
-      std::bind(&LidarPreprocessor::onCloud, this, std::placeholders::_1));
+      input_topic_, qos, std::bind(&LidarPreprocessor::on_cloud, this, std::placeholders::_1));
 
     RCLCPP_INFO(
-      get_logger(), "点云预处理已启动：%s → %s（目标系 %s）",
-      input_topic_.c_str(), output_topic_.c_str(), target_frame_.c_str());
+      get_logger(), "点云预处理已启动：%s → %s（目标系 %s）", input_topic_.c_str(),
+      output_topic_.c_str(), target_frame_.c_str());
     RCLCPP_INFO(
-      get_logger(),
-      "自车包围盒 x[%.2f, %.2f] y[%.2f, %.2f] z[%.2f, %.2f]  余量 %.3f m",
-      ego_.x_min, ego_.x_max, ego_.y_min, ego_.y_max, ego_.z_min, ego_.z_max,
-      margin_m_);
+      get_logger(), "自车包围盒 x[%.2f, %.2f] y[%.2f, %.2f] z[%.2f, %.2f]  余量 %.3f m", ego_.x_min,
+      ego_.x_max, ego_.y_min, ego_.y_max, ego_.z_min, ego_.z_max, margin_m_);
     if (ego_.x_max <= ego_.x_min) {
       RCLCPP_WARN(
         get_logger(),
@@ -136,7 +148,7 @@ public:
   }
 
 private:
-  void onCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
+  void on_cloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
   {
     geometry_msgs::msg::TransformStamped tf;
     try {
@@ -147,8 +159,7 @@ private:
       // 节流打印：TF 没起来时这里每帧都失败，不节流会把日志刷爆，
       // 反而看不见真正有用的信息。
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "查不到 %s → %s 的变换，丢弃本帧点云：%s",
+        get_logger(), *get_clock(), 2000, "查不到 %s → %s 的变换，丢弃本帧点云：%s",
         target_frame_.c_str(), msg->header.frame_id.c_str(), ex.what());
       return;
     }
@@ -171,11 +182,10 @@ private:
     transformed.header.frame_id = target_frame_;
 
     // ---- 第二、三步：滤除自车反射点与无效点 ----
-    const auto stats = filterInPlace(transformed);
+    const auto stats = filter_in_place(transformed);
 
     const double elapsed_ms =
-      std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - t_start).count();
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_start).count();
     if (elapsed_ms > transform_budget_ms_) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
@@ -187,8 +197,7 @@ private:
     // 每 10 秒报一次滤除比例。这不是调试残留：自车滤除比例突然变化，
     // 意味着车身尺寸参数或雷达外参被改动了，是个值得注意的信号。
     RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 10000,
-      "点云 %zu → %zu（自车 %zu，无效 %zu），耗时 %.1f ms",
+      get_logger(), *get_clock(), 10000, "点云 %zu → %zu（自车 %zu，无效 %zu），耗时 %.1f ms",
       stats.total, stats.kept, stats.self_hits, stats.invalid, elapsed_ms);
 
     pub_->publish(transformed);
@@ -213,7 +222,7 @@ private:
   ///
   /// 为什么不改成「把滤掉的点置为 NaN」（那样能保住有序性）：
   /// 消息大小一点不降，而下游仍然要逐点跳过 NaN —— 两头的代价都付了。
-  FilterStats filterInPlace(sensor_msgs::msg::PointCloud2 & cloud) const
+  FilterStats filter_in_place(sensor_msgs::msg::PointCloud2 & cloud) const
   {
     FilterStats st;
     st.total = static_cast<size_t>(cloud.width) * cloud.height;
@@ -222,10 +231,8 @@ private:
     }
 
     // 把余量算进盒子，避免在逐点循环里反复做加减法
-    const EgoBox box{
-      ego_.x_min - margin_m_, ego_.x_max + margin_m_,
-      ego_.y_min - margin_m_, ego_.y_max + margin_m_,
-      ego_.z_min - margin_m_, ego_.z_max + margin_m_};
+    const EgoBox box{ego_.x_min - margin_m_, ego_.x_max + margin_m_, ego_.y_min - margin_m_,
+                     ego_.y_max + margin_m_, ego_.z_min - margin_m_, ego_.z_max + margin_m_};
     const bool box_valid = box.x_max > box.x_min;
 
     const uint32_t step = cloud.point_step;
@@ -260,11 +267,11 @@ private:
     }
 
     st.kept = kept;
-    cloud.height = 1;                       // 压缩后不再有序
+    cloud.height = 1;  // 压缩后不再有序
     cloud.width = static_cast<uint32_t>(kept);
     cloud.row_step = static_cast<uint32_t>(kept * step);
     cloud.data.resize(kept * step);
-    cloud.is_dense = true;                  // 已保证无 NaN / inf
+    cloud.is_dense = true;  // 已保证无 NaN / inf
     return st;
   }
 

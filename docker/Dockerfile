@@ -49,11 +49,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # -----------------------------------------------------------------------------
 # 3. C++ 工具链与数学库
 # -----------------------------------------------------------------------------
+# ament-cmake-clang-format 是唯一需要显式装的 linter —— 其余（cpplint、flake8、
+# copyright、xmllint…）都随 ros-jazzy-desktop 进来了。
+#
+# 为什么不用 ROS 2 默认的 uncrustify：ament_lint_common 的默认成员是 uncrustify，
+# 而 uncrustify 几乎没有编辑器集成，意味着格式错误只能等 `colcon test` 报出来 ——
+# 反馈慢一个数量级。clang-format 被 VSCode / CLion / vim 原生支持，能 format-on-save，
+# 写的时候就格式对了。Autoware 也是这个选择。
+#
+# ⚠️ 两者规则不同，**不能同时开**（一个要求改、另一个要求改回来）。
+# 各包 CMakeLists 里用 AMENT_LINT_AUTO_EXCLUDE 排掉 uncrustify，见 SPEC §7。
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build gdb \
         git vim less tmux curl \
         python3-colcon-common-extensions python3-rosdep python3-vcstool \
         clang-format clang-tidy \
+        ros-jazzy-ament-cmake-clang-format \
         libeigen3-dev \
         sudo \
     && rm -rf /var/lib/apt/lists/*
@@ -83,7 +94,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # -----------------------------------------------------------------------------
-# 6. 非 root 用户
+# 6. package.xml 的 schema 本地化 —— 让 xmllint 离线可用
+# -----------------------------------------------------------------------------
+# ament_xmllint 会读 package.xml 顶部的 <?xml-model href="http://download.ros.org/..."?>
+# 处理指令，然后给 xmllint 加 --schema <那个 URL>，于是**每次 lint 都要联网取 schema**。
+#
+# 问题不在网速：实测 curl 拉同一个 URL 只要 1.4 s，而 xmllint 走它内置的
+# libxml2 nanohttp 客户端会**卡满 20 s 超时**（nanohttp 不读系统代理/DNS 配置）。
+# 症状是 colcon test 里每个包都挂一个 xmllint 失败，报
+# "The test did not generate a result file" —— 看着像 package.xml 有问题，
+# 其实是工具在等一个永远回不来的 HTTP 响应。
+#
+# 用 XML catalog 把那个 URL 映射到镜像里的本地副本，xmllint 就完全不联网了：
+# 实测 20 s 超时 → 0.005 s 通过。校验能力一点没丢 —— 它照样抓出了
+# ads_msgs/package.xml 里 test_depend 与 member_of_group 顺序颠倒的真实错误。
+#
+# 这一步在**构建时**需要外网（和 apt 一样），构建完的镜像离线可用，CI 里也不再
+# 依赖 download.ros.org 的可达性。
+RUN mkdir -p /usr/share/xml/ros \
+    && curl -fsSL -o /usr/share/xml/ros/package_format3.xsd \
+        http://download.ros.org/schema/package_format3.xsd \
+    && xmlcatalog --noout --add uri \
+        "http://download.ros.org/schema/package_format3.xsd" \
+        "file:///usr/share/xml/ros/package_format3.xsd" \
+        /etc/xml/catalog
+
+# -----------------------------------------------------------------------------
+# 7. 非 root 用户
 # -----------------------------------------------------------------------------
 # 若以 root 运行，容器写进挂载卷的文件在宿主上属主会变成 root，
 # 之后你在 WSL 里改自己的代码都要 sudo。UID/GID 与宿主对齐可避免。
@@ -107,7 +144,7 @@ RUN if getent passwd ${UID} >/dev/null; then \
 # 换机器时只改 .env 即可，不用重建镜像。
 
 # -----------------------------------------------------------------------------
-# 7. shell 环境
+# 8. shell 环境
 # -----------------------------------------------------------------------------
 RUN { \
       echo 'source /opt/ros/jazzy/setup.bash'; \

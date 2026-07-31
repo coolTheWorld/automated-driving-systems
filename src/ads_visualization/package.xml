@@ -21,6 +21,8 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

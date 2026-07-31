@@ -1,3 +1,17 @@
+// Copyright 2026 孙帅
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // =============================================================================
 //  vehicle_cmd_bridge —— /vehicle_cmd（规范指令）→ Gazebo 的 Twist
 //
@@ -27,6 +41,8 @@
 //        这不是 bug，阿克曼转向的真车原地打方向车也不动。
 // =============================================================================
 
+// include 分段规则（cpplint 强制）：C 标准库 → C++ 标准库 → 第三方，段间留空行。
+// .clang-format 设了 IncludeBlocks: Preserve，只在段内排序，不会合并三段。
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -43,8 +59,7 @@ namespace ads_simulation
 class VehicleCmdBridge : public rclcpp::Node
 {
 public:
-  VehicleCmdBridge()
-  : Node("vehicle_cmd_bridge")
+  VehicleCmdBridge() : Node("vehicle_cmd_bridge")
   {
     // ---- 车辆参数（由 launch 从 config/vehicle_params.yaml 传入）----
     // 默认值全为 0：launch 忘了传参时车不会动，是"功能失效但行为安全"。
@@ -83,13 +98,11 @@ public:
     pub_ = create_publisher<geometry_msgs::msg::Twist>("/gazebo/cmd_vel", 10);
 
     sub_ = create_subscription<ads_msgs::msg::VehicleCmd>(
-      "/vehicle_cmd", 10,
-      std::bind(&VehicleCmdBridge::onCmd, this, std::placeholders::_1));
+      "/vehicle_cmd", 10, std::bind(&VehicleCmdBridge::on_cmd, this, std::placeholders::_1));
 
     // 订阅里程计只为了抗饱和，不参与控制律本身。
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      "/odom", 10,
-      [this](const nav_msgs::msg::Odometry::ConstSharedPtr msg) {
+      "/odom", 10, [this](const nav_msgs::msg::Odometry::ConstSharedPtr msg) {
         measured_speed_mps_ = msg->twist.twist.linear.x;
       });
 
@@ -98,7 +111,7 @@ public:
     // 用墙上时钟的话 RTF 偏离 1 时积出来的速度就是错的（SPEC §3.3）。
     timer_ = rclcpp::create_timer(
       this, get_clock(), rclcpp::Duration::from_seconds(1.0 / rate_hz),
-      std::bind(&VehicleCmdBridge::onTimer, this));
+      std::bind(&VehicleCmdBridge::on_timer, this));
 
     RCLCPP_INFO(
       get_logger(),
@@ -113,12 +126,9 @@ public:
   }
 
 private:
-  static double clamp(double v, double lo, double hi)
-  {
-    return std::max(lo, std::min(hi, v));
-  }
+  static double clamp(double v, double lo, double hi) { return std::max(lo, std::min(hi, v)); }
 
-  void onCmd(const ads_msgs::msg::VehicleCmd::ConstSharedPtr msg)
+  void on_cmd(const ads_msgs::msg::VehicleCmd::ConstSharedPtr msg)
   {
     last_cmd_time_ = now();
 
@@ -130,8 +140,7 @@ private:
     // 一路传到 Gazebo 让物理引擎解算出 NaN 位姿，车直接消失。
     if (!std::isfinite(msg->steer_angle_rad) || !std::isfinite(msg->accel_mps2)) {
       RCLCPP_ERROR_THROTTLE(
-        get_logger(), *get_clock(), 1000,
-        "收到非有限的指令（转角 %.3f，加速度 %.3f），已丢弃",
+        get_logger(), *get_clock(), 1000, "收到非有限的指令（转角 %.3f，加速度 %.3f），已丢弃",
         msg->steer_angle_rad, msg->accel_mps2);
       return;
     }
@@ -140,8 +149,7 @@ private:
     steer_rad_ = clamp(steer_raw, -max_steer_rad_, max_steer_rad_);
     if (std::abs(steer_raw - steer_rad_) > 1e-9) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 1000,
-        "转角指令 %.3f rad 超出 ±%.3f rad，已截断为 %.3f rad",
+        get_logger(), *get_clock(), 1000, "转角指令 %.3f rad 超出 ±%.3f rad，已截断为 %.3f rad",
         steer_raw, max_steer_rad_, steer_rad_);
     }
 
@@ -159,17 +167,16 @@ private:
     if (std::abs(accel_raw - accel_mps2_) > 1e-9) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 1000,
-        "加速度指令 %.3f m/s^2 超出物理极限 [%.3f, %.3f]，已截断为 %.3f",
-        accel_raw, -emergency_decel_, max_accel_, accel_mps2_);
+        "加速度指令 %.3f m/s^2 超出物理极限 [%.3f, %.3f]，已截断为 %.3f", accel_raw,
+        -emergency_decel_, max_accel_, accel_mps2_);
     } else if (accel_mps2_ < -max_decel_) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
-        "减速度 %.3f m/s^2 超过舒适限值 %.3f —— 仅紧急制动才应如此",
-        accel_mps2_, max_decel_);
+        "减速度 %.3f m/s^2 超过舒适限值 %.3f —— 仅紧急制动才应如此", accel_mps2_, max_decel_);
     }
   }
 
-  void onTimer()
+  void on_timer()
   {
     const rclcpp::Time t_now = now();
 
@@ -198,8 +205,8 @@ private:
       steer = 0.0;
       if (have_cmd) {
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 2000,
-          "超过 %.2f s 没收到 /vehicle_cmd，自动减速停车", cmd_timeout_s_);
+          get_logger(), *get_clock(), 2000, "超过 %.2f s 没收到 /vehicle_cmd，自动减速停车",
+          cmd_timeout_s_);
       }
     }
 
@@ -210,14 +217,12 @@ private:
     const double lead_cap = measured_speed_mps_ + setpoint_lead_mps_;
     // 下限固定为 0：VehicleCmd 没有挡位字段，负加速度只能理解为"减速"，
     // 无法与"倒车"区分（详见 ads_teleop 的说明）。所以刹到 0 为止。
-    speed_setpoint_mps_ = clamp(
-      speed_setpoint_mps_, 0.0, std::min(max_speed_mps_, lead_cap));
+    speed_setpoint_mps_ = clamp(speed_setpoint_mps_, 0.0, std::min(max_speed_mps_, lead_cap));
 
     // ---- 转角 → 横摆角速度（自行车模型）----
     // ω = v·tan(δ)/L。v=0 时 ω=0，静止无法转向 —— 物理事实，见文件头。
-    const double yaw_rate = (wheelbase_m_ > 0.0)
-      ? speed_setpoint_mps_ * std::tan(steer) / wheelbase_m_
-      : 0.0;
+    const double yaw_rate =
+      (wheelbase_m_ > 0.0) ? speed_setpoint_mps_ * std::tan(steer) / wheelbase_m_ : 0.0;
 
     geometry_msgs::msg::Twist twist;
     twist.linear.x = speed_setpoint_mps_;
