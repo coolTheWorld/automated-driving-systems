@@ -123,8 +123,9 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前只有三个包**：`ads_msgs`、`ads_simulation/gazebo_bridge`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_control`、`ads_planning` 等）**尚未创建**，
+`src/` 下**目前有六个包**：`ads_msgs`、`ads_common`、`ads_bringup`、
+`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_control`、`ads_planning`、`ads_perception` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
 ```bash
@@ -136,16 +137,24 @@ source /workspace/install/setup.bash            # 每次新 shell 都要
 colcon build --packages-select gazebo_bridge    # 单个包
 
 # ---------- 运行（已可用） ----------
-ros2 launch gazebo_bridge gazebo_sim.launch.py                      # Gazebo GUI + RViz
-ros2 launch gazebo_bridge gazebo_sim.launch.py gui:=false rviz:=false  # headless，CI 用
+ros2 launch ads_bringup stack.launch.py                             # 全栈入口，默认 sim:=gazebo
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false      # headless
+ros2 launch gazebo_bridge gazebo_sim.launch.py                      # 只起仿真侧，调链路时更快
 
 # 键盘开车（**另开一个终端**，必须走 drive.sh 而不是 ros2 launch，见陷阱表）
 docker compose exec dev /workspace/scripts/drive.sh
 
+# ---------- 测试与 lint（提交前跑） ----------
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试
+colcon test --packages-select ads_common     # 单个包
+./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
+
+# ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
+#    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
+
 # ---------- 尚不可用（包还没建） ----------
-colcon test --packages-select ads_control           # 走完整 CTest（含 lint），提交前用
-./build/ads_control/test_stanley                    # 直接跑 gtest，快 10 倍，日常改代码用
-ros2 launch ads_bringup stack.launch.py sim:=gazebo # 切换仿真源只改 sim 参数
+./build/ads_control/test_stanley                    # P2 才有
+ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ```
 
 ### 模型生成与单项检查
@@ -260,6 +269,25 @@ P2 控制 → P3 规划 → P4 定位 → P5 感知。反直觉但正确：先�
 4. **不允许在回调中做重计算**，超过 10 ms 的工作放独立线程/定时器。
 5. **公开接口必须有 Doxygen 注释，说明单位、坐标系、有效范围。**
 6. 不用裸 `new`/`delete`；禁止 `using namespace std;`。
+
+### lint 工具链的坑（S5 实测）
+
+格式由仓库根 `.clang-format` 定义，`colcon test` 会卡。几条不显然的：
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| `#include` 不分段 | clang-format 把三段合并按字母序排，cpplint 立刻报 include_order | **C 标准库 → C++ 标准库 → 第三方，段间留空行**。`.clang-format` 设了 `IncludeBlocks: Preserve`，只在段内排序。这是本项目唯一刻意偏离 ROS 2 官方配置的一项 —— 官方没设它，于是两个官方 linter 互相打架 |
+| gtest 的 include 位置 | cpplint 报 "C system header after C++ system header" | `<gtest/gtest.h>` 按 `.h` 后缀被归成 C 系统头，**必须放在 C++ 标准库之前** |
+| `struct termios saved_{}` | clang-format 拆成三行，看着像在定义结构体 | 去掉 `struct` 前缀写 `termios saved_{}`。C++ 不需要这个 elaborated type specifier |
+| tf2_ros 用 `.h` | cpplint 误判成 C 系统头 | 改用 `.hpp`（Jazzy 里 `.h` 已是待淘汰的兼容 shim） |
+| 手动调 `ament_clang_format()` | `add_test given test NAME "clang_format" which already exists` | package.xml 声明 test_depend 后 lint hook 已自动注册。只能用 `set(ament_cmake_clang_format_CONFIG_FILE ...)` 指配置 |
+| `AMENT_LINT_AUTO_EXCLUDE` 设晚了 | 排除不生效且**不报错** | 必须在 `ament_lint_auto_find_test_dependencies()` **之前** —— 那个函数在调用时就把 linter 列表定死了 |
+| 中文句号 / docstring | pep257 报 D400 | pydocstyle 只认 ASCII 的 `.`。docstring 首行用英文句点，正文照常中文 |
+| cppcheck 显示 skipped | 看着有检查其实没跑 | 上游主动拒用 2.13.0（已知性能问题）。**有意保留跳过**，不要设 `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` 去覆盖 |
+
+**`colcon test` 的退出码不可信** —— 它反映"测试有没有跑起来"，测试失败照样可能
+返回 0。判定成败一律用 `colcon test-result --all`。只看前者的话，CI 会在测试
+全红时显示绿灯，**比没有 CI 更危险**。
 
 ---
 
