@@ -51,7 +51,11 @@ from sensor_msgs_py import point_cloud2
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PARAMS_FILE = REPO_ROOT / "config" / "vehicle_params.yaml"
 
-RAW_TOPIC = "/lidar/points_raw"
+# 仿真器原始点云。带 gazebo 前缀 = **不是** SPEC §4.1 的规范话题，只是中间话题；
+# 权威定义在 gazebo_bridge/config/bridge_topics.yaml。
+# carla_bridge 那边对应的会是 /carla/lidar/points_raw，所以本脚本是 Gazebo 专用的。
+RAW_TOPIC = "/gazebo/lidar/points_raw"
+# 这个才是规范话题（SPEC §4.1），两个仿真环境都必须发它。
 OUT_TOPIC = "/lidar/points"
 TARGET_FRAME = "base_link"
 

@@ -209,7 +209,7 @@ OpenGL core 4.6，`rviz2` 在 Windows 桌面弹窗且交互流畅。**CP1 通过
    雷达装在车顶，Gazebo 出的点在 `lidar_link` 系。在 SDF 里把 `gz_frame_id`
    直接写成 `base_link` 能让判据变绿，但那是**谎报坐标系** —— 每个点带着
    1.35/1.60 m 的固定偏移进下游，且不报任何错。所以链路是
-   `points_raw`(lidar_link) → 变换节点 → `/lidar/points`(base_link)，
+   `/gazebo/lidar/points_raw`(lidar_link) → 变换节点 → `/lidar/points`(base_link)，
    并新增了 **Δz 判据**来证明数值真的变了。`carla_bridge` 之后做同样的事。
 
 3. **额外产出 URDF，并补了 IMU / NavSat。** 3.7 的 TF 树和 3.8 的车模型都需要
