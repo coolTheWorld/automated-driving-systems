@@ -1,31 +1,59 @@
 # P0a 任务清单
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
-> 状态：**S1 ✓ / S2 ✓，下一步 S3**　|　更新：2026-07-30（已切换到 Jazzy + Ubuntu 24.04）
+> 状态：**S1 ✓ / S2 ✓ / S3 7.5-8 项完成（CP2 已过）**　|　更新：2026-07-30
 > 技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 
 ---
 
 ## 🔖 下次从这里继续
 
-**当前位置**：S1 ✓、S2 ✓ 均已提交；**下一步是 S3 的 3.1**（建 colcon 工作区骨架）。
-S3 结束是 **CP2**，其中 **3.4 是整个双环境方案的技术枢纽**——把 Gazebo 原生话题名
-翻译成 SPEC §4.1 的规范名，P0b 的 `carla_bridge` 之后要做完全相同的翻译。
-
-**代码在分支 `p0a-s1-env` 上，尚未合回 main，也未 push。**
+**当前位置**：S1 ✓、S2 ✓、**S3 的 3.1-3.7 ✓（CP2 验证脚本 6/6 通过）**。
+只剩 **3.8 的肉眼确认**（RViz 里点云 + TF + 车模型是否同时正确显示）。
+之后进 **S4：键盘 teleop 闭环**（4.1-4.4），S4 要接的是 `/vehicle_cmd`
+反向通道 —— 目前桥接表里全是 GZ_TO_ROS，S4 要加第一条 ROS_TO_GZ。
 
 恢复环境（宿主机执行）：
 
 ```bash
 cd ~/work/automated-driving-systems
 export COMPOSE_FILE=docker/docker-compose.local.yml
-docker compose up -d                                    # 镜像已构建好，直接起
-docker compose exec dev /workspace/scripts/verify_gpu.sh   # 确认 GPU 仍是 D3D12（10 项）
-docker compose exec dev /workspace/scripts/verify_sim.sh   # 确认仿真基线仍成立（6 项）
+docker compose up -d                                        # 镜像已构建好，直接起
+docker compose exec dev /workspace/scripts/verify_gpu.sh    # GPU 仍是 D3D12（10 项）
+docker compose exec dev /workspace/scripts/verify_sim.sh    # S2 仿真基线（6 项）
+docker compose exec dev /workspace/scripts/verify_ros_bridge.sh  # S3 桥接契约（6 项）
 ```
 
-两个脚本都退出码 0 才往下做。**若 `verify_gpu.sh` 挂了，先看它是不是又变回 llvmpipe**
+三个脚本都退出码 0 才往下做。**若 `verify_gpu.sh` 挂了，先看它是不是又变回 llvmpipe**
 ——Windows 侧驱动更新或 WSL 重启后 `/dev/dxg` 的存在性值得重新确认。
+
+改了 `src/` 下的代码后要重新构建（容器内）：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd /workspace && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+source /workspace/install/setup.bash
+```
+
+肉眼看效果（带 Gazebo GUI + RViz）：
+
+```bash
+ros2 launch gazebo_bridge gazebo_sim.launch.py
+```
+
+### ⚠️ 每次动手前先确认没有残留的仿真进程
+
+```bash
+docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 launch" | grep -v grep'
+```
+
+**有残留必须先清掉**，否则两套仿真同时发 `/clock` 和 `/tf`，所有测量值都是垃圾
+（症状：TF 疯狂刷 `Detected jump back in time` / `TF_OLD_DATA`）。
+清理要用**进程组**，且**绝对不能用 `pkill -f "gz sim"`**（见下方陷阱表）：
+
+```bash
+docker compose exec dev bash -c 'kill -INT -- -<PGID>'   # PGID 取自上面 ps 的第二列
+```
 
 容器内跑任何 `gz` 命令前需 `source /opt/ros/jazzy/setup.bash`
 （Gazebo 装在 ROS 前缀下），脚本里 source 时要临时 `set +u`。
@@ -101,24 +129,81 @@ docker compose exec dev /workspace/scripts/verify_sim.sh   # 确认仿真基线�
 
 ## S3　ROS 2 桥接 + 规范话题 + RViz2　【检查点 CP2】
 
-- [ ] **3.1** colcon 工作区骨架（SPEC §5 的包，先建空壳）
-      　　✅ `colcon build` 返回 0
-- [ ] **3.2** `ads_msgs` 最小消息集
-      　　✅ `ros2 interface show` 可见
-- [ ] **3.3** 车辆加 `gpu_lidar`（32 线 / 水平 1800 / 量程 50 m，依 SPEC §2 ODD）
-      　　✅ `gz topic -e` 有点云数据
-- [ ] **3.4** `ads_simulation/gazebo_bridge`：桥接 + **重映射到 SPEC §4.1 规范话题名**
-      　　✅ `/lidar/points`、`/imu`、`/odom`、`/clock` 均存在
-- [ ] **3.5** 点云频率与坐标系
-      　　✅ `/lidar/points` **≥ 9 Hz**，`frame_id == base_link`
-- [ ] **3.6** 仿真时间
-      　　✅ 各节点 `use_sim_time=true`，`/clock` 正常推进
-- [ ] **3.7** TF 树 `map` → `odom` → `base_link`
-      　　✅ `view_frames` 输出无断裂
+- [x] **3.1** colcon 工作区骨架
+      　　✅ `colcon build` 返回 0，3 个包 18.2 s
+      　　⚠️ **偏离计划**：只建 S3 真正需要的 3 个包（`ads_msgs`、
+      　　　 `ads_simulation/gazebo_bridge`、`ads_visualization`），**不建 SPEC §5 全部 12 个空壳**。
+      　　　 空包各需两个纯样板文件、拖慢构建，还会让 `src/` 看起来已经有一套栈了。
+      　　　 模块划分由 SPEC §5 定义，不靠空目录存在。
+- [x] **3.2** `ads_msgs` 最小消息集
+      　　✅ `ros2 interface list` 三条全可见：`VehicleCmd` / `Obstacle` / `ObstacleArray`
+- [x] **3.3** 车辆加 `gpu_lidar`（32 线 / 水平 1800 / 量程 50 m）
+      　　✅ 57,600 点/帧，`height=32 width=1800`
+      　　✅ 顺带加了 **IMU（100 Hz，装在 base_link 原点）** 和 **NavSat（10 Hz）**
+      　　ℹ️ 传感器外参进了 `vehicle_params.yaml` 的 `sensors:` 段（同一来源同时喂 SDF 和 URDF）
+      　　ℹ️ 世界文件加了 `<spherical_coordinates>`，否则 navsat 不发数据
+- [x] **3.4** `gazebo_bridge`：桥接 + 重映射到 SPEC §4.1 规范话题名
+      　　✅ 7 条全在：`/clock` `/lidar/points` `/imu` `/gnss` `/odom` `/tf` `/joint_states`
+      　　ℹ️ 契约表在 `src/ads_simulation/gazebo_bridge/config/bridge_topics.yaml`
+- [x] **3.5** 点云频率与坐标系
+      　　✅ `/lidar/points` **10.00 Hz**（仿真时间，标称值满打满算），`frame_id == base_link`
+      　　✅ **Δz = +1.600 m**，与雷达安装高度完全吻合 → 证明点云是**真的做了坐标变换**，
+      　　　 不是把 `gz_frame_id` 改成 `base_link` 蒙混过关（详见 1 号排查记录）
+- [x] **3.6** 仿真时间
+      　　✅ 四个节点 `use_sim_time` 均为 true，`/clock` 正常推进
+- [x] **3.7** TF 树
+      　　✅ 五段全通，且平移值可核对：
+      　　　 `base_link→lidar_link = [1.350, 0, 1.600]`、`base_link→gnss_link = [0.500, 0, 1.600]`
+      　　　 —— 与 YAML 里的外参逐位一致，说明 URDF 生成链路正确
 - [ ] **3.8** `ads_visualization/rviz/default.rviz`
-      　　✅ 点云 + TF + 车模型同时正确显示
+      　　✅ 程序化确认：RViz 已订阅 `/lidar/points`、`/robot_description`、`/tf`，无报错
+      　　⏳ **待肉眼确认**：点云 + TF + 车模型是否同时正确显示
 
-> **CP2**：数据流打通、频率达标，是 P1 开始的前提。
+> **CP2 结果：`verify_ros_bridge.sh` 6/6 通过 ✓**　数据流已打通，频率达标。
+> 带激光雷达后 RTF = **0.998**（S2 纯物理是 1.000）—— 传感器几乎没有代价。
+
+### 3.5 排查记录 1：点云频率只有标称的 35%，病根不在 GPU
+
+第一次测 `/lidar/points` 只有 **3.58 Hz**（标称 10 Hz）。直觉是「GPU 渲不动」，
+于是把水平采样从 1800 砍到 900 —— 频率只从 8.65 涨到 8.97 Hz（**+4%**）。
+**射线数减半而几乎无改善，说明瓶颈根本不在射线数上。**
+
+分层测量把问题定位清楚了：
+
+| 测量点 | 1800 采样 | 900 采样 |
+|---|---|---|
+| Gazebo 原生话题（无 ROS） | 8.65 Hz | 8.97 Hz |
+| ROS `/lidar/points_raw` | 6.67 Hz | 9.23 Hz |
+| ROS `/lidar/points` | 3.58 Hz | 8.00 Hz |
+
+**决定性证据是帧间隔的分布**：Gazebo 侧的相邻帧间隔要么正好 **100 ms**（32 次），
+要么正好 **200 ms**（3 次），**没有中间值**。
+传感器一直在准点按 10 Hz 出帧，少掉的那些是被**队列丢掉**的，不是没生成。
+
+真正的原因：**一帧 1.8 MB 的点云走 best-effort QoS，每一跳的深度 5 队列都会溢出**。
+链路是 Gazebo → gz-transport → `ros_gz_bridge` → 变换节点 → 下游，逐跳递减。
+改成 `reliable` + 深度 10 之后，**1800 采样原规格下 `/lidar/points` 稳定在 10.00 Hz**。
+
+**教训**：
+1. 「频率低 = 算力不够」是最容易犯的想当然。**先分层测量再动参数**，
+   否则会像这次一样先砍掉一半分辨率去解决一个跟分辨率无关的问题。
+2. 丢帧是**静默**的 —— 没有任何日志，只有频率变低。
+3. 判据不能为了让测试通过而放宽（SPEC §11）。这次坚持 ≥9 Hz 才逼出了真正的病根；
+   若当初把线降到 7 Hz「通过」，这个 QoS 缺陷会一路潜伏到 P5 感知。
+
+### 3.5 排查记录 2：验证脚本自己就是测量误差源
+
+中途一度以为链路更慢，实际是**测量工具在丢帧**：检查脚本用 best-effort 订阅，
+而它是 Python、第一帧还要遍历 57,600 个点，跟不上就丢。
+**测出来的是测量工具的速度，不是被测链路的速度。**
+现已改为 reliable 订阅（`scripts/check_cloud_frames.py`）。
+
+同类问题还有两个，都表现为「命令没输出」的假阴性：
+- `ros2 topic hz` / `tf2_echo` 输出到管道时是**全缓冲**的，被 `timeout` 打断时缓冲区连同结果一起丢弃
+- `ros2 topic list` 依赖长驻 daemon，daemon 刚起来时节点图是空的，只返回 2 个话题
+
+两者都已绕开：频率和 TF 改用常驻 Python 节点测（`check_cloud_frames.py`、`check_tf_tree.py`），
+只付一次 DDS 发现代价，结果也确定。
 
 ---
 
@@ -157,12 +242,26 @@ docker compose exec dev /workspace/scripts/verify_sim.sh   # 确认仿真基线�
 ## 进度
 
 ```
-S1 █████  5/5 ✓   S2 ██████  6/6 ✓   S3 ░░░░░░░░  0/8
+S1 █████  5/5 ✓   S2 ██████  6/6 ✓   S3 ███████░  7/8
 S4 ░░░░  0/4      S5 ░░░░░░  0/6
-                                          总计  11/29
+                                          总计  18/29
 ```
 
 ## 待办（非当前阶段，记下免得忘）
 
+- **S4**：桥接表目前全是 `GZ_TO_ROS`。`/vehicle_cmd` 是第一条 `ROS_TO_GZ`，
+  要把「转角 rad + 加速度 m/s²」转成 Ackermann 插件吃的 Twist。
+- **P1 评测**：`/ego_pose_gt`（SPEC §4.1 列了但本次未实现）。需要先定消息类型 ——
+  Gazebo 的 `PosePublisher` 发 `gz.msgs.Pose_V`，桥到 ROS 只有 `TFMessage` 和
+  `PoseArray` 两个选项，都不理想。等 P1 真正要用它打分时再定。
+- **P2 控制**：`limits.max_steer_rate_rad_s` 目前只进了 URDF 的关节速度限位，
+  **SDF 里没有生效**（AckermannSteering 插件自己控制转向速度）。
+  真正的转向速率约束应由控制器实现。
+- **P2 控制**：SDF 转向关节的 `<effort>1.0e6</effort>` 不是物理力矩，
+  是 dartsim 在速度控制下让位置限位生效所需的「足够大」。建执行器模型时换成有依据的值。
+- **P4 定位**：接上定位后必须删掉 launch 里的 `map_to_odom_identity` 静态 TF，
+  否则会和定位模块抢着发同一段 TF，症状是车在 RViz 里疯狂跳动。
+- **P7 实车**：点云 QoS 现为 `reliable`（本机仿真链路的正确选择，见排查记录 1）。
+  上实车要改回 `best-effort` —— 真实网络下 reliable 的重传会让延迟不可控。
 - **P0b**：`docker-compose.cloud.yml` 里 `network_mode: host` 与 `ports: 6080` 并存，
   Docker 会**静默丢弃**发布的端口 → noVNC 连不上且不报错。落地 P0b 时二选一。

@@ -1,0 +1,214 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================================
+     自动生成的文件 —— 不要手动编辑
+
+     生成自：config/vehicle_params.yaml
+     生成器：scripts/gen_vehicle_model.py
+
+     用途：robot_state_publisher 读它 → 发布整棵 base_link 以下的 TF 子树，
+           RViz 的 RobotModel 显示项读它 → 画出车。
+
+     这里**没有**物理属性上的讲究（摩擦、驱动、插件都不在 URDF 里），
+     那些在 models/ego_vehicle/model.sdf。惯量字段照抄只是为了满足
+     URDF 解析器和 KDL 的要求，不参与任何仿真。
+
+     坐标原点：base_link 位于**后轴中心、地面高度**（Autoware 惯例）
+     =========================================================================== -->
+<robot name="ego_vehicle">
+
+  <material name="chassis_blue"><color rgba="0.25 0.45 0.8 1.0"/></material>
+  <material name="tyre_black"><color rgba="0.15 0.15 0.15 1.0"/></material>
+  <material name="sensor_orange"><color rgba="0.95 0.55 0.10 1.0"/></material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="1.3500 0 0.5500" rpy="0 0 0"/>
+      <mass value="1440.0000"/>
+      <inertia ixx="434.172000" iyy="2538.672000" izz="2541.900000"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="1.3500 0 0.8300" rpy="0 0 0"/>
+      <geometry>
+        <box size="4.4000 1.3500 1.3400"/>
+      </geometry>
+      <material name="chassis_blue"/>
+    </visual>
+  </link>
+
+  <link name="front_left_steer_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <link name="front_right_steer_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <link name="front_left_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="15.0000"/>
+      <inertia ixx="0.410375" iyy="0.720750" izz="0.410375"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <!-- URDF 的 cylinder 默认沿 Z 轴，车轮要绕 Y 轴滚，所以绕 X 转 90° -->
+      <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.3100" length="0.2000"/>
+      </geometry>
+      <material name="tyre_black"/>
+    </visual>
+  </link>
+
+  <link name="front_right_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="15.0000"/>
+      <inertia ixx="0.410375" iyy="0.720750" izz="0.410375"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <!-- URDF 的 cylinder 默认沿 Z 轴，车轮要绕 Y 轴滚，所以绕 X 转 90° -->
+      <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.3100" length="0.2000"/>
+      </geometry>
+      <material name="tyre_black"/>
+    </visual>
+  </link>
+
+  <link name="rear_left_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="15.0000"/>
+      <inertia ixx="0.410375" iyy="0.720750" izz="0.410375"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <!-- URDF 的 cylinder 默认沿 Z 轴，车轮要绕 Y 轴滚，所以绕 X 转 90° -->
+      <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.3100" length="0.2000"/>
+      </geometry>
+      <material name="tyre_black"/>
+    </visual>
+  </link>
+
+  <link name="rear_right_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="15.0000"/>
+      <inertia ixx="0.410375" iyy="0.720750" izz="0.410375"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <!-- URDF 的 cylinder 默认沿 Z 轴，车轮要绕 Y 轴滚，所以绕 X 转 90° -->
+      <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.3100" length="0.2000"/>
+      </geometry>
+      <material name="tyre_black"/>
+    </visual>
+  </link>
+
+  <!-- 转向关节：把转向节挂到车体上，绕 Z 转 -->
+  <joint name="front_left_steer_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_left_steer_link"/>
+    <origin xyz="2.7000 0.7750 0.3100" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.6000" upper="0.6000"
+           effort="1000.0" velocity="0.5000"/>
+  </joint>
+  <joint name="front_right_steer_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_right_steer_link"/>
+    <origin xyz="2.7000 -0.7750 0.3100" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.6000" upper="0.6000"
+           effort="1000.0" velocity="0.5000"/>
+  </joint>
+
+  <!-- 前轮滚动关节挂在转向节下（不是车体），转向与滚动才是两个独立自由度。
+       type=continuous：车轮可以无限圈转，不设上下限。 -->
+  <joint name="front_left_wheel_joint" type="continuous">
+    <parent link="front_left_steer_link"/>
+    <child link="front_left_wheel"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1000.0" velocity="26.8806"/>
+  </joint>
+  <joint name="front_right_wheel_joint" type="continuous">
+    <parent link="front_right_steer_link"/>
+    <child link="front_right_wheel"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1000.0" velocity="26.8806"/>
+  </joint>
+
+  <!-- 后轮为驱动轮，直接挂在车体上 -->
+  <joint name="rear_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel"/>
+    <origin xyz="0 0.7750 0.3100" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1000.0" velocity="26.8806"/>
+  </joint>
+  <joint name="rear_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel"/>
+    <origin xyz="0 -0.7750 0.3100" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="1000.0" velocity="26.8806"/>
+  </joint>
+
+  <!-- ======================================================================
+       传感器坐标系
+
+       这几个 fixed joint 就是**外参**。gazebo_bridge 把点云从 lidar_link
+       变换到 base_link，查的正是这里发布的 TF。所以「URDF 里的安装位置」
+       和「SDF 里 <sensor> 的 <pose>」必须一致 —— 两者都来自 YAML 的
+       sensors 段，这就是它们不会漂移的原因。
+
+       注意没有 imu_link：IMU 装在 base_link 原点，两者是同一个坐标系
+       （见 vehicle_params.yaml 里关于杠杆臂的说明）。
+       ====================================================================== -->
+
+  <link name="lidar_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.1 0.1 0.08"/></geometry>
+      <material name="sensor_orange"/>
+    </visual>
+  </link>
+  <joint name="lidar_link_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="1.3500 0.0000 1.6000"
+            rpy="0 0 0"/>
+  </joint>
+
+  <link name="gnss_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.08 0.08 0.03"/></geometry>
+      <material name="sensor_orange"/>
+    </visual>
+  </link>
+  <joint name="gnss_link_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="gnss_link"/>
+    <origin xyz="0.5000 0.0000 1.6000"
+            rpy="0 0 0"/>
+  </joint>
+
+</robot>

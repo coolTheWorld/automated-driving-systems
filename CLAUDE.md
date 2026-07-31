@@ -52,14 +52,18 @@ docker compose up -d
 docker compose exec dev bash
 ```
 
-### 环境自检（改动 docker/ 或换机器后先跑这两个）
+### 环境自检（改动 docker/ 或换机器后先跑这三个）
 
 ```bash
-docker compose exec dev /workspace/scripts/verify_gpu.sh   # 10 项：GPU 硬件加速
-docker compose exec dev /workspace/scripts/verify_sim.sh   # 6 项：Gazebo 仿真基线 + RTF
+docker compose exec dev /workspace/scripts/verify_gpu.sh        # 10 项：GPU 硬件加速
+docker compose exec dev /workspace/scripts/verify_sim.sh        # 6 项：Gazebo 仿真基线 + RTF
+docker compose exec dev /workspace/scripts/verify_ros_bridge.sh # 6 项：ROS 桥接契约（CP2）
 ```
 
 退出码 0 才继续。`verify_gpu.sh` 是整个本地环境方案的 go/no-go —— **失败时不要用软件渲染硬撑**。
+
+`verify_ros_bridge.sh` 检查的全是 SPEC §4.1 的**对外契约**，不含 Gazebo 特有的东西 ——
+P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH_FILE` 两个变量。
 
 ### 已实测的环境陷阱
 
@@ -73,38 +77,62 @@ docker compose exec dev /workspace/scripts/verify_sim.sh   # 6 项：Gazebo 仿�
 
 `screen 0 does not appear to be DRI3 capable` 是**干扰项**，宿主也报，与硬件加速无关。
 
+### 仿真进程与测量的陷阱（S3 实测，会重复踩）
+
+| 陷阱 | 症状 | 处理 |
+|---|---|---|
+| **`pkill -f "gz sim"`** | 清理命令自己先被杀，后面一行没执行 | `pkill -f` 匹配**完整命令行**，而执行它的 shell 命令行里就含这串。**一律按 PID / 进程组收** |
+| 只 kill `ros2 launch` 的 PID | 留下孤儿 `gz sim`（PPID=1），下次跑就有**两套仿真** | 用 `setsid` 起 launch，收尾时 `kill -INT -- -<PGID>` 收整组 |
+| 两套仿真并存 | TF 刷 `Detected jump back in time` / `TF_OLD_DATA`，**所有测量值作废** | 动手前先 `ps` 查残留；`verify_ros_bridge.sh` 已内建拦截 |
+| 点云用 best-effort QoS | **静默丢帧**，频率只有标称的 35%，无任何日志 | 本机仿真链路用 `reliable` + 深度 10。判据：Gazebo 侧帧间隔只有 100/200 ms 两种值 = 传感器没问题，是队列在丢 |
+| `ros2 topic hz` / `tf2_echo` 接管道 | 被 `timeout` 打断后**完全没输出**，看着像没数据 | 输出是全缓冲的。用常驻 Python 节点测（见 `scripts/check_*.py`），或 `stdbuf -oL` |
+| `ros2 topic list` 紧接 daemon 启动 | 只返回 `/rosout` `/parameter_events` | daemon 的节点图还没建好。先 `ros2 daemon start` 再等几秒 |
+| `gpu_lidar` 的无回波射线 | `skip_nans` 滤不掉，`min/max` 变 `±inf` | 返回的是 **±inf 不是 NaN**。求极值/质心/体素前必须显式 `isfinite` 过滤 |
+| SDF 转向关节缺 `<effort>` | Gazebo 报错，**前轮能转过机械极限** | 速度控制下 dartsim 需要力矩上限才检查位置限位 |
+| `<gz_frame_id>` 报 SDF 警告 | `XML Element[gz_frame_id] ... not defined in SDF` | **正常**，功能有效（frame_id 确实被改写）。它不在 SDF 规范里，Gazebo 自己解析 |
+
+**「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
+S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
+
 ---
 
 ## 常用命令
 
-`src/` 下的 ROS 包**目前尚未创建**（S3 才开始建）。以下构建/运行命令是规划中的形态，
-在包存在之前不可用 —— 不要假设它们能跑。
+`src/` 下**目前只有三个包**：`ads_msgs`、`ads_simulation/gazebo_bridge`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_control`、`ads_planning` 等）**尚未创建**，
+涉及它们的命令是规划中的形态，不要假设能跑。
 
 ```bash
 # ---------- 构建（容器内） ----------
+source /opt/ros/jazzy/setup.bash
+cd /workspace
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
-colcon build --packages-select ads_control          # 单个包
-colcon build --packages-up-to ads_planning          # 到某包及其依赖
+source /workspace/install/setup.bash            # 每次新 shell 都要
+colcon build --packages-select gazebo_bridge    # 单个包
 
-# ---------- 测试 ----------
+# ---------- 运行（已可用） ----------
+ros2 launch gazebo_bridge gazebo_sim.launch.py                      # Gazebo GUI + RViz
+ros2 launch gazebo_bridge gazebo_sim.launch.py gui:=false rviz:=false  # headless，CI 用
+
+# ---------- 尚不可用（包还没建） ----------
 colcon test --packages-select ads_control           # 走完整 CTest（含 lint），提交前用
 ./build/ads_control/test_stanley                    # 直接跑 gtest，快 10 倍，日常改代码用
-./build/ads_control/test_stanley --gtest_filter='*ZeroError*'   # 单个用例
-colcon test-result --verbose                        # 失败详情
-
-# ---------- 运行 ----------
 ros2 launch ads_bringup stack.launch.py sim:=gazebo # 切换仿真源只改 sim 参数
 ```
 
-### 已经可用的
+### 模型生成与单项检查
 
 ```bash
-python3 scripts/gen_vehicle_model.py            # 从 YAML 重新生成车辆 SDF
+# 从 YAML 重新生成 SDF(Gazebo) + URDF(ROS)。改了 vehicle_params.yaml 必跑
+python3 scripts/gen_vehicle_model.py
 python3 scripts/gen_vehicle_model.py --check    # 校验生成物是否与 YAML 同步（CI 用）
 
-# 容器内，需先 source /opt/ros/jazzy/setup.bash
-gz sim -r /workspace/worlds/campus_minimal.sdf                    # 带 GUI
-gz sim -s -r /workspace/worlds/campus_minimal.sdf                 # headless
+# 容器内，需先 source ROS + install
+python3 scripts/check_cloud_frames.py    # 点云 frame_id / 频率 / 是否真的做了变换
+python3 scripts/check_tf_tree.py         # TF 树逐段连通性
+
+# 直接玩 Gazebo（需先 source /opt/ros/jazzy/setup.bash）
+gz sim -r campus_minimal.sdf                                      # 靠 GZ_SIM_RESOURCE_PATH 找世界
 gz topic -t /model/ego_vehicle/cmd_vel -m gz.msgs.Twist -p 'linear: {x: 3.0}'
 gz topic -e -t /world/campus_minimal/stats -n 12                  # 读 RTF
 ```
@@ -148,11 +176,24 @@ Gazebo Harmonic ──官方组合──▶ ROS 2 Jazzy ──▶ Ubuntu 24.04 (
 3. **不换 CycloneDDS** —— CARLA 原生 ROS 2 只支持 Fast DDS。症状是本地 Gazebo 一切正常，
    一上 CARLA 完全收不到数据。Dockerfile 已锁 `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`
 
-### 3. 车辆参数单一来源，SDF 是生成物
+### 3. 车辆参数单一来源，SDF 和 URDF 都是生成物
 
-`config/vehicle_params.yaml` 是**唯一**允许定义轴距/转角/质量/加减速限值的地方。
-`models/ego_vehicle/model.sdf` 由 `scripts/gen_vehicle_model.py` 从它生成 —— **不要手改生成物**。
-P0b 的 `carla_bridge` 用 PythonAPI 的 `apply_physics_control()` 把 CARLA 车辆调到与它一致。
+`config/vehicle_params.yaml` 是**唯一**允许定义轴距/转角/质量/加减速限值
+**以及传感器安装外参**的地方。`scripts/gen_vehicle_model.py` 从它生成**两份**产物，
+**都不要手改**：
+
+| 生成物 | 消费者 | 决定什么 |
+|---|---|---|
+| `models/ego_vehicle/model.sdf` | Gazebo 物理引擎 | 车**怎么动**（质量、惯量、摩擦、关节驱动、传感器） |
+| `src/ads_visualization/urdf/ego_vehicle.urdf` | `robot_state_publisher` / RViz | **TF 树**长什么样、RViz 画什么 |
+
+ROS 不认 SDF，Gazebo 建物理也不用 URDF，所以两份都得有。手写 URDF = 轴距和外参
+又抄一遍，症状是 **RViz 里点云和车模型对不上**，或更隐蔽的：TF 报的
+`base_link→lidar_link` 与 Gazebo 里雷达实际安装位置差几厘米，下游全部配准带着这个
+偏差却没有任何报错。两份共用同一个 `derive()` 推导函数，就是为了堵这个。
+
+P0b 的 `carla_bridge` 用 PythonAPI 的 `apply_physics_control()` 把 CARLA 车辆调到与它一致，
+传感器也按同一份外参 spawn。
 
 这条是 SPEC §4.1 的强制要求，针对的是**双环境头号风险「行为漂移」**：两套仿真动力学一旦不一致，
 症状是本地调好的控制参数一上 CARLA 就震荡，而你无法判断是算法错了还是环境不同。
