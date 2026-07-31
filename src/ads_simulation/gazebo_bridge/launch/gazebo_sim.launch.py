@@ -12,12 +12,41 @@
 
 from pathlib import Path
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def ego_box_params(vehicle_params: dict) -> dict:
+    """由车辆几何参数算出自车包围盒（base_link 系，单位 m）。
+
+    base_link 在**后轴中心、地面高度**，所以车身占据：
+
+        x：从 -rear_overhang 到 wheelbase + front_overhang
+        y：±width/2
+        z：从 0（地面）到 height
+
+    宽度用 width_m（含轮胎的**保守**包络）而不是 SDF 里建模用的
+    「轮距 - 轮宽」。自车滤除宁可多滤一点自己，也不要漏出自车反射点 ——
+    漏出来的后果是感知把自己的车顶当成零距离障碍物，直接触发急刹。
+
+    ⚠️ 这里只做算术，不引入任何新数字。所有输入都来自
+    config/vehicle_params.yaml（SPEC §4.1 车辆参数单一来源）。
+    """
+    geo = vehicle_params["geometry"]
+    half_width = geo["width_m"] / 2.0
+    return {
+        "ego_box.x_min": -geo["rear_overhang_m"],
+        "ego_box.x_max": geo["wheelbase_m"] + geo["front_overhang_m"],
+        "ego_box.y_min": -half_width,
+        "ego_box.y_max": half_width,
+        "ego_box.z_min": 0.0,
+        "ego_box.z_max": geo["height_m"],
+    }
 
 
 def generate_launch_description():
@@ -31,6 +60,12 @@ def generate_launch_description():
     # robot_state_publisher 要的是 URDF 的**内容字符串**，不是路径。
     # 在这里一次读进来，比让节点自己去读省事，也能在文件缺失时立刻报错。
     robot_description = urdf_file.read_text(encoding="utf-8")
+
+    # 车辆参数由 CMakeLists 装进本包 share（symlink-install 下就是仓库里那一份）。
+    # 在 launch 里读、算好了传给节点，而不是让 C++ 节点自己解析 YAML ——
+    # 这样节点不必依赖 yaml-cpp，也不必知道参数文件在哪。
+    vehicle_params = yaml.safe_load(
+        (Path(bridge_share) / "config" / "vehicle_params.yaml").read_text(encoding="utf-8"))
 
     # -------------------------------------------------------------------------
     # 所有节点都必须 use_sim_time=true（SPEC §3.3）。
@@ -90,14 +125,18 @@ def generate_launch_description():
         ),
 
         # ---------------------------------------------------------------------
-        # 3. 点云 lidar_link → base_link
-        #    见 src/pointcloud_to_base_link_node.cpp 顶部的说明。
+        # 3. 点云预处理：坐标变换 + 自车滤除 + 无效点滤除
+        #    见 src/lidar_preprocessor_node.cpp 顶部的说明。
+        #
+        #    自车滤除不是可选项：雷达装在 z=1.6，车顶在 z=1.5，只高 10 cm，
+        #    实测 34% 的点打在自己车顶上。不滤的话感知会把自车车顶
+        #    当成一个零距离障碍物。
         # ---------------------------------------------------------------------
         Node(
             package="gazebo_bridge",
-            executable="pointcloud_to_base_link",
-            name="pointcloud_to_base_link",
-            parameters=[use_sim_time],
+            executable="lidar_preprocessor",
+            name="lidar_preprocessor",
+            parameters=[ego_box_params(vehicle_params), use_sim_time],
             output="screen",
         ),
 
