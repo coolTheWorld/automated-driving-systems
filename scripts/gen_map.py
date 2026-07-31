@@ -55,6 +55,23 @@ XODR_FILE = REPO_ROOT / "maps" / "campus.xodr"
 # 与 models/ego_vehicle/ 的分工完全一致。
 ROAD_SDF_FILE = REPO_ROOT / "models" / "campus_road" / "model.sdf"
 
+# 车道中心线的采样基准，供 ads_map 的 C++ 实现做**逐点对账**（P1-S2 的检查点）。
+#
+# 为什么需要它：本脚本（Python）和 ads_map（C++）是同一份几何的**两套独立实现**。
+# 如果两边对 OpenDRIVE 的约定理解不一致（曲率符号、车道横向偏移的正方向、
+# 圆弧起始朝向的定义），**两边各自的单元测试都会通过**，因为各自都自洽。
+# 抓这种 bug 的唯一办法是让两边的输出直接对账。
+#
+# 它放在测试目录而不是 maps/：它不是地图的一部分，是专为验证 C++ 实现而存在的。
+# 但它仍然进 OUTPUTS，因为它必须随 YAML 一起重新生成 —— 否则改了地图之后
+# 对账用的是旧基准，检查点会给出虚假的通过。
+SAMPLES_FILE = REPO_ROOT / "src" / "ads_map" / "test" / "data" / "reference_samples.csv"
+
+# 采样步长。0.5 m 足够密到能暴露任何系统性偏差（这类错误不是随机的），
+# 又不至于让基准文件大到没法 review。每段几何的首尾 s 一定会被采到，
+# 因为接缝处是最容易出错的地方。
+SAMPLE_STEP_M = 0.5
+
 # 浮点输出精度。两个用途：
 #   1. .xodr 和 SDF 里的坐标 —— 6 位小数 = 微米级，远超任何仿真需要；
 #   2. --check 是**逐字节**比对，所以格式必须完全确定性，不能依赖 repr()。
@@ -71,6 +88,29 @@ def num(v: float) -> str:
     if abs(v) < 5e-7:
         v = 0.0
     return FMT % v
+
+
+def precise(v: float) -> str:
+    """把**角度或曲率**格式化成字符串。比 num() 精度高得多，这是有原因的。
+
+    坐标用 6 位小数（微米级）绰绰有余，但角度和曲率不是坐标 ——
+    **同一个格式串套不同量纲是想当然。** 两者各有各的机理：
+
+      曲率是个小数值。R = 12 m 的弯道曲率是 0.0833333…，
+      6 位小数只剩 5 位有效数字，相对误差 4e-6。乘上 18.85 m 的弧长，
+      终点朝向就偏 6.3e-6 rad。这是**相对精度**不足。
+
+      朝向是个力臂。5e-7 rad 的舍入乘上本项目最长的 76 m 直线段，
+      末端位置就偏 38 µm，而且这一项**随地图变大线性增长**。
+      这是**绝对精度**不足。
+
+    实测：两者都用 6 位小数时，C++ 与 Python 的逐点对账余量只剩
+    1.5 倍（朝向）—— 一个随时可能因为改地图而误报的脆弱判据。
+    改用 %.12g 后余量回到两三位数倍，且不再随地图规模缩水。
+    """
+    if abs(v) < 5e-13:
+        v = 0.0
+    return "%.12g" % v
 
 
 # =============================================================================
@@ -228,6 +268,47 @@ class Road:
     # 连接道路的车道级链接：lane -1 在前驱/后继road上分别接哪条车道
     lane_predecessor: int | None = None
     lane_successor: int | None = None
+
+    def pose_at(self, s: float) -> tuple[float, float, float]:
+        """参考线在弧长 s 处的位姿。
+
+        从后往前找第一段满足 s >= s0 的几何 —— 几何按 s0 递增排列，
+        所以倒着找命中的就是包含 s 的那一段。
+        末尾用 min() 夹住是为了让 s == length 时落在最后一段的终点，
+        而不是因为浮点误差掉出去。
+        """
+        if s < -1e-9 or s > self.length + 1e-9:
+            raise ValueError(f"s={s} 超出道路 {self.rid} 的长度 {self.length}")
+        for g in reversed(self.geoms):
+            if s >= g.s0 - 1e-9:
+                return g.pose_at(min(max(s - g.s0, 0.0), g.length))
+        raise ValueError(f"道路 {self.rid} 没有覆盖 s={s} 的几何段")
+
+    def lane_center_at(self, lane_id: int, s: float,
+                       lane_width: float) -> tuple[float, float, float]:
+        """车道中心线在弧长 s 处的位姿。
+
+        车道中心相对参考线的横向偏移（OpenDRIVE 的 t，以参考线**左侧**为正）：
+            t = sign(id) · (|id| − 0.5) · width
+        朝向与参考线相同 —— 等距偏移曲线处处平行于原曲线。
+        """
+        x, y, hdg = self.pose_at(s)
+        t = math.copysign((abs(lane_id) - 0.5) * lane_width, lane_id)
+        return (x + t * math.cos(hdg + math.pi / 2.0),
+                y + t * math.sin(hdg + math.pi / 2.0),
+                hdg)
+
+    def sample_stations(self, step: float) -> list[float]:
+        """采样用的弧长序列：等间距点 ∪ 每段几何的起点 ∪ 道路终点。
+
+        必须包含几何**接缝**：接缝是最容易出错的地方（半径算错、朝向没接上），
+        而等间距采样有可能恰好跳过它们。
+        """
+        stations = {0.0, self.length}
+        stations.update(g.s0 for g in self.geoms)
+        n = int(self.length / step)
+        stations.update(i * step for i in range(1, n + 1))
+        return sorted(stations)
 
 
 @dataclass
@@ -607,11 +688,11 @@ def _render_road(road: Road, p: dict, d: dict) -> list[str]:
     out.append('    <planView>')
     for g in road.geoms:
         out.append(f'      <geometry s="{num(g.s0)}" x="{num(g.x)}" y="{num(g.y)}"'
-                   f' hdg="{num(g.hdg)}" length="{num(g.length)}">')
+                   f' hdg="{precise(g.hdg)}" length="{num(g.length)}">')
         if g.curvature == 0.0:
             out.append('        <line/>')
         else:
-            out.append(f'        <arc curvature="{num(g.curvature)}"/>')
+            out.append(f'        <arc curvature="{precise(g.curvature)}"/>')
         out.append('      </geometry>')
     out.append('    </planView>')
 
@@ -778,6 +859,40 @@ def render_road_sdf(p: dict) -> str:
 
 
 # =============================================================================
+#  第四层之三：导出车道中心线采样基准（给 C++ 实现对账用）
+# =============================================================================
+
+
+def render_samples(p: dict) -> str:
+    """生成 src/ads_map/test/data/reference_samples.csv。
+
+    每行是「某条道路的某条车道在某个弧长处的位姿」，由**本脚本的**几何求值算出。
+    ads_map 的 C++ 测试读同一份 .xodr、自己算一遍、逐点比对。
+
+    ⚠️ 这份文件的价值完全建立在「两套实现相互独立」上。
+       如果哪天 C++ 侧改成读这个 CSV 来偷懒，对账就变成了自己跟自己比，
+       而它看起来仍然是绿的 —— 那比没有这个检查更糟。
+    """
+    d = derive(p)
+    net = build_network(p, d)
+    width = p["lanes"]["width_m"]
+
+    out = [
+        "# 车道中心线采样基准 —— 由 scripts/gen_map.py 从 config/campus_map.yaml 生成，勿手改。",
+        "# 用途：给 ads_map 的 C++ 实现做逐点对账（P1 的 CP-P1-A 检查点，判据 < 1 mm）。",
+        "# 生成方与验证方必须是两套独立实现，否则这个检查毫无意义。",
+        f"# 采样步长 {SAMPLE_STEP_M} m，并强制包含每段几何的接缝与道路端点。",
+        "road_id,lane_id,s_m,x_m,y_m,heading_rad",
+    ]
+    for road in net.roads:
+        for lane_id in sorted(road.lane_ids, reverse=True):
+            for s in road.sample_stations(SAMPLE_STEP_M):
+                x, y, hdg = road.lane_center_at(lane_id, s, width)
+                out.append(f"{road.rid},{lane_id},{num(s)},{num(x)},{num(y)},{num(hdg)}")
+    return "\n".join(out) + "\n"
+
+
+# =============================================================================
 #  入口
 # =============================================================================
 
@@ -785,6 +900,7 @@ def render_road_sdf(p: dict) -> str:
 OUTPUTS = [
     (XODR_FILE, render_xodr),
     (ROAD_SDF_FILE, render_road_sdf),
+    (SAMPLES_FILE, render_samples),
 ]
 
 

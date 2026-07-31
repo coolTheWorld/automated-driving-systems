@@ -22,19 +22,19 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="0.000000" length="67.000000">
+      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="0" length="67.000000">
         <line/>
       </geometry>
-      <geometry s="67.000000" x="78.000000" y="-50.000000" hdg="0.000000" length="18.849556">
-        <arc curvature="0.083333"/>
+      <geometry s="67.000000" x="78.000000" y="-50.000000" hdg="0" length="18.849556">
+        <arc curvature="0.0833333333333"/>
       </geometry>
-      <geometry s="85.849556" x="90.000000" y="-38.000000" hdg="1.570796" length="76.000000">
+      <geometry s="85.849556" x="90.000000" y="-38.000000" hdg="1.57079632679" length="76.000000">
         <line/>
       </geometry>
-      <geometry s="161.849556" x="90.000000" y="38.000000" hdg="1.570796" length="18.849556">
-        <arc curvature="0.083333"/>
+      <geometry s="161.849556" x="90.000000" y="38.000000" hdg="1.57079632679" length="18.849556">
+        <arc curvature="0.0833333333333"/>
       </geometry>
-      <geometry s="180.699112" x="78.000000" y="50.000000" hdg="3.141593" length="67.000000">
+      <geometry s="180.699112" x="78.000000" y="50.000000" hdg="3.14159265359" length="67.000000">
         <line/>
       </geometry>
     </planView>
@@ -71,19 +71,19 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="3.141593" length="67.000000">
+      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="3.14159265359" length="67.000000">
         <line/>
       </geometry>
-      <geometry s="67.000000" x="-78.000000" y="50.000000" hdg="3.141593" length="18.849556">
-        <arc curvature="0.083333"/>
+      <geometry s="67.000000" x="-78.000000" y="50.000000" hdg="3.14159265359" length="18.849556">
+        <arc curvature="0.0833333333333"/>
       </geometry>
-      <geometry s="85.849556" x="-90.000000" y="38.000000" hdg="4.712389" length="76.000000">
+      <geometry s="85.849556" x="-90.000000" y="38.000000" hdg="4.71238898038" length="76.000000">
         <line/>
       </geometry>
-      <geometry s="161.849556" x="-90.000000" y="-38.000000" hdg="4.712389" length="18.849556">
-        <arc curvature="0.083333"/>
+      <geometry s="161.849556" x="-90.000000" y="-38.000000" hdg="4.71238898038" length="18.849556">
+        <arc curvature="0.0833333333333"/>
       </geometry>
-      <geometry s="180.699112" x="-78.000000" y="-50.000000" hdg="6.283185" length="67.000000">
+      <geometry s="180.699112" x="-78.000000" y="-50.000000" hdg="6.28318530718" length="67.000000">
         <line/>
       </geometry>
     </planView>
@@ -120,7 +120,7 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="1.570796" length="78.000000">
+      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="1.57079632679" length="78.000000">
         <line/>
       </geometry>
     </planView>
@@ -157,7 +157,7 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="3.141593" length="22.000000">
+      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="3.14159265359" length="22.000000">
         <line/>
       </geometry>
     </planView>
@@ -190,13 +190,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="3.141593" length="1.250000">
+      <geometry s="0.000000" x="11.000000" y="-50.000000" hdg="3.14159265359" length="1.250000">
         <line/>
       </geometry>
-      <geometry s="1.250000" x="9.750000" y="-50.000000" hdg="3.141593" length="15.315264">
-        <arc curvature="-0.102564"/>
+      <geometry s="1.250000" x="9.750000" y="-50.000000" hdg="3.14159265359" length="15.315264">
+        <arc curvature="-0.102564102564"/>
       </geometry>
-      <geometry s="16.565264" x="0.000000" y="-40.250000" hdg="1.570796" length="1.250000">
+      <geometry s="16.565264" x="0.000000" y="-40.250000" hdg="1.57079632679" length="1.250000">
         <line/>
       </geometry>
     </planView>
@@ -229,7 +229,7 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="-11.000000" y="-50.000000" hdg="0.000000" length="22.000000">
+      <geometry s="0.000000" x="-11.000000" y="-50.000000" hdg="0" length="22.000000">
         <line/>
       </geometry>
     </planView>
@@ -262,13 +262,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="-11.000000" y="-50.000000" hdg="0.000000" length="4.750000">
+      <geometry s="0.000000" x="-11.000000" y="-50.000000" hdg="0" length="4.750000">
         <line/>
       </geometry>
-      <geometry s="4.750000" x="-6.250000" y="-50.000000" hdg="0.000000" length="9.817477">
-        <arc curvature="0.160000"/>
+      <geometry s="4.750000" x="-6.250000" y="-50.000000" hdg="0" length="9.817477">
+        <arc curvature="0.16"/>
       </geometry>
-      <geometry s="14.567477" x="0.000000" y="-43.750000" hdg="1.570796" length="4.750000">
+      <geometry s="14.567477" x="0.000000" y="-43.750000" hdg="1.57079632679" length="4.750000">
         <line/>
       </geometry>
     </planView>
@@ -301,13 +301,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="-1.570796" length="4.750000">
+      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="-1.57079632679" length="4.750000">
         <line/>
       </geometry>
-      <geometry s="4.750000" x="0.000000" y="-43.750000" hdg="-1.570796" length="9.817477">
-        <arc curvature="0.160000"/>
+      <geometry s="4.750000" x="0.000000" y="-43.750000" hdg="-1.57079632679" length="9.817477">
+        <arc curvature="0.16"/>
       </geometry>
-      <geometry s="14.567477" x="6.250000" y="-50.000000" hdg="0.000000" length="4.750000">
+      <geometry s="14.567477" x="6.250000" y="-50.000000" hdg="0" length="4.750000">
         <line/>
       </geometry>
     </planView>
@@ -340,13 +340,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="-1.570796" length="1.250000">
+      <geometry s="0.000000" x="0.000000" y="-39.000000" hdg="-1.57079632679" length="1.250000">
         <line/>
       </geometry>
-      <geometry s="1.250000" x="0.000000" y="-40.250000" hdg="-1.570796" length="15.315264">
-        <arc curvature="-0.102564"/>
+      <geometry s="1.250000" x="0.000000" y="-40.250000" hdg="-1.57079632679" length="15.315264">
+        <arc curvature="-0.102564102564"/>
       </geometry>
-      <geometry s="16.565264" x="-9.750000" y="-50.000000" hdg="-3.141593" length="1.250000">
+      <geometry s="16.565264" x="-9.750000" y="-50.000000" hdg="-3.14159265359" length="1.250000">
         <line/>
       </geometry>
     </planView>
@@ -379,7 +379,7 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="11.000000" y="50.000000" hdg="3.141593" length="22.000000">
+      <geometry s="0.000000" x="11.000000" y="50.000000" hdg="3.14159265359" length="22.000000">
         <line/>
       </geometry>
     </planView>
@@ -412,13 +412,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="11.000000" y="50.000000" hdg="3.141593" length="4.750000">
+      <geometry s="0.000000" x="11.000000" y="50.000000" hdg="3.14159265359" length="4.750000">
         <line/>
       </geometry>
-      <geometry s="4.750000" x="6.250000" y="50.000000" hdg="3.141593" length="9.817477">
-        <arc curvature="0.160000"/>
+      <geometry s="4.750000" x="6.250000" y="50.000000" hdg="3.14159265359" length="9.817477">
+        <arc curvature="0.16"/>
       </geometry>
-      <geometry s="14.567477" x="0.000000" y="43.750000" hdg="4.712389" length="4.750000">
+      <geometry s="14.567477" x="0.000000" y="43.750000" hdg="4.71238898038" length="4.750000">
         <line/>
       </geometry>
     </planView>
@@ -451,7 +451,7 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="0.000000" length="22.000000">
+      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="0" length="22.000000">
         <line/>
       </geometry>
     </planView>
@@ -484,13 +484,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="0.000000" length="1.250000">
+      <geometry s="0.000000" x="-11.000000" y="50.000000" hdg="0" length="1.250000">
         <line/>
       </geometry>
-      <geometry s="1.250000" x="-9.750000" y="50.000000" hdg="0.000000" length="15.315264">
-        <arc curvature="-0.102564"/>
+      <geometry s="1.250000" x="-9.750000" y="50.000000" hdg="0" length="15.315264">
+        <arc curvature="-0.102564102564"/>
       </geometry>
-      <geometry s="16.565264" x="0.000000" y="40.250000" hdg="-1.570796" length="1.250000">
+      <geometry s="16.565264" x="0.000000" y="40.250000" hdg="-1.57079632679" length="1.250000">
         <line/>
       </geometry>
     </planView>
@@ -523,13 +523,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="0.000000" y="39.000000" hdg="1.570796" length="1.250000">
+      <geometry s="0.000000" x="0.000000" y="39.000000" hdg="1.57079632679" length="1.250000">
         <line/>
       </geometry>
-      <geometry s="1.250000" x="0.000000" y="40.250000" hdg="1.570796" length="15.315264">
-        <arc curvature="-0.102564"/>
+      <geometry s="1.250000" x="0.000000" y="40.250000" hdg="1.57079632679" length="15.315264">
+        <arc curvature="-0.102564102564"/>
       </geometry>
-      <geometry s="16.565264" x="9.750000" y="50.000000" hdg="0.000000" length="1.250000">
+      <geometry s="16.565264" x="9.750000" y="50.000000" hdg="0" length="1.250000">
         <line/>
       </geometry>
     </planView>
@@ -562,13 +562,13 @@
       <speed max="8.333000" unit="m/s"/>
     </type>
     <planView>
-      <geometry s="0.000000" x="0.000000" y="39.000000" hdg="1.570796" length="4.750000">
+      <geometry s="0.000000" x="0.000000" y="39.000000" hdg="1.57079632679" length="4.750000">
         <line/>
       </geometry>
-      <geometry s="4.750000" x="0.000000" y="43.750000" hdg="1.570796" length="9.817477">
-        <arc curvature="0.160000"/>
+      <geometry s="4.750000" x="0.000000" y="43.750000" hdg="1.57079632679" length="9.817477">
+        <arc curvature="0.16"/>
       </geometry>
-      <geometry s="14.567477" x="-6.250000" y="50.000000" hdg="3.141593" length="4.750000">
+      <geometry s="14.567477" x="-6.250000" y="50.000000" hdg="3.14159265359" length="4.750000">
         <line/>
       </geometry>
     </planView>
