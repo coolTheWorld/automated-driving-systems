@@ -42,6 +42,10 @@ SPEC 的关键小节：§2 ODD、§3.3 设计约束、§4.1 双仿真环境、§
 
 本地与云端**共用同一个 Dockerfile**——这是双环境方案成立的前提，改动时不要分叉。
 
+**所有 `docker compose` 命令都必须在仓库根目录执行** —— `COMPOSE_FILE` 里是相对路径，
+`cd docker/` 之后就找不到了，而那个目录里又没有 compose 默认认的 `docker-compose.yml`，
+于是报 `no configuration file provided: not found`。
+
 ```bash
 export COMPOSE_FILE=docker/docker-compose.local.yml    # 本机 Gazebo（日常）
 # export COMPOSE_FILE=docker/docker-compose.cloud.yml  # 云端 CARLA（P0b 起，骨架）
@@ -104,9 +108,16 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | pty 驱动测试不排空 master | 被测进程"前几个按键有效、之后全无反应" | 伪终端缓冲区只有几 KB，填满后子进程 `printf` 阻塞。测试端必须起线程持续读 |
 | SDF 转向关节缺 `<effort>` | Gazebo 报错，**前轮能转过机械极限** | 速度控制下 dartsim 需要力矩上限才检查位置限位 |
 | `<gz_frame_id>` 报 SDF 警告 | `XML Element[gz_frame_id] ... not defined in SDF` | **正常**，功能有效（frame_id 确实被改写）。它不在 SDF 规范里，Gazebo 自己解析 |
+| **`gz sim` 崩溃被 launch 报成"干净退出"** | RViz 里点云/TF 全空，只剩个孤零零的车模型，**launch 日志无任何错误** | launch.log 写 `[gz-1]: process has finished cleanly`，但看**存活时长**：几秒 = 崩了。铁证是仓库根目录冒出 `core.<pid>`。别去查 RViz 配置，查 gz 还在不在 |
+| WSL 下 D3D12 设备丢失 | `Removing Device` → `OGRE EXCEPTION: Out of GPU memory`，请求区区 128 MB 却失败 | **因果是反的**：设备先丢，之后所有 GL 调用一律返回 `GL_OUT_OF_MEMORY`。16 GB 显存不可能不够。宿主 GPU 驱动重置（锁屏/休眠/更新）触发，**瞬态，重跑即可**。判据：`verify_gpu.sh` 仍全过 + headless（`gz sim -s`）能跑 = 通路没坏，别去改 compose |
+| `gz sim` 退出时 segfault | 每次收 SIGINT 退出都产 400–600 MB `core.*` | Gazebo 已知的退出清理问题，**不影响功能**。但 core 落在 cwd（= 挂载的仓库根），跑几次就是 GB 级。已在 `.gitignore`，仍需定期 `rm -f core.*` |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
+
+**"某个显示项没数据" 先怀疑数据源死了，而不是显示端配错了。** 上面头两条就是同一次
+故障的两层：表象在 RViz，根因在 GPU 驱动，中间还隔着一层"launch 谎报平安"。
+排查顺序永远是**沿数据流往上游走**：RViz → 话题有没有 → 发布者在不在 → 仿真器在不在。
 
 ---
 
