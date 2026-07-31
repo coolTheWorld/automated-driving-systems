@@ -19,7 +19,7 @@
 #  ⚠️ 改右边这一列 = 改跨模块契约。改之前先改 SPEC §4.1，并同步 carla_bridge。
 #
 #  direction 取值：GZ_TO_ROS / ROS_TO_GZ / BIDIRECTIONAL
-#  P0a 全是 GZ_TO_ROS（仿真 → 算法）。反方向的 /vehicle_cmd 在 S4 加。
+#  除最后一条（S4 加的控制指令）外全是 GZ_TO_ROS（仿真 → 算法）。
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -119,3 +119,22 @@
   ros_type_name: "sensor_msgs/msg/JointState"
   gz_type_name: "gz.msgs.Model"
   direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# 控制指令（S4 加，**唯一一条反方向**的）
+#
+# ⚠️ /gazebo/cmd_vel 不是 SPEC §4.1 的规范话题，是 Gazebo 专用的中间话题。
+#    名字里带 gazebo 前缀就是为了让人一眼看出它不属于对外契约。
+#
+# 上游算法发的是规范话题 /vehicle_cmd（转角 rad + 加速度 m/s²，见 ads_msgs）。
+# vehicle_cmd_bridge 节点负责把它换算成这里的 Twist（速度 + 横摆角速度），
+# 因为 Gazebo 的 AckermannSteering 插件只吃 Twist。
+#
+# CARLA 侧对应的中间量完全不同（油门/刹车/方向盘三个归一化量），
+# 但**上游看到的都是同一个 /vehicle_cmd** —— 这正是这层翻译的意义。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/gazebo/cmd_vel"
+  gz_topic_name: "/model/ego_vehicle/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ

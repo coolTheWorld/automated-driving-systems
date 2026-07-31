@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_teleop</name>
+  <version>0.1.0</version>
+  <description>
+    手动驾驶输入：把键盘（将来还有手柄）转成 SPEC §4.1 的 /vehicle_cmd。
+
+    与仿真器无关 —— 本地 Gazebo 和云端 CARLA 用的是同一个节点。
+    P2 的控制器接管 /vehicle_cmd 后，这里就变成人工接管/对照实验的入口。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>ads_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
