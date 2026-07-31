@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_visualization</name>
+  <version>0.1.0</version>
+  <description>
+    RViz 配置与自车的 URDF 描述。
+
+    注：urdf/ego_vehicle.urdf 是**生成物**，由 scripts/gen_vehicle_model.py
+    从 config/vehicle_params.yaml 生成，不要手改（SPEC §4.1 车辆参数单一来源）。
+    它暂放在本包下是因为 P0a 的唯一消费者是 robot_state_publisher + RViz；
+    等 P4/P5 有更多模块依赖机器人描述时，按 ROS 惯例应独立成 ads_description 包。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

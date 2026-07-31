@@ -25,17 +25,51 @@
     </physics>
 
     <!-- =====================================================================
+         大地坐标原点（S3 加：navsat 传感器需要它才能把 x/y 换算成经纬度）
+
+         没有这一段，navsat 传感器会报 "world has no spherical coordinates"
+         并且不发数据。数值随便取一个园区尺度的点即可 —— P0a 不关心真实地理
+         位置，但**两个仿真环境必须用同一个原点**，否则 CARLA 与 Gazebo 里
+         同一个 x/y 会对应到不同经纬度，P4 用 GNSS 做定位时结果无法互相比对。
+         ENU：x 向东、y 向北、z 向上，与 ROS 的 map 系约定一致。 -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>31.230416</latitude_deg>
+      <longitude_deg>121.473701</longitude_deg>
+      <elevation>10.0</elevation>
+      <heading_deg>0.0</heading_deg>
+    </spherical_coordinates>
+
+    <!-- =====================================================================
          系统插件
 
-         这里只挂 S2 需要的三个。传感器相关的 Sensors / Imu 系统等 S3 加装 ——
-         Sensors 会拉起渲染线程，现在挂上会让 2.6 测出来的 RTF 不能反映
-         「纯物理」的基准值，后面加传感器时就分不清帧率是被谁拖下去的。 -->
+         S2 时只挂了前三个，为的是让 2.6 测到「纯物理」的 RTF 基准值。
+         S3 加装传感器相关的三个系统，它们各自的代价很不一样：
+
+           Sensors  —— 拉起独立的渲染线程给 gpu_lidar 做深度渲染。
+                       这是 RTF 的**主要新增开销**，32×1800 = 57600 条射线
+                       每秒渲 10 次。S3 结束时要重测 RTF 与 S2 对比，
+                       差值就是激光雷达的代价。
+           Imu      —— 纯数值积分，开销可忽略。
+           NavSat   —— 一次坐标换算，开销可忽略。
+
+         <render_engine> 必须显式写 ogre2：默认值在无头模式下可能落到 ogre(1)，
+         而 gpu_lidar 只在 ogre2 下工作，落错了的表现是点云话题存在但永远没数据。 -->
     <plugin filename="gz-sim-physics-system"
             name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-user-commands-system"
             name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system"
             name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-navsat-system"
+            name="gz::sim::systems::NavSat"/>
 
     <scene>
       <ambient>0.6 0.6 0.6 1</ambient>

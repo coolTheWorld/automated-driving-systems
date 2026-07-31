@@ -38,6 +38,75 @@
           <diffuse>0.25 0.45 0.8 1</diffuse>
         </material>
       </visual>
+
+      <!-- ===================================================================
+           传感器
+
+           三个传感器都直接挂在 base_link 上、用 <pose> 表示外参，而不是各建
+           一个独立的 link + fixed joint。理由：独立 link 需要质量和惯量，
+           给 0 会让物理求解器出 NaN，给非 0 又凭空改变了整车质量分布 ——
+           为了一个纯几何的安装点去污染动力学，不划算。
+
+           <gz_frame_id> 让 Gazebo 在发布消息时用我们指定的 frame_id，
+           而不是默认的作用域名（形如 ego_vehicle/base_link/lidar）。
+           这一步是 TF 能对上的前提：URDF 里定义的 lidar_link 必须和这里
+           报出来的 frame_id 同名，否则 RViz 会说 "no transform"。
+           =================================================================== -->
+
+      <sensor name="lidar" type="gpu_lidar">
+        <pose>1.3500 0.0000 1.6000 0 0 0</pose>
+        <topic>/model/ego_vehicle/lidar</topic>
+        <gz_frame_id>lidar_link</gz_frame_id>
+        <update_rate>10.0</update_rate>
+        <always_on>1</always_on>
+        <!-- visualize 只影响 Gazebo GUI 里画不画射线。开着很直观，但几万条
+             射线的绘制开销不小，会拉低 RTF —— 调试时临时开，平时关。 -->
+        <visualize>false</visualize>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>1800</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.141593</min_angle>
+              <max_angle>3.141593</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>32</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.436300</min_angle>
+              <max_angle>0.174500</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.5000</min>
+            <max>50.0000</max>
+            <!-- 距离量化步长。真实雷达受 ADC 位数限制，这里给 1 cm。 -->
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.0100</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+
+      <sensor name="imu" type="imu">
+        <!-- 位姿为全零：IMU 就装在 base_link 原点，见 YAML 里关于杠杆臂的说明。 -->
+        <pose>0.0000 0.0000 0.0000 0 0 0</pose>
+        <topic>/model/ego_vehicle/imu</topic>
+        <gz_frame_id>base_link</gz_frame_id>
+        <update_rate>100.0</update_rate>
+        <always_on>1</always_on>
+      </sensor>
+
+      <sensor name="navsat" type="navsat">
+        <pose>0.5000 0.0000 1.6000 0 0 0</pose>
+        <topic>/model/ego_vehicle/navsat</topic>
+        <gz_frame_id>gnss_link</gz_frame_id>
+        <update_rate>10.0</update_rate>
+        <always_on>1</always_on>
+      </sensor>
     </link>
 
     <link name="front_left_steer_link">
@@ -190,13 +259,26 @@
       </visual>
     </link>
 
-    <!-- 转向关节：绕 Z 轴，限位取自 YAML 的 max_steer_angle_rad -->
+    <!-- 转向关节：绕 Z 轴，角度限位取自 YAML 的 max_steer_angle_rad。
+
+         <effort> 为什么必须写，且必须写这么大：
+         AckermannSteering 插件对转向关节用的是**速度控制**。dartsim 在速度控制下
+         只有当关节存在力矩上限时才会去检查位置限位 —— 不写 effort 的话，
+         Gazebo 会直接报错说 "Velocity control does not respect positional limits"，
+         而车的表现是**前轮可以转过 34.4° 的机械极限**，转弯半径比真车小得多。
+
+         1e6 N·m 不是物理意义上的转向力矩（真车带助力也就几百 N·m 量级），
+         它是求解器为了让限位生效所需要的「足够大」。真实的执行器力矩约束
+         属于 P2 控制阶段的建模内容，那时会换成有物理依据的值。 -->
     <joint name="front_left_steer_joint" type="revolute">
       <parent>base_link</parent>
       <child>front_left_steer_link</child>
       <axis>
         <xyz>0 0 1</xyz>
-        <limit><lower>-0.6000</lower><upper>0.6000</upper></limit>
+        <limit>
+          <lower>-0.6000</lower><upper>0.6000</upper>
+          <effort>1.0e6</effort>
+        </limit>
       </axis>
     </joint>
     <joint name="front_right_steer_joint" type="revolute">
@@ -204,7 +286,10 @@
       <child>front_right_steer_link</child>
       <axis>
         <xyz>0 0 1</xyz>
-        <limit><lower>-0.6000</lower><upper>0.6000</upper></limit>
+        <limit>
+          <lower>-0.6000</lower><upper>0.6000</upper>
+          <effort>1.0e6</effort>
+        </limit>
       </axis>
     </joint>
 
@@ -276,9 +361,13 @@
       <child_frame_id>base_link</child_frame_id>
     </plugin>
 
-    <!-- 关节状态发布，S3 建 TF 树时要用 -->
+    <!-- 关节状态发布。robot_state_publisher 拿它算 TF，RViz 里车轮才会转。
+
+         显式指定 <topic>：默认话题名是 /world/<世界名>/model/<模型名>/joint_state，
+         带世界名意味着换个世界跑就要改桥接配置。挂到模型作用域下就与世界解耦了。 -->
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
+      <topic>/model/ego_vehicle/joint_state</topic>
     </plugin>
   </model>
 </sdf>

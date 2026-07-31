@@ -1,0 +1,121 @@
+# =============================================================================
+#  Gazebo ↔ ROS 2 话题桥接表
+#
+#  ★ 这张表是整个双仿真环境方案的技术枢纽（tasks/plan.md 3.4）。
+#
+#  左边（gz_topic_name）是 Gazebo 的原生话题名，形如 /model/<车名>/<传感器名>。
+#  右边（ros_topic_name）是 SPEC §4.1 规定的**规范话题名**。
+#
+#  为什么必须做这层翻译，而不是让上游算法直接订阅 Gazebo 的原生话题：
+#
+#      P0b 会加一个 carla_bridge，它做的是**完全相同的翻译** ——
+#      把 CARLA 的原生话题翻译成右边这一列一模一样的名字。
+#      翻译层做对了，感知/定位/规划/控制就永远不需要知道数据来自哪个仿真器，
+#      切换仿真源 = 换一个 launch 参数，不改任何算法代码。
+#
+#      直接的现实价值（SPEC §4.1）：云实例断了、余额没了，
+#      你依然能在本地 Gazebo 上继续开发同一套算法。
+#
+#  ⚠️ 改右边这一列 = 改跨模块契约。改之前先改 SPEC §4.1，并同步 carla_bridge。
+#
+#  direction 取值：GZ_TO_ROS / ROS_TO_GZ / BIDIRECTIONAL
+#  P0a 全是 GZ_TO_ROS（仿真 → 算法）。反方向的 /vehicle_cmd 在 S4 加。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 仿真时钟
+#
+# 必须放在第一条，也是最容易被忽略的一条。所有节点都设 use_sim_time=true
+# （SPEC §3.3），它们的 now() 全部来自这个话题。桥接漏了它的症状是：
+# 节点启动后卡住不动、TF 全部报 "extrapolation into the future"，
+# 而日志里一个错误都没有 —— 因为节点在等一个永远不会到来的时钟。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# 激光雷达
+#
+# 注意接的是 points_raw 而不是 SPEC §4.1 的 /lidar/points。
+#
+# 原因：Gazebo 发出来的点云在 lidar_link 系（雷达装在车顶，
+# 距 base_link 前 1.35 m、高 1.60 m），而 SPEC 要求 /lidar/points 在 base_link 系。
+# 差这一步不做的后果是每个点都带 1.35/1.6 m 的系统性偏移进入下游，
+# 且**不会有任何报错**。
+#
+# 本可以在 SDF 里把 frame_id 直接写成 base_link 让判据「通过」，
+# 但那是谎报坐标系，不是解决问题。正确做法是真的做一次坐标变换 ——
+# 由 pointcloud_to_base_link 节点完成：points_raw → /lidar/points。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/lidar/points_raw"
+  gz_topic_name: "/model/ego_vehicle/lidar/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# IMU
+#
+# 这条直接落到规范名，不需要中转：IMU 在模型里就装在 base_link 原点，
+# 本身已经是 base_link 系（见 config/vehicle_params.yaml 里关于杠杆臂的说明）。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/imu"
+  gz_topic_name: "/model/ego_vehicle/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# GNSS
+#
+# NavSatFix 传的是经纬高，其数值取决于世界文件里的 <spherical_coordinates>。
+# 两个仿真环境必须用同一个大地原点，否则同一个 x/y 会算出不同经纬度。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/gnss"
+  gz_topic_name: "/model/ego_vehicle/navsat"
+  ros_type_name: "sensor_msgs/msg/NavSatFix"
+  gz_type_name: "gz.msgs.NavSat"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# 轮式里程计
+#
+# ⚠️ 这是**轮速推算**出来的里程计，不是真值。AckermannSteering 插件按
+# 车轮转角积分得到，和真车的轮速里程计一样**会累积漂移**（打滑时尤其明显）。
+# P4 的定位模块正是要用点云配准去修正这个漂移，所以它「不准」是符合预期的，
+# 不要拿它当 ground truth 用。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/odom"
+  gz_topic_name: "/model/ego_vehicle/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# TF：odom → base_link
+#
+# 由 AckermannSteering 插件发出，与上面的 /odom 同源。
+# TF 树的另外两段各有出处：
+#   map  → odom       ：launch 里的 static_transform_publisher（P4 前是单位变换）
+#   base_link → 各部件 ：robot_state_publisher 读 URDF 得到
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/tf"
+  gz_topic_name: "/model/ego_vehicle/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
+# 关节状态
+#
+# robot_state_publisher 靠它算出车轮/转向节相对车体的 TF，
+# RViz 里前轮才会跟着转向指令摆动。纯显示用途，算法不消费。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/joint_states"
+  gz_topic_name: "/model/ego_vehicle/joint_state"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS

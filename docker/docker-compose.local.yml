@@ -77,11 +77,16 @@ services:
       # 单机开发用固定 DOMAIN_ID，避免和局域网内其他 ROS 2 实例串话
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
 
-      # Gazebo 找 model:// 引用的搜索路径。世界文件里的
-      # <uri>model://ego_vehicle</uri> 靠它解析到 /workspace/models/ego_vehicle。
-      # 漏了这条的报错是 "Unable to find uri[model://ego_vehicle]"，
-      # 世界能加载但车不出现 —— 容易误以为是模型文件写错了。
-      GZ_SIM_RESOURCE_PATH: /workspace/models
+      # Gazebo 的资源搜索路径，两个用途：
+      #
+      #   /workspace/models —— 解析世界文件里的 <uri>model://ego_vehicle</uri>。
+      #       漏了这条的报错是 "Unable to find uri[model://ego_vehicle]"，
+      #       世界能加载但车不出现 —— 容易误以为是模型文件写错了。
+      #
+      #   /workspace/worlds —— 让 `gz sim campus_minimal.sdf` 能按文件名找到世界，
+      #       不必写绝对路径。这样 launch 文件里就不会出现 /workspace 这种
+      #       只在本容器成立的路径，云端 CARLA 那侧才能复用同一套 launch。
+      GZ_SIM_RESOURCE_PATH: /workspace/models:/workspace/worlds
 
     # ROS 2 节点间用共享内存传大消息（点云），默认 64 MB 不够
     shm_size: "2gb"
