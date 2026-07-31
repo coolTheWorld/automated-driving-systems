@@ -39,18 +39,29 @@
 # -----------------------------------------------------------------------------
 # 激光雷达
 #
-# 注意接的是 points_raw 而不是 SPEC §4.1 的 /lidar/points。
+# ⚠️ /gazebo/lidar/points_raw 不是 SPEC §4.1 的规范话题，是 Gazebo 专用的
+#    **中间话题**。gazebo 前缀的含义和下面 /gazebo/cmd_vel 完全一样：
+#    一眼看出它不属于对外契约，上游算法不该订阅它。
 #
-# 原因：Gazebo 发出来的点云在 lidar_link 系（雷达装在车顶，
+#    加前缀还堵住一个实际风险：carla_bridge 那边对应的中间话题会是
+#    /carla/lidar/points_raw。两者若都叫 /lidar/points_raw，万一两套 bridge
+#    同时起（不该发生但会误操作），点云就串台了，而症状只是「点云偶尔跳一下」。
+#
+# 为什么需要这个中间话题、不直接桥到规范名：
+# Gazebo 发出来的点云在 lidar_link 系（雷达装在车顶，
 # 距 base_link 前 1.35 m、高 1.60 m），而 SPEC 要求 /lidar/points 在 base_link 系。
 # 差这一步不做的后果是每个点都带 1.35/1.6 m 的系统性偏移进入下游，
 # 且**不会有任何报错**。
 #
 # 本可以在 SDF 里把 frame_id 直接写成 base_link 让判据「通过」，
 # 但那是谎报坐标系，不是解决问题。正确做法是真的做一次坐标变换 ——
-# 由 pointcloud_to_base_link 节点完成：points_raw → /lidar/points。
+# 由 lidar_preprocessor 节点完成：/gazebo/lidar/points_raw → /lidar/points。
+#
+# ⚠️ 这个名字由 gazebo_sim.launch.py 读出来传给 lidar_preprocessor 的
+#    input_topic 参数，**本文件是唯一来源**，不要在别处再写一遍。
+#    （C++ 侧那个同名默认值只是 launch 没传参时的兜底，见节点注释。）
 # -----------------------------------------------------------------------------
-- ros_topic_name: "/lidar/points_raw"
+- ros_topic_name: "/gazebo/lidar/points_raw"
   gz_topic_name: "/model/ego_vehicle/lidar/points"
   ros_type_name: "sensor_msgs/msg/PointCloud2"
   gz_type_name: "gz.msgs.PointCloudPacked"

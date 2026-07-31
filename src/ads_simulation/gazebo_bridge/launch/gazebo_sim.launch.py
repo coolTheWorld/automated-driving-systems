@@ -64,6 +64,36 @@ def ego_box_params(vehicle_params: dict) -> dict:
     }
 
 
+def raw_cloud_topic(bridge_topics: list) -> str:
+    """
+    从桥接表里取出「仿真器原始点云」那条中间话题的 ROS 名.
+
+    为什么要在这里查表，而不是让 lidar_preprocessor 直接用它的默认值：
+    话题名一旦在 bridge_topics.yaml 和 C++ 默认值里各写一份，就会漂移。
+    而漂移的症状极其安静 —— 预处理节点订阅了一个没人发布的话题，
+    它只在收到点云时才打日志，于是**一条日志都没有**，/lidar/points 静默为空，
+    RViz 一片空白。和「仿真器崩了」的表象完全一致（见 CLAUDE.md 陷阱表）。
+
+    所以让 bridge_topics.yaml 当唯一来源，这里读出来传进去。这与本文件
+    从 vehicle_params.yaml 派生自车包围盒是同一个做法。
+
+    按「类型 + 方向」而不是按名字查：按名字查等于又写死一次名字，白做。
+    匹配不到唯一一条就直接抛异常 —— 桥接表被改乱时应当立刻炸，
+    而不是退回某个默认值继续跑（那又是一次静默失败）。
+    """
+    matches = [
+        entry['ros_topic_name']
+        for entry in bridge_topics
+        if entry.get('ros_type_name') == 'sensor_msgs/msg/PointCloud2'
+        and entry.get('direction') == 'GZ_TO_ROS'
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f'bridge_topics.yaml 里 GZ_TO_ROS 方向的 PointCloud2 条目应当恰好有 1 条，'
+            f'实际找到 {len(matches)} 条：{matches}')
+    return matches[0]
+
+
 def vehicle_limit_params(vehicle_params: dict) -> dict:
     """
     vehicle_cmd_bridge 需要的车辆参数.
@@ -101,6 +131,10 @@ def generate_launch_description():
     # 这样节点不必依赖 yaml-cpp，也不必知道参数文件在哪。
     vehicle_params = yaml.safe_load(
         (Path(bridge_share) / 'config' / 'vehicle_params.yaml').read_text(encoding='utf-8'))
+
+    # 桥接表同样在这里读一次：点云中间话题名要从它取（见 raw_cloud_topic 的说明），
+    # 而 parameter_bridge 那边拿的是文件路径，两者用的是同一个文件。
+    bridge_topics = yaml.safe_load(Path(bridge_config).read_text(encoding='utf-8'))
 
     # -------------------------------------------------------------------------
     # 所有节点都必须 use_sim_time=true（SPEC §3.3）。
@@ -171,7 +205,13 @@ def generate_launch_description():
             package='gazebo_bridge',
             executable='lidar_preprocessor',
             name='lidar_preprocessor',
-            parameters=[ego_box_params(vehicle_params), use_sim_time],
+            parameters=[
+                ego_box_params(vehicle_params),
+                # 输入话题名从桥接表取，不依赖节点里的默认值 —— 两处漂移时
+                # 的症状是「订阅了没人发的话题」，安静得没有任何日志。
+                {'input_topic': raw_cloud_topic(bridge_topics)},
+                use_sim_time,
+            ],
             output='screen',
         ),
 

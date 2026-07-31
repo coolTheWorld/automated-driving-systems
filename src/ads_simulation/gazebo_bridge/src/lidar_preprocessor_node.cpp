@@ -80,9 +80,19 @@ public:
   LidarPreprocessor() : Node("lidar_preprocessor")
   {
     // ---- 话题 ----
-    // 做成参数而不是写死，是为了 P0b 的 carla_bridge 能复用同一个节点。
-    // 默认值直接写 SPEC §4.1 的规范名，让契约在代码里看得见。
-    input_topic_ = declare_parameter<std::string>("input_topic", "/lidar/points_raw");
+    // 做成参数而不是写死，是为了 P0b 的 carla_bridge 能复用同一个节点
+    // （它会传 /carla/lidar/points_raw 进来）。
+    //
+    // ⚠️ input_topic 的**唯一来源**是 gazebo_bridge/config/bridge_topics.yaml，
+    //    由 launch 读出来传进来。这里的默认值只是兜底，两处不一致时以 launch
+    //    传进来的为准。
+    //    之所以要强调：这个名字写错的症状是本节点**一条消息都收不到**，
+    //    而本节点只在收到点云时才打日志 —— 于是没有任何输出、没有任何报错，
+    //    RViz 里点云一片空白。和「仿真器崩了」长得一模一样。
+    //
+    // 输出用的是 SPEC §4.1 的规范名，让契约在代码里看得见；输入是 Gazebo 专用的
+    // 中间话题，带 gazebo 前缀正是为了标明它不属于对外契约。
+    input_topic_ = declare_parameter<std::string>("input_topic", "/gazebo/lidar/points_raw");
     output_topic_ = declare_parameter<std::string>("output_topic", "/lidar/points");
     target_frame_ = declare_parameter<std::string>("target_frame", "base_link");
 
