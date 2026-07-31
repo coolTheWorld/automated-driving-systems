@@ -501,6 +501,9 @@ def test_ego_spawn_pose_sits_on_a_lane_centre(params):
 @pytest.mark.parametrize('path,render_name', [
     (gen.XODR_FILE, 'render_xodr'),
     (gen.ROAD_SDF_FILE, 'render_road_sdf'),
+    # 采样基准也必须随 YAML 重新生成 —— 否则改了地图之后，C++ 侧的对账
+    # 用的是旧基准，CP-P1-A 会给出**虚假的通过**。
+    (gen.SAMPLES_FILE, 'render_samples'),
 ])
 def test_committed_artifacts_are_in_sync(params, path, render_name):
     """
