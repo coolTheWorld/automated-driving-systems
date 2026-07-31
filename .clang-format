@@ -1,0 +1,80 @@
+# =============================================================================
+#  C++ 代码格式（SPEC §7）
+#
+#  取值**逐字复制自 ROS 2 官方**：
+#      /opt/ros/jazzy/lib/python3.12/site-packages/ament_clang_format/configuration/.clang-format
+#
+#  ⚠️ 不要凭喜好改这里的取值 —— 它不是风格偏好，是与另外两个 linter
+#     （cpplint、ament_copyright）协商过的结果，改一项可能让别的工具报错。
+#     文件末尾的 IncludeBlocks 是唯一一处刻意偏离官方的地方，理由写在那里。
+#
+#  放一份在仓库根目录是为了**让编辑器找得到**（编辑器从当前文件向上查找
+#  .clang-format），各包 CMakeLists 也显式指向这一份，两边就一定一致。
+#
+#  为什么用 clang-format 而不是 ROS 2 默认的 uncrustify：
+#  uncrustify 几乎没有编辑器集成，格式错误只能等 `colcon test` 报出来；
+#  clang-format 被 VSCode / CLion / vim 原生支持，能 format-on-save，
+#  写的时候就对了。两者规则不同，**不能同时启用**（会互相要求改回去），
+#  所以各包 CMakeLists 里用 AMENT_LINT_AUTO_EXCLUDE 排掉了 uncrustify。
+#
+#  日常用法：
+#      clang-format -i src/**/*.cpp        # 就地格式化
+#      clang-format --dry-run --Werror ... # 只检查不改（CI 用）
+# =============================================================================
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# 访问修饰符（public:/private:）相对类体回退 2 格，即顶格对齐到 class 关键字。
+AccessModifierOffset: -2
+
+# 左括号后如果要换行，就**一律换到下一行**，不做「跟第一个参数对齐」那种缩进。
+# 好处是参数改名不会引起整块重新缩进，diff 干净。
+AlignAfterOpenBracket: AlwaysBreak
+
+# 类型定义（class/struct/enum/namespace）和函数的左花括号**另起一行**，
+# 控制流语句（if/for/while）的花括号仍跟在行尾。这是 ROS 2 的惯例：
+# 一眼能区分「这是一个定义」和「这是一个语句块」。
+BraceWrapping:
+  AfterClass: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterEnum: true
+BreakBeforeBraces: Custom
+
+# 行宽 100（SPEC §7）。注意 clang-format 按**字节**算宽度，中文注释会被高估，
+# 但下面 ReflowComments: false 关掉了注释重排，所以中文注释不受影响。
+ColumnLimit: 100
+
+# 构造函数初始化列表不额外缩进；续行缩进 2 格（与正文缩进一致）。
+ConstructorInitializerIndentWidth: 0
+ContinuationIndentWidth: 2
+
+# 指针/引用符号固定贴中间（`int * p`），不根据文件里的多数派自动推断。
+# 自动推断的问题是：同一个项目里不同文件风格不同，还会随着新代码漂移。
+DerivePointerAlignment: false
+PointerAlignment: Middle
+
+# **不要重排注释。** 这条对本项目尤其关键：注释是中文，clang-format 按字节
+# 计宽（一个汉字 3 字节），开了会把本来排版整齐的中文注释块切得七零八落。
+ReflowComments: false
+
+# -----------------------------------------------------------------------------
+# ⚠️ 以下是本项目**唯一**偏离 ROS 2 官方配置的一项，偏离有实测理由，不要删。
+# -----------------------------------------------------------------------------
+# 官方配置没有设 IncludeBlocks，于是继承 Google 风格的默认值 Regroup ——
+# 它把所有 #include **合并成一整块**重新按字母序排。后果是：
+#
+#     #include <ads_msgs/msg/vehicle_cmd.hpp>   ← 第三方（other）
+#     #include <algorithm>                      ← C++ 标准库
+#
+# 而 cpplint（ament_lint_common 的成员，必须过）要求的顺序是
+# 「本文件的头 → C 标准库 → C++ 标准库 → 其它」。字母序恰好把 other 排到了
+# C++ 标准库前面，于是 clang-format 和 cpplint 互相要求对方改回去 ——
+# 两个都是 ROS 2 官方工具，官方那份配置里就埋着这个冲突（实测 7 处报错）。
+#
+# Preserve 表示：**尊重空行划分的块**，只在每块内部排序，绝不跨块合并。
+# 所以写代码时按 C → C++ → 第三方 分三段、段间留空行，两个工具就都满意了。
+IncludeBlocks: Preserve
+...

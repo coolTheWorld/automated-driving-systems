@@ -58,6 +58,28 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/vehicle_params.yaml
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+
+  # clang-format 取代 ROS 2 默认的 uncrustify —— 理由见仓库根 .clang-format 顶部。
+  # 两者规则不同，同时开会互相要求改回去，所以必须显式排掉一个。
+  #
+  # ⚠️ 这行必须在 ament_lint_auto_find_test_dependencies() **之前**：
+  #    那个函数在被调用的一刻就把 linter 列表定死了，之后再设变量没有任何效果，
+  #    而且不会报错 —— 表现为「明明排除了 uncrustify，它还在跑」。
+  list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_uncrustify)
+
+  # 让 clang-format 用仓库根那一份配置，而不是它自带的内置默认值。
+  # 目的是**单一来源**：编辑器（从当前文件向上查找 .clang-format）和 CI
+  # 用的是同一个文件。否则就成了"仓库一份、工具内置一份"，靠纪律维持一致 ——
+  # 这个项目在车辆参数上已经吃过同类的亏（SPEC §4.1）。
+  # 而且本项目的配置刻意偏离了官方（IncludeBlocks: Preserve），不指过来必然不一致。
+  #
+  # ⚠️ 只能用这个变量，**不要**写 ament_clang_format(CONFIG_FILE ...)：
+  #    package.xml 里声明 test_depend 后，lint hook 会自动注册一个名为
+  #    clang_format 的测试，手动再调一次就撞名，报
+  #    `add_test given test NAME "clang_format" which already exists`。
+  # 路径里的 ../../.. 是从 src/ads_simulation/gazebo_bridge/ 回到仓库根。
+  set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../../.clang-format)
+
   ament_lint_auto_find_test_dependencies()
 endif()
 

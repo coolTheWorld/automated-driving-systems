@@ -1,3 +1,17 @@
+# Copyright 2026 孙帅
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # =============================================================================
 #  keyboard_teleop.launch.py —— 参数装配用，**不能用来交互驾驶**
 #
@@ -18,39 +32,39 @@
 
 from pathlib import Path
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
+import yaml
 
 
 def generate_launch_description():
-    share = get_package_share_directory("ads_teleop")
+    share = get_package_share_directory('ads_teleop')
 
     # 车辆限值来自唯一来源。teleop 用它算每次按键的增量和上下限 ——
     # 节点里不写任何车辆物理参数（SPEC §4.1）。
     vehicle_params = yaml.safe_load(
-        (Path(share) / "config" / "vehicle_params.yaml").read_text(encoding="utf-8"))
-    lim = vehicle_params["limits"]
+        (Path(share) / 'config' / 'vehicle_params.yaml').read_text(encoding='utf-8'))
+    lim = vehicle_params['limits']
 
     return LaunchDescription([
         Node(
-            package="ads_teleop",
-            executable="keyboard_teleop",
-            name="keyboard_teleop",
+            package='ads_teleop',
+            executable='keyboard_teleop',
+            name='keyboard_teleop',
             parameters=[{
-                "limits.max_steer_angle_rad": lim["max_steer_angle_rad"],
-                "limits.max_accel_mps2": lim["max_accel_mps2"],
-                "limits.max_decel_mps2": lim["max_decel_mps2"],
-                "limits.emergency_decel_mps2": lim["emergency_decel_mps2"],
+                'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
+                'limits.max_accel_mps2': lim['max_accel_mps2'],
+                'limits.max_decel_mps2': lim['max_decel_mps2'],
+                'limits.emergency_decel_mps2': lim['emergency_decel_mps2'],
                 # 所有节点都必须 use_sim_time=true（SPEC §3.3）。
                 # 这里影响的是消息头上的时间戳 —— 下游看门狗按仿真时间判超时，
                 # 用真实时间盖戳会让两边对不上。
-                "use_sim_time": True,
+                'use_sim_time': True,
             }],
             # emulate_tty 让子进程拿到一个伪终端，输出不被行缓冲卡住；
             # 状态行靠 \r 原地刷新，没有这个会看不到实时数值。
             emulate_tty=True,
-            output="screen",
+            output='screen',
         ),
     ])

@@ -1,3 +1,17 @@
+// Copyright 2026 孙帅
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // =============================================================================
 //  keyboard_teleop —— 键盘 → /vehicle_cmd
 //
@@ -20,6 +34,9 @@
 //     用独立的 GearCommand 解决这个歧义。
 // =============================================================================
 
+// include 必须分三段、段间留空行：C 标准库 → C++ 标准库 → 第三方。
+// 这是 cpplint 的硬性要求；.clang-format 里设了 IncludeBlocks: Preserve，
+// clang-format 只在**段内**排序，不会把三段合并 —— 合并了 cpplint 就报错。
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -64,7 +81,7 @@ public:
     }
 
     if (tcgetattr(STDIN_FILENO, &saved_) != 0) {
-      return;                    // 不是终端：非阻塞已生效，读不到按键但不会卡死
+      return;  // 不是终端：非阻塞已生效，读不到按键但不会卡死
     }
     is_tty_ = true;
     struct termios raw = saved_;
@@ -85,13 +102,16 @@ public:
     }
   }
 
-  bool is_tty() const {return is_tty_;}
+  bool is_tty() const { return is_tty_; }
 
   StdinRawMode(const StdinRawMode &) = delete;
   StdinRawMode & operator=(const StdinRawMode &) = delete;
 
 private:
-  struct termios saved_ {};
+  // 写 `termios` 而不是 `struct termios`：后者会让 clang-format 把 `{}` 误认成
+  // 结构体定义体，格式化成三行、看着像在定义一个叫 saved_ 的结构体。
+  // C++ 不需要这个 struct 前缀（C 才需要），去掉即可。
+  termios saved_{};
   int old_flags_{-1};
   bool is_tty_{false};
 };
@@ -99,8 +119,7 @@ private:
 class KeyboardTeleop : public rclcpp::Node
 {
 public:
-  KeyboardTeleop()
-  : Node("keyboard_teleop")
+  KeyboardTeleop() : Node("keyboard_teleop")
   {
     // ⚠️ 限值由 launch 从 config/vehicle_params.yaml 读出来传进来，
     //    这里**不写任何车辆物理参数**（SPEC §4.1 单一来源）。
@@ -127,10 +146,9 @@ public:
 
     pub_ = create_publisher<ads_msgs::msg::VehicleCmd>("/vehicle_cmd", 10);
     timer_ = create_wall_timer(
-      std::chrono::duration<double>(1.0 / rate_hz),
-      std::bind(&KeyboardTeleop::onTimer, this));
+      std::chrono::duration<double>(1.0 / rate_hz), std::bind(&KeyboardTeleop::on_timer, this));
 
-    printHelp();
+    print_help();
 
     // stdin 不是终端时明确告警，而不是安静地"按键没反应"。
     // 最常见的触发方式是用 `ros2 launch` 起本节点 —— launch 会接管子进程的
@@ -144,14 +162,14 @@ public:
   }
 
 private:
-  void printHelp() const
+  void print_help() const
   {
     // 用 \r\n 而不是 \n：raw 模式下终端不做 NL→CRNL 转换，
     // 只发 \n 的话光标只下移不回到行首，输出会显示成阶梯状。
     std::printf("\r\n");
     std::printf("  ================ 键盘驾驶 ================\r\n");
-    std::printf("     w / s    加速 / 减速（每次 %.2f / %.2f m/s^2）\r\n",
-      accel_step_, decel_step_);
+    std::printf(
+      "     w / s    加速 / 减速（每次 %.2f / %.2f m/s^2）\r\n", accel_step_, decel_step_);
     std::printf("     a / d    左转 / 右转（每次 %.3f rad）\r\n", steer_step_);
     std::printf("     空格     松油门 + 方向回正\r\n");
     std::printf("     b        紧急制动（%.1f m/s^2）\r\n", emergency_decel_);
@@ -163,19 +181,16 @@ private:
   }
 
   /// @brief 把值限制到 [lo, hi]。
-  static double clamp(double v, double lo, double hi)
-  {
-    return std::max(lo, std::min(hi, v));
-  }
+  static double clamp(double v, double lo, double hi) { return std::max(lo, std::min(hi, v)); }
 
-  void onTimer()
+  void on_timer()
   {
     // 一次把缓冲区里堆积的按键全读掉。
     // 只读一个的话，用户快速连按时按键会在缓冲区里排队，
     // 表现为"手松开了车还在继续加速"。
     char c = 0;
     while (::read(STDIN_FILENO, &c, 1) == 1) {
-      handleKey(c);
+      handle_key(c);
     }
 
     ads_msgs::msg::VehicleCmd msg;
@@ -196,13 +211,14 @@ private:
     if (steer_rad_ != last_printed_steer_ || accel_ != last_printed_accel_) {
       last_printed_steer_ = steer_rad_;
       last_printed_accel_ = accel_;
-      std::printf("\r  转角 %+.3f rad (%+5.1f deg)   加速度 %+.2f m/s^2      ",
-        steer_rad_, steer_rad_ * 180.0 / M_PI, accel_);
+      std::printf(
+        "\r  转角 %+.3f rad (%+5.1f deg)   加速度 %+.2f m/s^2      ", steer_rad_,
+        steer_rad_ * 180.0 / M_PI, accel_);
       std::fflush(stdout);
     }
   }
 
-  void handleKey(char c)
+  void handle_key(char c)
   {
     switch (c) {
       case 'w':
@@ -236,7 +252,7 @@ private:
         rclcpp::shutdown();
         break;
       default:
-        break;                                  // 其他键忽略
+        break;  // 其他键忽略
     }
   }
 
