@@ -16,8 +16,10 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_sensor_msgs</depend>
+  <depend>ads_msgs</depend>
 
   <!-- 运行期才需要的：桥接进程、机器人描述发布、以及 URDF/RViz 配置的来源 -->
   <exec_depend>ros_gz_bridge</exec_depend>

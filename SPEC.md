@@ -496,6 +496,7 @@ automated-driving-systems/
 │   │   ├── carla_bridge/       #   环境 B：CARLA（云端验收）
 │   │   ├── bag_replay/         #   离线回放
 │   │   └── scenario_runner/    #   场景描述与自动判定
+│   ├── ads_teleop/             # 手动驾驶输入（键盘/手柄）→ /vehicle_cmd
 │   ├── ads_bringup/            # launch 文件、参数配置
 │   └── ads_visualization/      # RViz 配置、调试可视化
 └── test/

@@ -8,12 +8,13 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：S1 ✓、S2 ✓、**S3 ✓ 全部 8 项完成，CP2 达成**
-（`verify_ros_bridge.sh` 6/6，3.8 已肉眼确认）。另追加了自车反射点滤除。
+**当前位置**：S1 ✓、S2 ✓、S3 ✓（CP2 达成）、**S4 的 4.1-4.3 ✓**。
+只剩 **4.4 的肉眼确认**（键盘开车绕障碍物一圈，看 RViz 是否同步更新）——
+操作步骤见下面 S4 段的「怎么开车」。
 
-**下一步是 S4：键盘 teleop 闭环**（4.1-4.4）。S4 要接的是 `/vehicle_cmd`
-反向通道 —— 目前桥接表里全是 `GZ_TO_ROS`，S4 要加**第一条 `ROS_TO_GZ`**，
-把「转角 rad + 加速度 m/s²」转成 Ackermann 插件吃的 Twist。
+之后进 **S5：工程化收尾**（5.1-5.6），终点是 **CP3 = P0a 验收**。
+S5 可与 S4 并行，内容是 clang-format、stack.launch.py、L1 单元测试样板、
+CI、README、ADR。
 
 恢复环境（宿主机执行）：
 
@@ -259,14 +260,84 @@ CP2 通过后检查点云 z 分布时发现：**34% 的点（9874/29239）打在
 
 ## S4　键盘 teleop 闭环
 
-- [ ] **4.1** teleop 节点：键盘 → `/vehicle_cmd`（转角 rad + 加速度 m/s²）
-      　　✅ `ros2 topic echo /vehicle_cmd` 有对应输出
-- [ ] **4.2** `gazebo_bridge` 订阅 `/vehicle_cmd` → 转 Gazebo 指令
-      　　✅ 车响应键盘
-- [ ] **4.3** 指令限幅（超 `vehicle_params.yaml` 范围则截断并告警）
-      　　✅ 手动发超限指令，车不失控
+- [x] **4.1** teleop 节点：键盘 → `/vehicle_cmd`（转角 rad + 加速度 m/s²）
+      　　✅ 新建 **`ads_teleop`** 包（已加进 SPEC §5）。teleop 与仿真器无关，
+      　　　 P0b 接 CARLA 时原样复用 —— 塞进 `gazebo_bridge` 就绑死在 Gazebo 上了
+      　　✅ 自动化验证（`check_keyboard_teleop.py`，用 **pty** 程序化按键）：
+      　　　 启动初值为零、w×5 累加到上限 1.500 且不越限、a 左转为正、
+      　　　 d 使转角减小、空格归零、b 下发紧急制动 −5.000
+- [x] **4.2** `gazebo_bridge` 订阅 `/vehicle_cmd` → 转 Gazebo 指令
+      　　✅ 直行：6 s **Δx = +25.5 m**；转向：**Δy = +7.8 m**
+      　　ℹ️ 新增 `vehicle_cmd_bridge` 节点，桥接表加了**第一条 `ROS_TO_GZ`**
+- [x] **4.3** 指令限幅（超 `vehicle_params.yaml` 范围则截断并告警）
+      　　✅ 下发转角 10 rad / 加速度 100 m/s²，桥接输出被卡在
+      　　　 **0.600 rad** 和 **7.44 m/s**（限值 0.600 / 8.333）
+      　　✅ **NaN 指令被拒绝**（NaN 参与比较恒为 false，clamp 会放行，
+      　　　 一路传到物理引擎会解算出 NaN 位姿，车直接从世界里消失）
+      　　✅ **看门狗**：停发指令 6.3 s 后速度 8.333 → 0.000 m/s
 - [ ] **4.4** 🎯 **闭环验证**：键盘开车绕障碍物一圈
-      　　✅ 全程 RViz 中点云 / TF / 车姿态同步更新
+      　　⏳ **待肉眼确认**：全程 RViz 中点云 / TF / 车姿态同步更新
+
+> **4.1-4.3 结果：`verify_teleop.sh` 3/3 通过 ✓**
+> S3 的 `verify_ros_bridge.sh` 回归重跑仍 6/6 通过。
+
+### 怎么开车（4.4）
+
+需要**两个终端**：
+
+```bash
+# 终端 A —— 仿真 + 桥接 + RViz
+docker compose exec dev bash -c 'source /opt/ros/jazzy/setup.bash && \
+  source /workspace/install/setup.bash && \
+  ros2 launch gazebo_bridge gazebo_sim.launch.py'
+
+# 终端 B —— 键盘
+docker compose exec dev /workspace/scripts/drive.sh
+```
+
+按键：`w/s` 加减速、`a/d` 左右转、`空格` 松油门回正、`b` 紧急制动、`q` 退出。
+
+> ⚠️ **不要用 `ros2 launch ads_teleop keyboard_teleop.launch.py` 开车** ——
+> launch 会接管子进程的 stdio，键盘输入到不了节点。详见下面排查记录 2。
+
+### 两个物理事实，不是 bug
+
+1. **静止时打方向车不会转。** 下游把转角换算成横摆角速度 ω = v·tan(δ)/L，
+   v=0 时 ω 恒为 0。真车原地打方向车也不动，阿克曼转向就是这样。
+2. **不支持倒车。** `ads_msgs/VehicleCmd` 只有转角和加速度、**没有挡位字段**，
+   负加速度只能理解成"减速"，无法与"倒车"区分。真实栈（如 Autoware）
+   用独立的 GearCommand 解决。
+
+### 4.1 排查记录 1：pty 测试里"前几个按键有效、之后全无反应"
+
+第一版自动化测试跑出来：`w` 和 `a` 正常，之后 `d`、空格、`b` 全部无响应。
+看着像节点的按键分发有 bug，其实是**测试脚手架的问题**：
+
+节点每个定时周期往 pty 写一行状态，而测试端从来没读过 pty 的 master。
+伪终端缓冲区只有几 KB，填满后节点的 `printf` **阻塞**，定时器回调卡死，
+键盘就再也读不到了。收到 238 条 ≈ 12 s × 20 Hz × 60 字符 ≈ 14 KB，正好对上。
+
+两处都改了：测试端加读取线程排空 pty；节点端改成**只在指令变化时才打印** ——
+每周期刷屏本来也没必要，在 `ros2 launch` 下还会把别的节点日志淹掉。
+
+### 4.1 排查记录 2：`ros2 launch` 下节点假死（真 bug）
+
+现象：`ros2 run` 起 teleop 一切正常；`ros2 launch` 起同一个节点，
+进程活着、`ros2 topic info` 能看到 publisher，**但一条消息都发不出来**，
+40 s 一条都收不到。日志里帮助文本正常打印，没有任何报错。
+
+原因：**`termios` 的 `VMIN=0 / VTIME=0` 只对终端生效。**
+`ros2 launch` 下子进程的 stdin 是**管道**：`tcgetattr` 失败 → raw 模式没设上 →
+`read()` 在管道上**永久阻塞** → 定时器回调卡死 → 发布者存在但永远不发。
+进程状态 `Sl`（睡眠）也对得上 —— 它睡在 `read` 里。
+
+修复：给 fd 加 **`O_NONBLOCK`**。它对管道、终端、`/dev/null` 一视同仁，
+不依赖 stdin 是什么类型。另外在 `isatty()` 为假时明确告警，
+不再是"按键没反应"这种查不出原因的现象。
+
+**教训**：非阻塞 I/O 有两套独立机制 —— `termios` 的 VMIN/VTIME 只管终端，
+`O_NONBLOCK` 管所有 fd。只用前者的代码在终端下测试完全正常，
+一换到管道就死锁，而且**不报错**。
 
 ---
 
@@ -293,8 +364,8 @@ CP2 通过后检查点云 z 分布时发现：**34% 的点（9874/29239）打在
 
 ```
 S1 █████  5/5 ✓   S2 ██████  6/6 ✓   S3 ████████  8/8 ✓
-S4 ░░░░  0/4      S5 ░░░░░░  0/6
-                                          总计  19/29
+S4 ███░  3/4      S5 ░░░░░░  0/6
+                                          总计  22/29
 ```
 
 **已达成的检查点**：CP1（GPU 硬件加速）✓　CP2（数据流打通）✓　CP3（P0a 验收）待 S5

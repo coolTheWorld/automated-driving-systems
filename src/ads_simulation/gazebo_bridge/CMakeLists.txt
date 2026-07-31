@@ -15,9 +15,12 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
+find_package(ads_msgs REQUIRED)
 
+# 传感器方向：Gazebo → ROS
 add_executable(lidar_preprocessor
   src/lidar_preprocessor_node.cpp)
 ament_target_dependencies(lidar_preprocessor
@@ -27,7 +30,16 @@ ament_target_dependencies(lidar_preprocessor
   tf2_ros
   tf2_sensor_msgs)
 
-install(TARGETS lidar_preprocessor
+# 控制方向：ROS → Gazebo
+add_executable(vehicle_cmd_bridge
+  src/vehicle_cmd_bridge_node.cpp)
+ament_target_dependencies(vehicle_cmd_bridge
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  ads_msgs)
+
+install(TARGETS lidar_preprocessor vehicle_cmd_bridge
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY config launch

@@ -169,14 +169,14 @@ fi
 echo
 echo "[3/6] 各节点 use_sim_time"
 BAD_NODES=""
-for n in /lidar_preprocessor /robot_state_publisher /gazebo_bridge /map_to_odom_identity; do
+for n in /lidar_preprocessor /vehicle_cmd_bridge /robot_state_publisher /gazebo_bridge /map_to_odom_identity; do
   V="$(timeout 8 ros2 param get "${n}" use_sim_time 2>/dev/null | grep -oiE 'true|false' | head -1)"
   if [[ "${V,,}" != "true" ]]; then
     BAD_NODES="${BAD_NODES} ${n}(${V:-读不到})"
   fi
 done
 if [[ -z "${BAD_NODES}" ]]; then
-  ok "四个节点的 use_sim_time 均为 true"
+  ok "五个节点的 use_sim_time 均为 true"
 else
   fail "以下节点 use_sim_time 不为 true：${BAD_NODES}"
   echo "     混用真实时间会让时间戳对不上，TF 报 extrapolation，且 RTF≈1 时看不出来。"

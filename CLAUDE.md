@@ -58,6 +58,16 @@ docker compose exec dev bash
 docker compose exec dev /workspace/scripts/verify_gpu.sh        # 10 项：GPU 硬件加速
 docker compose exec dev /workspace/scripts/verify_sim.sh        # 6 项：Gazebo 仿真基线 + RTF
 docker compose exec dev /workspace/scripts/verify_ros_bridge.sh # 6 项：ROS 桥接契约（CP2）
+docker compose exec dev /workspace/scripts/verify_teleop.sh     # 3 项：控制指令链路 + 限幅 + 看门狗
+```
+
+**跑任何 verify 脚本前先确认没有残留的仿真进程**，否则两套仿真同时发
+`/clock` 和 `/tf`，所有测量值都是垃圾（`verify_ros_bridge.sh` / `verify_teleop.sh`
+已内建拦截）：
+
+```bash
+docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 launch" | grep -v grep'
+docker compose exec dev bash -c 'kill -INT -- -<PGID>'   # 按进程组收，不要用 pkill -f
 ```
 
 退出码 0 才继续。`verify_gpu.sh` 是整个本地环境方案的 go/no-go —— **失败时不要用软件渲染硬撑**。
@@ -89,6 +99,9 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | `ros2 topic list` 紧接 daemon 启动 | 只返回 `/rosout` `/parameter_events` | daemon 的节点图还没建好。先 `ros2 daemon start` 再等几秒 |
 | `gpu_lidar` 的无回波射线 | `skip_nans` 滤不掉，`min/max` 变 `±inf` | 返回的是 **±inf 不是 NaN**。求极值/质心/体素前必须显式 `isfinite` 过滤 |
 | 雷达打到自车车顶 | 34% 的点落在自己车顶上，感知会当成零距离障碍物 | 雷达 z=1.6 而车顶 z=1.5，只高 10 cm。**抬高雷达没用**（车顶长 4.4 m），只能按自车轮廓裁剪。已在 `lidar_preprocessor` 实现 |
+| 读 stdin 的节点在 `ros2 launch` 下假死 | 进程活着、`topic info` 有 publisher，**一条消息都不发**，无报错 | `termios` 的 `VMIN/VTIME` **只对终端生效**；launch 下 stdin 是管道，`read()` 永久阻塞、卡死回调。必须另加 **`O_NONBLOCK`**（对所有 fd 都管用） |
+| 用 `ros2 launch` 起交互式节点 | 键盘输入到不了节点 | launch 接管子进程 stdio。键盘开车用 `scripts/drive.sh`（走 `ros2 run`） |
+| pty 驱动测试不排空 master | 被测进程"前几个按键有效、之后全无反应" | 伪终端缓冲区只有几 KB，填满后子进程 `printf` 阻塞。测试端必须起线程持续读 |
 | SDF 转向关节缺 `<effort>` | Gazebo 报错，**前轮能转过机械极限** | 速度控制下 dartsim 需要力矩上限才检查位置限位 |
 | `<gz_frame_id>` 报 SDF 警告 | `XML Element[gz_frame_id] ... not defined in SDF` | **正常**，功能有效（frame_id 确实被改写）。它不在 SDF 规范里，Gazebo 自己解析 |
 
@@ -114,6 +127,9 @@ colcon build --packages-select gazebo_bridge    # 单个包
 # ---------- 运行（已可用） ----------
 ros2 launch gazebo_bridge gazebo_sim.launch.py                      # Gazebo GUI + RViz
 ros2 launch gazebo_bridge gazebo_sim.launch.py gui:=false rviz:=false  # headless，CI 用
+
+# 键盘开车（**另开一个终端**，必须走 drive.sh 而不是 ros2 launch，见陷阱表）
+docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 尚不可用（包还没建） ----------
 colcon test --packages-select ads_control           # 走完整 CTest（含 lint），提交前用

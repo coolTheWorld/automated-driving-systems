@@ -49,6 +49,25 @@ def ego_box_params(vehicle_params: dict) -> dict:
     }
 
 
+def vehicle_limit_params(vehicle_params: dict) -> dict:
+    """vehicle_cmd_bridge 需要的车辆参数。
+
+    同样只是搬运，不引入任何新数字 —— 全部来自 config/vehicle_params.yaml。
+    参数名保持和 YAML 里的层级一致（geometry.* / limits.*），
+    这样看到日志里的参数名就知道去 YAML 的哪一段改。
+    """
+    geo = vehicle_params["geometry"]
+    lim = vehicle_params["limits"]
+    return {
+        "geometry.wheelbase_m": geo["wheelbase_m"],
+        "limits.max_steer_angle_rad": lim["max_steer_angle_rad"],
+        "limits.max_speed_mps": lim["max_speed_mps"],
+        "limits.max_accel_mps2": lim["max_accel_mps2"],
+        "limits.max_decel_mps2": lim["max_decel_mps2"],
+        "limits.emergency_decel_mps2": lim["emergency_decel_mps2"],
+    }
+
+
 def generate_launch_description():
     bridge_share = get_package_share_directory("gazebo_bridge")
     viz_share = get_package_share_directory("ads_visualization")
@@ -137,6 +156,24 @@ def generate_launch_description():
             executable="lidar_preprocessor",
             name="lidar_preprocessor",
             parameters=[ego_box_params(vehicle_params), use_sim_time],
+            output="screen",
+        ),
+
+        # ---------------------------------------------------------------------
+        # 3b. 控制指令桥接：/vehicle_cmd → Gazebo 的 Twist
+        #
+        #     这是唯一一条 ROS → Gazebo 的链路。它把 SPEC §4.1 的车辆物理量
+        #     （转角 rad + 加速度 m/s²）换算成 AckermannSteering 插件吃的
+        #     Twist（速度 + 横摆角速度）。见 src/vehicle_cmd_bridge_node.cpp。
+        #
+        #     没有它的话，上游算法就得直接发 Gazebo 约定的 Twist，
+        #     等于把仿真器的执行器细节泄漏进控制器。
+        # ---------------------------------------------------------------------
+        Node(
+            package="gazebo_bridge",
+            executable="vehicle_cmd_bridge",
+            name="vehicle_cmd_bridge",
+            parameters=[vehicle_limit_params(vehicle_params), use_sim_time],
             output="screen",
         ),
 
