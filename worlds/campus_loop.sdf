@@ -1,0 +1,144 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================================
+     campus_loop —— P1 起使用的园区世界
+
+     与 campus_minimal.sdf 的关系：**并存，不是替换。**
+
+       campus_minimal.sdf  一段直路 + 几个方块。它是 verify_sim.sh /
+                           verify_ros_bridge.sh / verify_teleop.sh 三个脚本的
+                           **回归基线**（RTF 0.970、点云 10.00 Hz 等实测值都基于它）。
+                           改动它会让那些数字全部作废，而它们是判断
+                           「环境有没有退化」的唯一依据。所以它冻结。
+
+       campus_loop.sdf     环线 + 横穿路 + 2 个 T 型路口，有真正的车道语义。
+                           P1 起的开发都在这里做。
+
+     本文件是**手写**的骨架（物理、插件、光照、地面、自车摆位），
+     道路几何来自 model://campus_road —— 那是 scripts/gen_map.py 的生成物，
+     与 maps/campus.xodr 同源。想改路网请改 config/campus_map.yaml 后重新生成。
+     =========================================================================== -->
+<sdf version="1.9">
+  <world name="campus_loop">
+
+    <!-- =====================================================================
+         物理
+
+         与 campus_minimal 逐字相同。步长 1 ms 是带轮胎接触的车辆仿真的常规值；
+         放大到 5 ms 以上轮胎接触力求解会不稳定，表现是车静止时自己抖动、漂移。
+
+         ⚠️ 两个世界的物理参数必须保持一致，否则「换个世界车的行为就变了」，
+            而你会以为是控制器的问题。这和双仿真环境的行为漂移是同一类风险，
+            只是尺度小一些。 -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- =====================================================================
+         大地坐标原点
+
+         ⚠️ 这四个数必须与 config/campus_map.yaml 的 geo_origin **逐字相同**，
+            也与 campus_minimal.sdf 相同。三个原点在此重合：
+            OpenDRIVE 的 (0,0) = Gazebo 世界原点 = ROS map 系原点。
+
+         不重合的后果不是「差一点」：P4 用 GNSS 做定位时，两个仿真环境里
+         同一个 x/y 会换算出不同的经纬度，定位结果无法互相比对 ——
+         而那时你已经在调 ESKF 的噪声参数了，根本不会想到是地图原点的问题。
+
+         src/ads_map 的 L1 测试会自动比对本文件与 YAML，写歪了当场红。
+         ENU：x 向东、y 向北、z 向上，与 ROS 的 map 系约定一致。 -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>31.230416</latitude_deg>
+      <longitude_deg>121.473701</longitude_deg>
+      <elevation>10.0</elevation>
+      <heading_deg>0.0</heading_deg>
+    </spherical_coordinates>
+
+    <!-- =====================================================================
+         系统插件。与 campus_minimal 相同的六个，理由见那边的注释。
+         <render_engine> 必须显式写 ogre2：默认值在无头模式下可能落到 ogre(1)，
+         而 gpu_lidar 只在 ogre2 下工作，落错了的表现是点云话题存在但永远没数据。 -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-navsat-system"
+            name="gz::sim::systems::NavSat"/>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.82 0.9 1</background>
+      <!-- 关阴影。ODD 限定白天晴朗（SPEC §2），阴影对算法毫无价值，
+           但它是 RTF 的头号消耗项之一。地图变大后这一条更要紧。 -->
+      <shadows>false</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.4 0.3 -0.9</direction>
+    </light>
+
+    <!-- 地面。环线包络 180×100 m，加上路面宽度约到 ±94 × ±54，
+         取 260×180 留出余量，让视野边缘不是一条突兀的截断线。 -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>260 180</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>260 180</size></plane></geometry>
+          <material>
+            <ambient>0.35 0.45 0.32 1</ambient>
+            <diffuse>0.4 0.52 0.36 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- =====================================================================
+         道路。生成物，见 models/campus_road/。
+         靠 GZ_SIM_RESOURCE_PATH 找到（已在 docker-compose.local.yml 设为
+         /workspace/models:/workspace/worlds）。 -->
+    <include>
+      <uri>model://campus_road</uri>
+      <name>campus_road</name>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
+    <!-- =====================================================================
+         自车。
+
+         摆在环线下边直路的**顺行车道**上，车头朝 +x（向东）。
+         y = -51.75 是怎么来的：环线下边的参考线在 y = -50，
+         右侧通行下顺行车道（OpenDRIVE 的 lane -1）在参考线右侧半个车道，
+         即 -50 - 3.5/2 = -51.75。
+
+         ⚠️ 这个数如果改了 config/campus_map.yaml 的车道宽或环线尺寸就会失效，
+            表现是车一开始就停在车道线上甚至草地上。它属于「摆位」而非「地图」，
+            所以没有做成生成物 —— 但 P1-S4 的 verify_map.sh 会检查
+            自车起始位置确实落在某条车道内。 -->
+    <include>
+      <uri>model://ego_vehicle</uri>
+      <name>ego_vehicle</name>
+      <pose>30 -51.75 0 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

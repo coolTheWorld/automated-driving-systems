@@ -1,0 +1,578 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================
+     campus_road —— 园区道路的 Gazebo 可视几何
+
+     ⚠️ 本文件由 scripts/gen_map.py 从 config/campus_map.yaml 生成，
+        请勿手改。它与 maps/campus.xodr 同源，两者不会漂移。
+
+     只有 <visual> 没有 <collision>：车在 ground_plane 上跑，
+     再给路面加一层碰撞体是白算一份接触力，且两层几乎重合的
+     碰撞面会让求解器抖动。沿用 P0a 的做法。
+     =========================================================== -->
+<sdf version="1.9">
+  <model name="campus_road">
+    <static>true</static>
+    <link name="link">
+      <visual name="surface_0">
+        <pose>44.500000 -50.000000 0.005000 0 0 0.000000</pose>
+        <geometry><box><size>67.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_0">
+        <pose>44.500000 -50.000000 0.006000 0 0 0.000000</pose>
+        <geometry><box><size>67.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_1">
+        <pose>78.783157 -49.948669 0.005000 0 0 0.065450</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_1">
+        <pose>78.783157 -49.948669 0.006000 0 0 0.065450</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_2">
+        <pose>80.336071 -49.744224 0.005000 0 0 0.196350</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_2">
+        <pose>80.336071 -49.744224 0.006000 0 0 0.196350</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_3">
+        <pose>81.849015 -49.338832 0.005000 0 0 0.327249</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_3">
+        <pose>81.849015 -49.338832 0.006000 0 0 0.327249</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_4">
+        <pose>83.296101 -48.739430 0.005000 0 0 0.458149</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_4">
+        <pose>83.296101 -48.739430 0.006000 0 0 0.458149</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_5">
+        <pose>84.652569 -47.956272 0.005000 0 0 0.589049</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_5">
+        <pose>84.652569 -47.956272 0.006000 0 0 0.589049</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_6">
+        <pose>85.895209 -47.002761 0.005000 0 0 0.719948</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_6">
+        <pose>85.895209 -47.002761 0.006000 0 0 0.719948</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_7">
+        <pose>87.002761 -45.895209 0.005000 0 0 0.850848</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_7">
+        <pose>87.002761 -45.895209 0.006000 0 0 0.850848</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_8">
+        <pose>87.956272 -44.652569 0.005000 0 0 0.981748</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_8">
+        <pose>87.956272 -44.652569 0.006000 0 0 0.981748</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_9">
+        <pose>88.739430 -43.296101 0.005000 0 0 1.112647</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_9">
+        <pose>88.739430 -43.296101 0.006000 0 0 1.112647</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_10">
+        <pose>89.338832 -41.849015 0.005000 0 0 1.243547</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_10">
+        <pose>89.338832 -41.849015 0.006000 0 0 1.243547</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_11">
+        <pose>89.744224 -40.336071 0.005000 0 0 1.374447</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_11">
+        <pose>89.744224 -40.336071 0.006000 0 0 1.374447</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_12">
+        <pose>89.948669 -38.783157 0.005000 0 0 1.505346</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_12">
+        <pose>89.948669 -38.783157 0.006000 0 0 1.505346</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_13">
+        <pose>90.000000 0.000000 0.005000 0 0 1.570796</pose>
+        <geometry><box><size>76.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_13">
+        <pose>90.000000 0.000000 0.006000 0 0 1.570796</pose>
+        <geometry><box><size>76.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_14">
+        <pose>89.948669 38.783157 0.005000 0 0 1.636246</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_14">
+        <pose>89.948669 38.783157 0.006000 0 0 1.636246</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_15">
+        <pose>89.744224 40.336071 0.005000 0 0 1.767146</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_15">
+        <pose>89.744224 40.336071 0.006000 0 0 1.767146</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_16">
+        <pose>89.338832 41.849015 0.005000 0 0 1.898046</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_16">
+        <pose>89.338832 41.849015 0.006000 0 0 1.898046</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_17">
+        <pose>88.739430 43.296101 0.005000 0 0 2.028945</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_17">
+        <pose>88.739430 43.296101 0.006000 0 0 2.028945</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_18">
+        <pose>87.956272 44.652569 0.005000 0 0 2.159845</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_18">
+        <pose>87.956272 44.652569 0.006000 0 0 2.159845</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_19">
+        <pose>87.002761 45.895209 0.005000 0 0 2.290745</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_19">
+        <pose>87.002761 45.895209 0.006000 0 0 2.290745</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_20">
+        <pose>85.895209 47.002761 0.005000 0 0 2.421644</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_20">
+        <pose>85.895209 47.002761 0.006000 0 0 2.421644</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_21">
+        <pose>84.652569 47.956272 0.005000 0 0 2.552544</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_21">
+        <pose>84.652569 47.956272 0.006000 0 0 2.552544</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_22">
+        <pose>83.296101 48.739430 0.005000 0 0 2.683444</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_22">
+        <pose>83.296101 48.739430 0.006000 0 0 2.683444</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_23">
+        <pose>81.849015 49.338832 0.005000 0 0 2.814343</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_23">
+        <pose>81.849015 49.338832 0.006000 0 0 2.814343</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_24">
+        <pose>80.336071 49.744224 0.005000 0 0 2.945243</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_24">
+        <pose>80.336071 49.744224 0.006000 0 0 2.945243</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_25">
+        <pose>78.783157 49.948669 0.005000 0 0 3.076143</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_25">
+        <pose>78.783157 49.948669 0.006000 0 0 3.076143</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_26">
+        <pose>44.500000 50.000000 0.005000 0 0 3.141593</pose>
+        <geometry><box><size>67.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_26">
+        <pose>44.500000 50.000000 0.006000 0 0 3.141593</pose>
+        <geometry><box><size>67.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_27">
+        <pose>-44.500000 50.000000 0.005000 0 0 3.141593</pose>
+        <geometry><box><size>67.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_27">
+        <pose>-44.500000 50.000000 0.006000 0 0 3.141593</pose>
+        <geometry><box><size>67.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_28">
+        <pose>-78.783157 49.948669 0.005000 0 0 -3.076143</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_28">
+        <pose>-78.783157 49.948669 0.006000 0 0 -3.076143</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_29">
+        <pose>-80.336071 49.744224 0.005000 0 0 -2.945243</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_29">
+        <pose>-80.336071 49.744224 0.006000 0 0 -2.945243</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_30">
+        <pose>-81.849015 49.338832 0.005000 0 0 -2.814343</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_30">
+        <pose>-81.849015 49.338832 0.006000 0 0 -2.814343</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_31">
+        <pose>-83.296101 48.739430 0.005000 0 0 -2.683444</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_31">
+        <pose>-83.296101 48.739430 0.006000 0 0 -2.683444</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_32">
+        <pose>-84.652569 47.956272 0.005000 0 0 -2.552544</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_32">
+        <pose>-84.652569 47.956272 0.006000 0 0 -2.552544</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_33">
+        <pose>-85.895209 47.002761 0.005000 0 0 -2.421644</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_33">
+        <pose>-85.895209 47.002761 0.006000 0 0 -2.421644</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_34">
+        <pose>-87.002761 45.895209 0.005000 0 0 -2.290745</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_34">
+        <pose>-87.002761 45.895209 0.006000 0 0 -2.290745</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_35">
+        <pose>-87.956272 44.652569 0.005000 0 0 -2.159845</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_35">
+        <pose>-87.956272 44.652569 0.006000 0 0 -2.159845</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_36">
+        <pose>-88.739430 43.296101 0.005000 0 0 -2.028945</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_36">
+        <pose>-88.739430 43.296101 0.006000 0 0 -2.028945</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_37">
+        <pose>-89.338832 41.849015 0.005000 0 0 -1.898046</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_37">
+        <pose>-89.338832 41.849015 0.006000 0 0 -1.898046</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_38">
+        <pose>-89.744224 40.336071 0.005000 0 0 -1.767146</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_38">
+        <pose>-89.744224 40.336071 0.006000 0 0 -1.767146</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_39">
+        <pose>-89.948669 38.783157 0.005000 0 0 -1.636246</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_39">
+        <pose>-89.948669 38.783157 0.006000 0 0 -1.636246</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_40">
+        <pose>-90.000000 0.000000 0.005000 0 0 -1.570796</pose>
+        <geometry><box><size>76.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_40">
+        <pose>-90.000000 0.000000 0.006000 0 0 -1.570796</pose>
+        <geometry><box><size>76.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_41">
+        <pose>-89.948669 -38.783157 0.005000 0 0 -1.505346</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_41">
+        <pose>-89.948669 -38.783157 0.006000 0 0 -1.505346</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_42">
+        <pose>-89.744224 -40.336071 0.005000 0 0 -1.374447</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_42">
+        <pose>-89.744224 -40.336071 0.006000 0 0 -1.374447</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_43">
+        <pose>-89.338832 -41.849015 0.005000 0 0 -1.243547</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_43">
+        <pose>-89.338832 -41.849015 0.006000 0 0 -1.243547</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_44">
+        <pose>-88.739430 -43.296101 0.005000 0 0 -1.112647</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_44">
+        <pose>-88.739430 -43.296101 0.006000 0 0 -1.112647</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_45">
+        <pose>-87.956272 -44.652569 0.005000 0 0 -0.981748</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_45">
+        <pose>-87.956272 -44.652569 0.006000 0 0 -0.981748</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_46">
+        <pose>-87.002761 -45.895209 0.005000 0 0 -0.850848</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_46">
+        <pose>-87.002761 -45.895209 0.006000 0 0 -0.850848</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_47">
+        <pose>-85.895209 -47.002761 0.005000 0 0 -0.719948</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_47">
+        <pose>-85.895209 -47.002761 0.006000 0 0 -0.719948</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_48">
+        <pose>-84.652569 -47.956272 0.005000 0 0 -0.589049</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_48">
+        <pose>-84.652569 -47.956272 0.006000 0 0 -0.589049</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_49">
+        <pose>-83.296101 -48.739430 0.005000 0 0 -0.458149</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_49">
+        <pose>-83.296101 -48.739430 0.006000 0 0 -0.458149</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_50">
+        <pose>-81.849015 -49.338832 0.005000 0 0 -0.327249</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_50">
+        <pose>-81.849015 -49.338832 0.006000 0 0 -0.327249</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_51">
+        <pose>-80.336071 -49.744224 0.005000 0 0 -0.196350</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_51">
+        <pose>-80.336071 -49.744224 0.006000 0 0 -0.196350</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_52">
+        <pose>-78.783157 -49.948669 0.005000 0 0 -0.065450</pose>
+        <geometry><box><size>1.569675 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_52">
+        <pose>-78.783157 -49.948669 0.006000 0 0 -0.065450</pose>
+        <geometry><box><size>1.569675 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_53">
+        <pose>-44.500000 -50.000000 0.005000 0 0 0.000000</pose>
+        <geometry><box><size>67.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_53">
+        <pose>-44.500000 -50.000000 0.006000 0 0 0.000000</pose>
+        <geometry><box><size>67.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="surface_54">
+        <pose>0.000000 0.000000 0.005000 0 0 1.570796</pose>
+        <geometry><box><size>78.000000 8.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="centerline_54">
+        <pose>0.000000 0.000000 0.006000 0 0 1.570796</pose>
+        <geometry><box><size>78.000000 0.150000 0.010000</size></box></geometry>
+        <material><ambient>0.85 0.85 0.80 1</ambient><diffuse>0.95 0.95 0.90 1</diffuse></material>
+      </visual>
+      <visual name="junction_100">
+        <pose>0.000000 -46.500000 0.005000 0 0 0.000000</pose>
+        <geometry><box><size>22.000000 15.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+      <visual name="junction_101">
+        <pose>0.000000 46.500000 0.005000 0 0 0.000000</pose>
+        <geometry><box><size>22.000000 15.000000 0.010000</size></box></geometry>
+        <material><ambient>0.22 0.22 0.24 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
+      </visual>
+    </link>
+  </model>
+</sdf>
