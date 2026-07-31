@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_common</name>
+  <version>0.1.0</version>
+  <description>
+    跨模块共用的纯算法工具：几何、坐标变换、时间、配置。
+
+    ⚠️ 本包**不依赖 ROS**，这是硬约束不是偏好（SPEC §3.3 / §8）：
+    L1 单元测试要保持毫秒级，一旦链接 rclcpp，每个测试都要初始化 ROS 上下文，
+    从 0.001 s 变成 0.5 s 起步 —— 测试一慢人就不跑了。
+    需要 ROS 的东西放到各自模块的 node/ 层。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 这里**故意没有任何运行时依赖**。见上面的说明。 -->
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
