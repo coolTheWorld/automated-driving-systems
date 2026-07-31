@@ -1,15 +1,17 @@
-# P0a 任务清单
+# 任务清单
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
-> 状态：**P0a 全部完成 29/29，CP1 / CP2 / CP3 均已达成**　|　更新：2026-07-31
-> 技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
+> 状态：**P0a 完成 29/29**（CP1/CP2/CP3 达成）　|　**当前阶段：P1 地图与路由**
+> 更新：2026-07-31　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
+>
+> 本文件按阶段分段：[P1 清单](#p1-地图与路由当前阶段)（当前）→ [P0a 清单](#s1容器--gpu--gui检查点-cp1go--no-go)（已完成，保留作记录）
 
 ---
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P0a 已全部完成**（S1–S5，29/29），CP1 / CP2 / CP3 全部达成，
-并已做过一轮**收官复查**（2026-07-31，见下）。
+**当前位置**：**P1 已开工**（用户于 2026-07-31 选定 P1，不做 P0b）。
+P0a 已全部完成（S1–S5，29/29）+ 一轮收官复查（见下）。
 
 ### ✅ 2026-07-31 收官复查：按数据流讲解一遍 + 修掉三处
 
@@ -45,21 +47,20 @@
 `verify_ros_bridge.sh` **6/6**（RTF 0.970、点云 10.00 Hz、自车点 0），
 `verify_teleop.sh` **3/3**。
 
-### ⏸️ 下一步仍待用户决定，**不要自行开工**
+### ✅ CP3 的分叉已定：走 P1，不做 P0b
 
-CP3 的分叉是 **P1（继续本地）** 还是 **P0b（先建云端 CARLA）**。
-用户已通读完代码并认可上述三项修改，但**尚未选定下一阶段**。
-所以下次开始时，在他明确说做哪个之前，**不要动手写 P1 或 P0b 的代码**。
+用户于 2026-07-31 选定 **P1 地图与路由**。同时定下 P1 的两个架构选项：
 
-两个选项的权衡（上次已完整汇报过，这里只留结论）：
+- **地图拓扑**：环线 180×100 m（四角 R=12 m）+ 一条横穿路 → **2 个 T 型路口**
+- **地图来源**：`config/campus_map.yaml` → `scripts/gen_map.py` → `.xodr` + Gazebo 世界
+  （与 `vehicle_params.yaml → SDF + URDF` 同构）
 
-| | 支持它的理由 | 代价 |
-|---|---|---|
-| **P1 地图与路由** | 现在还没有任何算法代码，`carla_bridge` 要对齐的「行为」根本不存在，对齐空栈没意义 | CARLA 侧一直没验证 |
-| **P0b 云端 CARLA** | 「行为漂移」是本项目自列的头号风险，越晚接触越难查；且 `gazebo_bridge` 刚做完，接口契约最清晰 | 开始产生 GPU 实例费用 |
+详细理由、几何数值、切片依据见 [plan.md 第二部分](./plan.md#第二部分p1-地图与路由)。
 
-**上次给出的建议是 P1，但附带一个条件：不应晚于 P2 结束就接上 CARLA。**
-一旦控制参数已经在 Gazebo 上调好才去对齐，漂移就已经发生了 —— 那正是最难查的故障。
+> ⚠️ **仍然背着一笔账：CARLA 不应晚于 P2 结束才接上。**
+> 一旦控制参数已经在 Gazebo 上调好才去对齐，行为漂移就已经发生了 ——
+> 那正是本项目自列的头号风险，也是最难查的一类故障。
+> P2 结束时要重新把 P0b 摆上桌面，不要让它一路滑到 P5。
 
 ### 恢复环境（宿主机执行）
 
@@ -127,6 +128,124 @@ docker compose exec dev bash -c 'kill -INT -- -<PGID>'   # PGID 取自上面 ps 
 （Gazebo 装在 ROS 前缀下），脚本里 source 时要临时 `set +u`。
 
 ---
+
+# P1 地图与路由（当前阶段）
+
+> 拆解理由与几何数值见 [plan.md 第二部分](./plan.md#第二部分p1-地图与路由)。
+> 阶段成果（SPEC §10）：**RViz 中显示车道图和 A→B 全局路径**。
+
+**生成链**（YAML 是唯一手写的源头）：
+
+```
+config/campus_map.yaml ──gen_map.py──┬──▶ maps/campus.xodr            两环境共用
+                                     └──▶ models/campus_road/model.sdf Gazebo 可视
+                                              └──▶ worlds/campus_loop.sdf（手写骨架）
+```
+
+**`campus_minimal.sdf` 不许改** —— 它是三个 verify 脚本的回归基线。P1 另建世界。
+
+## P1-S1　地图生成器 + 园区地图【纯 Python】
+
+| # | 任务 | 验收标准 | 状态 |
+|---|------|---------|:---:|
+| 1.1 | `config/campus_map.yaml`：路段 + 路口的紧凑描述 | 人能读懂、能改数 | ✅ |
+| 1.2 | `gen_map.py` 几何内核：line / arc 的 s→(x,y,θ) 求值 | 与解析解一致 | ✅ |
+| 1.3 | 生成 `maps/campus.xodr`：3 常规路 + 2 路口 + 12 连接路 | XML 合法、结构完整 | ✅ |
+| 1.4 | 生成 `models/campus_road/model.sdf` + `model.config` | Gazebo 显示出环线 | ✅ 肉眼已确认 |
+| 1.5 | `worlds/campus_loop.sdf`：手写骨架 + include | 世界能起、车在路上 | ✅ 数值 + 肉眼 |
+| 1.6 | `--check` 模式：校验生成物与 YAML 同步 | 不同步则非零退出 | ✅ |
+| 1.7 | L1 pytest：几何、周长自洽 539.398 m、路口连接数各 6 | 全绿 | ✅ 18 用例 |
+
+**S1 实测（2026-07-31）**
+
+| 项 | 实测值 |
+|---|---|
+| 环线周长 | **539.398 m**（= 247.699×2 + 22×2，两条独立算法一致） |
+| 道路数 | 3 常规 + 12 连接 = 15；路口 2 个，各 6 条连接道路 |
+| 路口退让 | 11.000 m（推导量 = 8 + 1.75 + 1.25） |
+| 连接道路长 | 直行 22.000、左转 19.317、右转 17.815 m |
+| 自车世界位姿 | (30.000, **−51.75**, ~0)，正是顺行车道中心 |
+| RTF | **1.000**（`verify_sim.sh` 6/6 全过，P0a 基线是 0.970） |
+| 测试 | `colcon test-result --all` → **130 tests / 0 failures**（基线 101） |
+
+> **地图变大没有代价**：RTF 1.000 与 P0a 持平。原因是道路只有 `<visual>`
+> 没有 `<collision>` —— 物理引擎根本不知道路的存在。
+
+**测试有效性已验证**（不是只看绿灯）。往生成器里注入 5 处错误，逐一确认被**预期的**用例抓住：
+
+| 注入的错误 | 抓住它的用例 |
+|---|---|
+| 参考线半径换算的加减号写反（左右转搞混） | `test_turning_lane_radius_...` |
+| `inbound_lane` 正负号写反 | `test_lane_centres_are_continuous_...` |
+| 连接道路起点偏 5 cm | 同上 |
+| 世界的纬度改掉最后一位小数 | `test_world_geo_origin_matches_the_map` |
+| 自车摆到车道线上 | `test_ego_spawn_pose_sits_on_a_lane_centre` |
+
+> ⚠️ 第一条注入尤其值得记：**连续性用例没抓到它。** 参考线半径的加减号写反后，
+> 圆心是按错误半径求交点算出来的，端点照样精确落在路口边界上，几何**处处连续**。
+> 唯一的变化是车实际转弯半径从 8 m 变成 4.5 m 或 11.5 m。
+> 症状要到 P2 才出现：过路口时转角需求突变，而你会以为是控制器的问题。
+> `test_turning_lane_radius_...` 就是为堵这个洞补的。
+
+> ⚠️ `test_lane_links_point_at_the_lane_that_actually_connects` 是**自证的** ——
+> 两边都取 `leg.inbound_lane`，等于拿生成器和自己比。它的 docstring 已写明
+> 这一点，别高估它。车道号本身的正确性由连续性用例独立保证。
+
+**S1 新踩到的两个坑**（S5 的 5.4 要同步进 CLAUDE.md 陷阱表）
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| `setsid cmd &` 之后用 `$!` 取进程组 | 清理命令**静默地什么都没做**，仿真进程留下来 | `$!` 是 **setsid 自己**的 PID，它 fork 出新进程组后立刻退出，于是 `ps -o pgid= -p $!` 返回空，`kill -INT -- -` 变成空操作。要按**进程名**查 pgid：`ps -eo pgid,args \| grep "gz sim"`。CLAUDE.md 现有的陷阱表说了「用 `kill -INT -- -<PGID>`」，但没说 PGID 怎么正确取到 |
+| headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需要升级到 TERM/KILL。（也可能是它退得比 3 s 慢，两种解释我没分辨开，**别把这条当定论**） |
+| 按路径加载含 `@dataclass` 的模块 | `AttributeError: 'NoneType' object has no attribute '__dict__'`，报错完全不提根因 | 必须先 `sys.modules[spec.name] = module` 再 `exec_module`。因为 `from __future__ import annotations` 让注解变成字符串，dataclass 要回 `sys.modules` 里查模块来解析它们。`test_sim_source.py` 没踩到是因为 launch 文件里没有 dataclass |
+
+## P1-S2　OpenDRIVE 解析 + 参考线求值【纯 C++】【CP-P1-A】
+
+| # | 任务 | 验收标准 | 状态 |
+|---|------|---------|:---:|
+| 2.1 | `ads_map` 包骨架：`lib/`（无 ROS）+ `node/` | 结构同 SPEC §5 | ☐ |
+| 2.2 | tinyxml2 解析 header / road / planView / lanes / junction | 字段全部读出 | ☐ |
+| 2.3 | 参考线求值 s → (x, y, θ)，支持 line + arc | 与解析解一致 | ☐ |
+| 2.4 | 车道中心线求值 (road, lane, s) → (x, y, θ) | 横向偏移正确 | ☐ |
+| 2.5 | 不支持的几何类型**显式抛异常** | 遇到即报错 | ☐ |
+| 2.6 | **与 Python 生成器逐点交叉比对** | **偏差 < 1 mm** | ☐ |
+
+## P1-S3　车道图 + Dijkstra 路由【纯 C++】
+
+| # | 任务 | 验收标准 | 状态 |
+|---|------|---------|:---:|
+| 3.1 | 车道图：节点 = 车道段，边 = 前后继 + 路口连接 | 节点/边数与手数一致 | ☐ |
+| 3.2 | Dijkstra 最短路（代价 = 车道长度） | 与手算一致 | ☐ |
+| 3.3 | 最近车道查询：世界坐标 → (road, lane, s) | 已知点定位正确 | ☐ |
+| 3.4 | **方向性**：不允许逆行 | 逆行请求返回失败 | ☐ |
+| 3.5 | 不可达返回明确失败，不返回空路径 | 有区分 | ☐ |
+
+## P1-S4　ROS 节点 + RViz【CP-P1-B = P1 验收】
+
+| # | 任务 | 验收标准 | 状态 |
+|---|------|---------|:---:|
+| 4.1 | `map_node` 发布 `/map/lane_graph`（MarkerArray，`transient_local`） | RViz 看到车道图 | ☐ |
+| 4.2 | 订阅 `/goal_pose`，起点取 TF `map→base_link` | 点击有响应 | ☐ |
+| 4.3 | 发布 `/route/path`（`nav_msgs/Path`，map 系） | 贴合车道中心线 | ☐ |
+| 4.4 | 接入 `stack.launch.py` + RViz 配置 | 一条命令起全栈 | ☐ |
+| 4.5 | L2 launch_testing | 全绿 | ☐ |
+| 4.6 | `scripts/verify_map.sh` 可复跑量化验收 | 退出码 0 | ☐ |
+
+## P1-S5　文档 + CI + 收尾（可与 S4 并行）
+
+| # | 任务 | 验收标准 | 状态 |
+|---|------|---------|:---:|
+| 5.1 | `docs/modules/map_and_routing.md` 数学推导 | SPEC §11 要求 | ☐ |
+| 5.2 | CI 加 `gen_map.py --check` | 改 YAML 不重生成则 CI 红 | ☐ |
+| 5.3 | 修 SPEC §10 的 P0a 行（删「OpenDRIVE 地图」）、§5 加 `maps/` | 与事实一致 | ☐ |
+| 5.4 | 同步 `CLAUDE.md` 新包/新命令/新陷阱 | 无过时说法 | ☐ |
+
+**检查点**：**CP-P1-A**（S2 结束，双实现逐点 < 1 mm，不过不进 S3）、
+**CP-P1-B**（S4 结束，P1 验收）。**检查点处停下来汇报实测数据。**
+
+---
+
+# ── 以下为 P0a 清单（已完成，保留作记录）──
 
 ## S1　容器 + GPU + GUI　【检查点 CP1：go / no-go】
 
