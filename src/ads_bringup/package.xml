@@ -27,6 +27,8 @@
   <test_depend>ament_lint_common</test_depend>
   <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
   <test_depend>ament_cmake_clang_format</test_depend>
+  <!-- L1 测试用 pytest：被测的是 launch 文件里的纯 Python 函数，不需要 ROS 图 -->
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

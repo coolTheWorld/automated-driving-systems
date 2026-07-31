@@ -14,6 +14,14 @@ if(BUILD_TESTING)
   list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_uncrustify)
   set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../.clang-format)
   ament_lint_auto_find_test_dependencies()
+
+  # L1 单元测试：仿真源注册表的解析逻辑。
+  #
+  # 用 ament_add_pytest_test 而不是裸调 pytest，理由和 ads_common 用
+  # ament_add_gtest 一样：它生成 xunit XML，colcon test-result 才汇总得到。
+  # 裸写的话测试跑了但汇总里是 0 tests —— CI 的「防假绿」断言反而会拦下它。
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_sim_source test/test_sim_source.py)
 endif()
 
 ament_package()

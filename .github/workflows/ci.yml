@@ -149,6 +149,57 @@ jobs:
               ros2 launch gazebo_bridge gazebo_sim.launch.py --show-args
             '
 
+      # ---------------------------------------------------------------------
+      # 非法 sim 值必须让 launch **失败**，而不是静默空转
+      #
+      # 为什么这一步不能被上面那步替代：
+      # --show-args 只执行 generate_launch_description()，而选数据源的
+      # OpaqueFunction 是在 launch **真正启动**时才运行的 —— 它碰不到。
+      #
+      # 为什么也不能被 ads_bringup 的 pytest 替代：
+      # 那边测的是「_resolve_sim_source 会抛 RuntimeError」，属于函数级。
+      # 但异常抛出来之后，launch 框架是把它变成非零退出码，还是打条日志
+      # 继续跑一个空的 LaunchDescription，是**框架的行为**，只有真跑才知道。
+      # 而「进程活着、话题一个不少、就是永远没数据」正是本项目吃过亏的那种
+      # 故障（见 CLAUDE.md 陷阱表）。所以这一层必须端到端验。
+      #
+      # ⚠️ 只断言退出码非零是不够的：包没装好、环境坏了同样会非零退出，
+      #    那样这条检查就变成了又一个假绿。必须连报错**原因**一起断言。
+      # ---------------------------------------------------------------------
+      - name: 检查非法 sim 值会明确报错
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy bash -c '
+              set -e
+              set +u
+              source /opt/ros/jazzy/setup.bash
+              source /workspace/install/setup.bash
+              set -u
+
+              assert_launch_fails() {
+                sim_value="$1"
+                expect="$2"
+                if out=$(timeout 120 ros2 launch ads_bringup stack.launch.py \
+                           "sim:=${sim_value}" gui:=false rviz:=false 2>&1); then
+                  echo "✗ sim:=${sim_value} 竟然启动成功了。"
+                  echo "  非法数据源必须让 launch 失败 —— 静默空转的症状和仿真器崩溃一模一样。"
+                  exit 1
+                fi
+                if ! printf "%s" "${out}" | grep -q "${expect}"; then
+                  echo "✗ sim:=${sim_value} 确实失败了，但不是因为我们期望的原因。"
+                  echo "  期望报错信息里含：${expect}"
+                  printf "%s\n" "${out}" | tail -20
+                  exit 1
+                fi
+                echo "✓ sim:=${sim_value} 按预期失败，且报错信息正确"
+              }
+
+              # 已规划未实现 → 应当告诉用户去看路线图
+              assert_launch_fails carla 尚未实现
+              # 拼写错误 → 应当告诉用户这个值根本不认识，别去翻路线图
+              assert_launch_fails gazbo 未知的
+            '
+
       # 失败时把测试结果捞出来，省得靠日志一行行翻。
       - name: 上传测试结果
         if: failure()
