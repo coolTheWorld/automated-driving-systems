@@ -8,17 +8,48 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P0a 已全部完成**（S1–S5，29/29），CP1 / CP2 / CP3 全部达成。
-最后一个提交 `821b462`，已推送，GitHub Actions CI 绿（194 s）。
+**当前位置**：**P0a 已全部完成**（S1–S5，29/29），CP1 / CP2 / CP3 全部达成，
+并已做过一轮**收官复查**（2026-07-31，见下）。
 
-### ⏸️ 下一步待用户决定，**不要自行开工**
+### ✅ 2026-07-31 收官复查：按数据流讲解一遍 + 修掉三处
+
+按 ①车辆参数与世界 → ②`gazebo_bridge` → ③控制链路 → ④装配层/公共库/CI
+的顺序通读了全部 P0a 代码，改掉三处：
+
+1. **`sim` 参数的报错分支此前零覆盖** —— CI 只跑 `--show-args`，而选数据源的
+   `OpaqueFunction` 是 launch 真正启动时才执行的，`--show-args` 碰不到它。
+   讽刺之处在于：那段代码本身就是为了消灭静默失败而写的，自己却没被验证过。
+   补了两层：`ads_bringup` 的 7 个 pytest 用例（函数级，0.03 s）+ CI 的端到端
+   shell 断言（证明 `ros2 launch` 真的以非零码退出，**且失败原因正确** ——
+   只断言退出码非零会让"环境坏了"也算通过，那又是一次假绿）。
+   > ⚠️ 其中 `test_registries_do_not_overlap` 是**给 P0b 埋的**：
+   > `_resolve_sim_source` 先查 `PLANNED_SOURCES` 再查 `SIM_SOURCES`，
+   > 所以往 `SIM_SOURCES` 加 `carla` 时若忘了从 `PLANNED_SOURCES` 删掉，
+   > `sim:=carla` 会永远报「尚未实现」。症状是"我明明实现了它说我没实现"，
+   > 而所有人第一反应都是去查 `carla_bridge` 装没装上。
+2. **teleop 用墙钟、下游看门狗用仿真钟** —— 补注释写清成立条件：
+   发布间隔换算成仿真时间是 `(1/20)×RTF`，看门狗阈值 0.5 仿真秒，
+   于是 **RTF > 10 时看门狗会持续误触发**。当前 RTF≈1.0 余量 10 倍，
+   现状安全，但这是隐含假设。将来若拿它做加速回放的指令注入会撞上，
+   正确改法是换成节点时钟，**不是调大看门狗阈值**（那是削弱安全逻辑）。
+3. **`/lidar/points_raw` → `/gazebo/lidar/points_raw`** —— 加前缀标明它不是
+   SPEC §4.1 的对外契约（与 `/gazebo/cmd_vel` 同一约定），并避免与
+   `carla_bridge` 的 `/carla/lidar/points_raw` 串台。
+   顺带堵掉一个隐患：这个名字原本在 `bridge_topics.yaml` 和 C++ 默认值里
+   **各写一份且无人校验**，漂移的症状是预处理节点订阅了没人发的话题，
+   而它只在收到点云时才打日志 → 零日志、零报错、RViz 一片空白。
+   现在由 launch 从 `bridge_topics.yaml` 读出来传进去（按"类型+方向"查表，
+   不按名字查，否则等于又写死一次）。
+
+复查后实测：`colcon test` **101 tests / 0 failures**（原 91），
+`verify_ros_bridge.sh` **6/6**（RTF 0.970、点云 10.00 Hz、自车点 0），
+`verify_teleop.sh` **3/3**。
+
+### ⏸️ 下一步仍待用户决定，**不要自行开工**
 
 CP3 的分叉是 **P1（继续本地）** 还是 **P0b（先建云端 CARLA）**。
-2026-07-31 那次对话里用户选择了「**先停一停，我自己看一遍**」——
-他要先通读 P0a 的代码和文档再决定。所以下次开始时：
-
-1. **先问用户看得怎么样、有没有要改的地方**，或者是否已经决定了下一阶段；
-2. 在他明确说做哪个之前，**不要动手写 P1 或 P0b 的代码**。
+用户已通读完代码并认可上述三项修改，但**尚未选定下一阶段**。
+所以下次开始时，在他明确说做哪个之前，**不要动手写 P1 或 P0b 的代码**。
 
 两个选项的权衡（上次已完整汇报过，这里只留结论）：
 
@@ -57,7 +88,7 @@ source /opt/ros/jazzy/setup.bash
 cd /workspace && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source /workspace/install/setup.bash
 
-colcon test && colcon test-result --all     # 应为 91 tests, 0 errors, 0 failures
+colcon test && colcon test-result --all     # 应为 101 tests, 0 errors, 0 failures
 ./build/ads_common/test_angles              # 只跑 L1，0.003 s
 ```
 
@@ -258,8 +289,12 @@ CP2 通过后检查点云 z 分布时发现：**34% 的点（9874/29239）打在
 | 测量点 | 1800 采样 | 900 采样 |
 |---|---|---|
 | Gazebo 原生话题（无 ROS） | 8.65 Hz | 8.97 Hz |
-| ROS `/lidar/points_raw` | 6.67 Hz | 9.23 Hz |
+| ROS `/gazebo/lidar/points_raw` | 6.67 Hz | 9.23 Hz |
 | ROS `/lidar/points` | 3.58 Hz | 8.00 Hz |
+
+> 注：中间话题当时叫 `/lidar/points_raw`，P0a 收尾复查时改名加了 `gazebo` 前缀
+> （标明它不是 SPEC §4.1 的对外契约，且避免与 `carla_bridge` 的同名话题串台）。
+> 翻 S3 时期的日志会看到旧名字。
 
 **决定性证据是帧间隔的分布**：Gazebo 侧的相邻帧间隔要么正好 **100 ms**（32 次），
 要么正好 **200 ms**（3 次），**没有中间值**。
@@ -476,7 +511,7 @@ S4 ████  4/4 ✓    S5 ██████  6/6 ✓
 | TF 树 | 五段连通，外参与 YAML 逐位一致 | 完全一致 |
 | 转角 / 速度限幅 | 10 rad → **0.600**；100 m/s² → **7.41 m/s** | 不越限 |
 | 看门狗 | 停发 6.3 s 后 8.333 → **0.000 m/s** | 必须刹停 |
-| `colcon test`（6 包） | **91 tests, 0 errors, 0 failures** | 全绿 |
+| `colcon test`（6 包） | **101 tests, 0 errors, 0 failures** | 全绿 |
 | L1 单元测试耗时 | **0.003 s** | 毫秒级 |
 
 四个 verify 脚本：`verify_gpu.sh` 10/10、`verify_sim.sh` 6/6、
@@ -500,3 +535,12 @@ S4 ████  4/4 ✓    S5 ██████  6/6 ✓
   上实车要改回 `best-effort` —— 真实网络下 reliable 的重传会让延迟不可控。
 - **P0b**：`docker-compose.cloud.yml` 里 `network_mode: host` 与 `ports: 6080` 并存，
   Docker 会**静默丢弃**发布的端口 → noVNC 连不上且不报错。落地 P0b 时二选一。
+- **P0b**：`gazebo_bridge/CMakeLists.txt` 伸手到 `../../../config/vehicle_params.yaml`
+  才能把车辆参数装进本包 share。功能没问题（`--symlink-install` 下是同一份），
+  但这让包不能单独拷出去用。**等 `carla_bridge` 出现、变成两个包都要伸手时**
+  再抽独立的 `ads_description` 包 —— 那属于改 SPEC §5 的模块划分，动手前先问。
+  （2026-07-31 收官复查时讨论过，判断是现在抽收益不明确。）
+- **P2 控制**：`model.sdf` 的惯量张量按**均质**长方体算，而质心被显式下移到
+  `com_height_m`(0.55)，两者不严格自洽；`kingpin_width` 直接取了轮距（真车主销距
+  略小于轮距，影响内外轮转角差）。低速园区场景下影响可忽略，建执行器模型时
+  一并处理。（同上，收官复查记录。）
