@@ -1,0 +1,139 @@
+# =============================================================================
+#  CI —— 每次 push / PR 自动跑构建、lint、L1 单元测试
+#
+#  ## 这里**不跑** Gazebo，原因有两条，第二条才是决定性的
+#
+#  1. GitHub Actions 的免费 runner 没有 GPU，跑 Gazebo 只能软件渲染（llvmpipe），
+#     RTF 会掉到 0.1 以下，任何带时间判据的测试都不可信。
+#  2. **现阶段根本没有 L3 场景测试可跑。** S5 只做了 L1 样板，L3 要等 P2 有了
+#     「规划→控制→车动起来」的闭环才有意义。
+#
+#  所以现在跑的是"不需要仿真器就能验证的一切"：构建、lint、L1 单元测试、
+#  生成物同步检查。这四项覆盖了绝大多数回归，且全程分钟级。
+#
+#  ⚠️ 等 P2 有了 L3-G 场景测试，要把它加进来 —— CLAUDE.md 里说的
+#  「本地 Gazebo 能进 CI 是双环境方案最被低估的收益」指的就是那一步。
+#  CARLA 永远进不了 CI（要 GPU、20 GB 镜像、跑不确定）。
+#
+#  ## 为什么用项目自己的 Dockerfile 而不是 action-ros-ci 之类的社区 action
+#
+#  这个项目把"环境漂移"列为头号风险（SPEC §4.1）：本地 Gazebo 和云端 CARLA
+#  共用同一个 Dockerfile 就是为了防它。CI 再换一套环境就是引入第三套 ——
+#  于是"本地过了 CI 不过"变成常态，而且查不出是代码问题还是环境问题。
+#  代价是 CI 慢几分钟，用 GHA 层缓存后只有改 Dockerfile 时才真正重建。
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一分支上新的 push 会取消还在跑的旧任务，省 runner 时间。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    # 正常跑完约 5-10 分钟（镜像有缓存时更快）。设 30 分钟是为了让"卡住"
+    # 这种故障能在半小时内暴露，而不是占满默认的 6 小时。
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # runner 的 UID/GID 要传进镜像。容器内的 dev 用户必须和 runner 同 UID，
+      # 否则挂载进去的 workspace 写不了，colcon build 会以权限错误失败。
+      # 这和本地 scripts/setup_env.sh 做的是同一件事，只是本地取的是你的 UID。
+      - name: 取 runner 的 UID/GID
+        run: |
+          echo "HOST_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # cache-from/to type=gha 把镜像层存进 GitHub Actions 缓存。
+      # 只要 Dockerfile 和它依赖的 apt 源没变，后续跑就是秒级命中。
+      - name: 构建开发镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: ads-dev:jazzy
+          load: true
+          build-args: |
+            UID=${{ env.HOST_UID }}
+            GID=${{ env.HOST_GID }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---------------------------------------------------------------------
+      # 生成物同步检查 —— 放在编译**之前**，因为它最快且最容易被忘
+      #
+      # config/vehicle_params.yaml 是车辆参数的唯一来源，SDF 和 URDF 都是从它
+      # 生成的（SPEC §4.1）。改了 YAML 忘了重新生成，症状是 RViz 里点云和车模型
+      # 对不上、或者 TF 报的外参与 Gazebo 里实际安装位置差几厘米——下游全部
+      # 配准带着这个偏差却没有任何报错。这一步就是拦它的。
+      # ---------------------------------------------------------------------
+      - name: 校验 SDF/URDF 与 vehicle_params.yaml 同步
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy \
+            python3 scripts/gen_vehicle_model.py --check
+
+      - name: 构建工作空间
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy bash -c '
+              set -e
+              set +u; source /opt/ros/jazzy/setup.bash; set -u
+              colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+            '
+
+      # ---------------------------------------------------------------------
+      # 测试 + lint
+      #
+      # ⚠️ 必须用 `colcon test-result` 判定成败，不能只看 `colcon test` 的退出码。
+      #    colcon test 反映的是"测试有没有跑起来"，测试**失败**它照样可能返回 0。
+      #    只看它的话，CI 会在测试全红的情况下显示绿灯——比没有 CI 更危险。
+      #    这里两道都上：--return-code-on-test-failure 加事后 test-result。
+      # ---------------------------------------------------------------------
+      - name: 测试与 lint
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy bash -c '
+              set -e
+              set +u; source /opt/ros/jazzy/setup.bash; set -u
+              colcon test --return-code-on-test-failure
+              colcon test-result --all --verbose
+            '
+
+      # launch 文件是 Python，语法错误和 import 错误只有真正执行才会暴露。
+      # --show-args 会执行 generate_launch_description() 但不启动任何节点，
+      # 所以不需要仿真器，几秒就能跑完。很便宜，但能挡住"launch 一跑就崩"。
+      - name: 检查 launch 文件可加载
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy bash -c '
+              set -e
+              set +u
+              source /opt/ros/jazzy/setup.bash
+              source /workspace/install/setup.bash
+              set -u
+              ros2 launch ads_bringup stack.launch.py --show-args
+              ros2 launch gazebo_bridge gazebo_sim.launch.py --show-args
+            '
+
+      # 失败时把测试结果捞出来，省得靠日志一行行翻。
+      - name: 上传测试结果
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build/*/test_results/**/*.xml
+          if-no-files-found: ignore
