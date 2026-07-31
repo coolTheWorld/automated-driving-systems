@@ -1,47 +1,81 @@
 # P0a 任务清单
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
-> 状态：**S1 ✓ / S2 ✓ / S3 7.5-8 项完成（CP2 已过）**　|　更新：2026-07-30
+> 状态：**P0a 全部完成 29/29，CP1 / CP2 / CP3 均已达成**　|　更新：2026-07-31
 > 技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 
 ---
 
 ## 🔖 下次从这里继续
 
-**当前位置**：S1 ✓、S2 ✓、S3 ✓（CP2 达成）、**S4 的 4.1-4.3 ✓**。
-只剩 **4.4 的肉眼确认**（键盘开车绕障碍物一圈，看 RViz 是否同步更新）——
-操作步骤见下面 S4 段的「怎么开车」。
+**当前位置**：**P0a 已全部完成**（S1–S5，29/29），CP1 / CP2 / CP3 全部达成。
+最后一个提交 `821b462`，已推送，GitHub Actions CI 绿（194 s）。
 
-之后进 **S5：工程化收尾**（5.1-5.6），终点是 **CP3 = P0a 验收**。
-S5 可与 S4 并行，内容是 clang-format、stack.launch.py、L1 单元测试样板、
-CI、README、ADR。
+### ⏸️ 下一步待用户决定，**不要自行开工**
 
-恢复环境（宿主机执行）：
+CP3 的分叉是 **P1（继续本地）** 还是 **P0b（先建云端 CARLA）**。
+2026-07-31 那次对话里用户选择了「**先停一停，我自己看一遍**」——
+他要先通读 P0a 的代码和文档再决定。所以下次开始时：
+
+1. **先问用户看得怎么样、有没有要改的地方**，或者是否已经决定了下一阶段；
+2. 在他明确说做哪个之前，**不要动手写 P1 或 P0b 的代码**。
+
+两个选项的权衡（上次已完整汇报过，这里只留结论）：
+
+| | 支持它的理由 | 代价 |
+|---|---|---|
+| **P1 地图与路由** | 现在还没有任何算法代码，`carla_bridge` 要对齐的「行为」根本不存在，对齐空栈没意义 | CARLA 侧一直没验证 |
+| **P0b 云端 CARLA** | 「行为漂移」是本项目自列的头号风险，越晚接触越难查；且 `gazebo_bridge` 刚做完，接口契约最清晰 | 开始产生 GPU 实例费用 |
+
+**上次给出的建议是 P1，但附带一个条件：不应晚于 P2 结束就接上 CARLA。**
+一旦控制参数已经在 Gazebo 上调好才去对齐，漂移就已经发生了 —— 那正是最难查的故障。
+
+### 恢复环境（宿主机执行）
 
 ```bash
-cd ~/work/automated-driving-systems
+cd ~/work/automated-driving-systems           # ⚠️ 必须在仓库根目录，COMPOSE_FILE 是相对路径
 export COMPOSE_FILE=docker/docker-compose.local.yml
-docker compose up -d                                        # 镜像已构建好，直接起
-docker compose exec dev /workspace/scripts/verify_gpu.sh    # GPU 仍是 D3D12（10 项）
-docker compose exec dev /workspace/scripts/verify_sim.sh    # S2 仿真基线（6 项）
-docker compose exec dev /workspace/scripts/verify_ros_bridge.sh  # S3 桥接契约（6 项）
+docker compose up -d                          # 镜像已构建好，直接起
+
+docker compose exec dev /workspace/scripts/verify_gpu.sh          # GPU 硬件加速（10 项）
+docker compose exec dev /workspace/scripts/verify_sim.sh          # 仿真基线 + RTF（6 项）
+docker compose exec dev /workspace/scripts/verify_ros_bridge.sh   # 桥接契约（6 项）
+docker compose exec dev /workspace/scripts/verify_teleop.sh       # 控制链路（3 项）
 ```
 
-三个脚本都退出码 0 才往下做。**若 `verify_gpu.sh` 挂了，先看它是不是又变回 llvmpipe**
-——Windows 侧驱动更新或 WSL 重启后 `/dev/dxg` 的存在性值得重新确认。
+四个脚本都退出码 0 才往下做。**若 `verify_gpu.sh` 挂了，先看它是不是又变回 llvmpipe**
+—— Windows 侧驱动更新或 WSL 重启后 `/dev/dxg` 的存在性值得重新确认。
 
-改了 `src/` 下的代码后要重新构建（容器内）：
+**若 `gz sim` 启动几秒就退出、RViz 里只剩个孤零零的车模型**：那是 GPU 驱动瞬态
+故障（D3D12 device removal），`verify_gpu.sh` 照样全过、launch 日志还会谎报
+`finished cleanly`。**重跑一次即可，不要去改 compose**。详见 CLAUDE.md 陷阱表。
+
+构建与测试（容器内）：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 cd /workspace && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source /workspace/install/setup.bash
+
+colcon test && colcon test-result --all     # 应为 91 tests, 0 errors, 0 failures
+./build/ads_common/test_angles              # 只跑 L1，0.003 s
 ```
 
 肉眼看效果（带 Gazebo GUI + RViz）：
 
 ```bash
-ros2 launch gazebo_bridge gazebo_sim.launch.py
+ros2 launch ads_bringup stack.launch.py                 # 全栈入口
+ros2 launch gazebo_bridge gazebo_sim.launch.py          # 只起仿真侧，调链路时更快
+docker compose exec dev /workspace/scripts/drive.sh     # 键盘开车（另开终端）
+```
+
+### 🧹 跑完 Gazebo 记得清 core
+
+每次 `gz sim` 收 SIGINT 退出都会 segfault 产 **400–600 MB** 的 `core.<pid>`，
+落在仓库根目录。`.gitignore` 拦住了提交，但磁盘会被吃掉：
+
+```bash
+rm -f core.*
 ```
 
 ### ⚠️ 每次动手前先确认没有残留的仿真进程
