@@ -14,9 +14,11 @@
 
 #include "ads_map/road_map.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace ads_map
 {
@@ -31,6 +33,37 @@ namespace
 /// 这一类末位误差。放大到毫米级会掩盖真正的越界，缩小到 0 则会在
 /// s == length 这个完全合法的边界上误报。
 constexpr double kEps = 1e-9;
+
+/// @brief 检查「求 lane_id 的横向偏移会用到的每一条车道」在本车道段内是否等宽。
+///
+/// 这是 Road::lane_arc_length() 闭式解的前提条件。与其在宽度会变的地图上
+/// 悄悄按常宽算完、返回一个偏小的长度，不如在这里直接停下来 ——
+/// 路由代价偏小的症状是「算出来的路径莫名其妙偏爱某条路」，
+/// 而没有任何一层会报错。
+void require_constant_width(const LaneSection & section, int road_id, int lane_id)
+{
+  const int step = (lane_id > 0) ? 1 : -1;
+  for (int id = step;; id += step) {
+    const Lane * lane = section.find_lane(id);
+    // 车道缺失不在这里报 —— lane_offset_at() 的报错信息更全，交给它。
+    if (lane == nullptr) {
+      return;
+    }
+    // 与 0.0 精确比较是有意的：这些值直接来自 .xodr 文本里的 "0.0"，
+    // 不是任何浮点运算的结果，没有末位误差可言。
+    const bool constant = lane->widths.size() == 1 && lane->widths.front().b == 0.0 &&
+                          lane->widths.front().c == 0.0 && lane->widths.front().d == 0.0;
+    if (!constant) {
+      throw std::invalid_argument(
+        "道路 " + std::to_string(road_id) + " 的车道 " + std::to_string(id) +
+        " 在车道段 s0=" + std::to_string(section.s0_m) +
+        " 内不是等宽的，弧长的闭式解不成立（变宽车道的弧长是椭圆积分，尚未实现）");
+    }
+    if (id == lane_id) {
+      return;
+    }
+  }
+}
 
 }  // namespace
 
@@ -88,7 +121,7 @@ const LaneSection & Road::lane_section_at(double s_m) const
   throw std::out_of_range("道路 " + std::to_string(id) + " 的第一个 <laneSection> 未从 s=0 开始");
 }
 
-Pose2D Road::reference_pose_at(double s_m) const
+const Geometry & Road::geometry_at(double s_m) const
 {
   if (geometries.empty()) {
     throw std::out_of_range("道路 " + std::to_string(id) + " 的 <planView> 里没有任何几何段");
@@ -98,60 +131,117 @@ Pose2D Road::reference_pose_at(double s_m) const
       "s=" + std::to_string(s_m) + " 超出道路 " + std::to_string(id) + " 的长度 " +
       std::to_string(length_m));
   }
-
   for (auto it = geometries.rbegin(); it != geometries.rend(); ++it) {
     if (s_m >= it->s0_m - kEps) {
-      // 夹到 [0, length]：s 恰好等于道路长度时应当落在最后一段的终点，
-      // 而不是因为末位浮点误差多走出去一点点。
-      double ds = s_m - it->s0_m;
-      ds = std::fmax(0.0, std::fmin(ds, it->length_m));
-      return it->pose_at(ds);
+      return *it;
     }
   }
   throw std::out_of_range("道路 " + std::to_string(id) + " 的第一段几何未从 s=0 开始");
 }
 
-Pose2D Road::lane_center_pose_at(int lane_id, double s_m) const
+Pose2D Road::reference_pose_at(double s_m) const
 {
-  const Pose2D ref = reference_pose_at(s_m);
-  if (lane_id == 0) {
-    // 中心车道就是参考线本身，宽度恒为 0。
-    return ref;
-  }
+  const Geometry & segment = geometry_at(s_m);
+  // 夹到 [0, 段长]：s 恰好等于道路长度时应当落在最后一段的终点，
+  // 而不是因为末位浮点误差多走出去一点点。
+  const double ds = std::fmax(0.0, std::fmin(s_m - segment.s0_m, segment.length_m));
+  return segment.pose_at(ds);
+}
 
+double Road::lane_offset_at(int lane_id, double s_m) const
+{
+  // 先查车道段，顺带把 s 的越界检查做掉 —— 放在 lane_id == 0 的早退**之前**，
+  // 否则中心车道会静默接受任意越界的 s，而文档说它会抛。
+  // 「大部分情况会检查」的检查最难查：出问题的永远是没检查的那一支。
   const LaneSection & section = lane_section_at(s_m);
+  if (lane_id == 0) {
+    return 0.0;  // 中心车道就是参考线本身，宽度恒为 0
+  }
   const double ds = s_m - section.s0_m;
 
   // 从中心向外逐条累加：内侧车道算整宽，本车道算半宽。
-  //
-  // 为什么不直接写 sign·(|id| − 0.5)·width —— 那个公式只在**所有车道等宽**时
-  // 成立。本项目当前的地图确实等宽，但把这个巧合固化进代码，等到哪天加了
-  // 一条展宽的右转专用道，车道中心会静默偏掉半个车道宽而没有任何报错。
   double offset_m = 0.0;
   const int step = (lane_id > 0) ? 1 : -1;
-  for (int id = step;; id += step) {
-    const Lane * lane = section.find_lane(id);
+  for (int lane_index = step;; lane_index += step) {
+    const Lane * lane = section.find_lane(lane_index);
     if (lane == nullptr) {
       throw std::invalid_argument(
-        "道路 " + std::to_string(this->id) + " 在 s=" + std::to_string(s_m) + " 处没有车道 " +
-        std::to_string(id) + "（求车道 " + std::to_string(lane_id) +
+        "道路 " + std::to_string(id) + " 在 s=" + std::to_string(s_m) + " 处没有车道 " +
+        std::to_string(lane_index) + "（求车道 " + std::to_string(lane_id) +
         " 的中心线时需要累加它的宽度）");
     }
     const double width = lane->width_at(ds);
-    offset_m += (id == lane_id) ? width * 0.5 : width;
-    if (id == lane_id) {
+    offset_m += (lane_index == lane_id) ? width * 0.5 : width;
+    if (lane_index == lane_id) {
       break;
     }
   }
-  if (lane_id < 0) {
-    offset_m = -offset_m;  // t 以参考线左侧为正，右侧车道取负
-  }
+  // t 以参考线左侧为正，右侧车道取负。
+  return (lane_id < 0) ? -offset_m : offset_m;
+}
 
+Pose2D Road::lane_center_pose_at(int lane_id, double s_m) const
+{
+  const Pose2D ref = reference_pose_at(s_m);
+  const double offset_m = lane_offset_at(lane_id, s_m);
   // 沿参考线法向平移。法向 = 航向逆时针转 90°，即指向左侧。
   const double normal_rad = ref.heading_rad + M_PI_2;
   return Pose2D{
     ref.x_m + offset_m * std::cos(normal_rad), ref.y_m + offset_m * std::sin(normal_rad),
     ref.heading_rad};
+}
+
+double Road::lane_arc_length(int lane_id, double s_a_m, double s_b_m) const
+{
+  const double lo = std::fmin(s_a_m, s_b_m);
+  const double hi = std::fmax(s_a_m, s_b_m);
+  // 借 geometry_at() 做越界检查：两端都必须落在道路上。
+  // 只查一端的话，「起点合法、终点越界」会算出一个偏短但看不出问题的长度。
+  (void)geometry_at(lo);
+  (void)geometry_at(hi);
+  if (lane_id == 0) {
+    return hi - lo;  // 中心车道即参考线，t = 0，缩放因子恒为 1
+  }
+
+  // 切点 = 几何段边界 ∪ 车道段边界。这两处分别是曲率 k 与横向偏移 t
+  // **唯一**可能跳变的地方；切开之后每一小块内两者都是常数，闭式解才成立。
+  std::vector<double> cuts{lo, hi};
+  for (const Geometry & segment : geometries) {
+    if (segment.s0_m > lo && segment.s0_m < hi) {
+      cuts.push_back(segment.s0_m);
+    }
+  }
+  for (const LaneSection & section : lane_sections) {
+    if (section.s0_m > lo && section.s0_m < hi) {
+      cuts.push_back(section.s0_m);
+    }
+  }
+  std::sort(cuts.begin(), cuts.end());
+
+  double total_m = 0.0;
+  for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+    const double piece_m = cuts[i + 1] - cuts[i];
+    if (piece_m <= kEps) {
+      continue;  // 切点重合（例如车道段边界正好压在几何段边界上）
+    }
+    // 在小块中点取值：中点严格落在块内部，不会因为浮点误差取到相邻块的 k 或 t。
+    const double mid_m = 0.5 * (cuts[i] + cuts[i + 1]);
+    require_constant_width(lane_section_at(mid_m), id, lane_id);
+    const double t_m = lane_offset_at(lane_id, mid_m);
+    const double curvature = geometry_at(mid_m).curvature_inv_m;
+    const double scale = 1.0 - t_m * curvature;
+    if (scale <= 0.0) {
+      // t·k ≥ 1 意味着车道中心落到了曲率中心上或更外侧，等距偏移曲线在此处
+      // 退化（长度为 0 甚至反向）。这不是数值问题，是地图本身画错了：
+      // 转弯半径小于等于车道到参考线的距离。
+      throw std::invalid_argument(
+        "道路 " + std::to_string(id) + " 的车道 " + std::to_string(lane_id) + " 在 s≈" +
+        std::to_string(mid_m) + " 处退化：t=" + std::to_string(t_m) +
+        "，曲率=" + std::to_string(curvature) + "，1−t·k=" + std::to_string(scale) + " ≤ 0");
+    }
+    total_m += piece_m * scale;
+  }
+  return total_m;
 }
 
 const Road & RoadMap::road(int road_id) const

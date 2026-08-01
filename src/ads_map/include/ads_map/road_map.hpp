@@ -153,15 +153,60 @@ struct Road
   /// @return 位姿。航向与参考线相同 —— 等距偏移曲线处处平行于原曲线。
   /// @throw std::out_of_range s_m 越界；std::invalid_argument 车道不存在。
   ///
-  /// @note 横向偏移 t 以参考线**左侧**为正，逐条累加内侧车道的宽度：
-  ///           t = ±( Σ 内侧车道宽 + 本车道宽/2 )，右侧车道取负。
-  ///       直接写 `sign·(|id|−0.5)·width` 只在**所有车道等宽**时成立，
-  ///       这里按规范逐条累加，变宽车道也对。
+  /// @note 横向偏移 t 见 lane_offset_at()。
   Pose2D lane_center_pose_at(int lane_id, double s_m) const;
+
+  /// @brief 求某条车道的中心线相对参考线的横向偏移 t。
+  /// @param lane_id 车道编号。0（中心车道）返回 0。
+  /// @param s_m 沿参考线的弧长，单位 m。有效范围 [0, length_m]。
+  /// @return t，单位 m，**以参考线左侧为正** —— 右侧车道（id < 0）为负值。
+  /// @throw std::out_of_range s_m 越界；std::invalid_argument 中间某条车道不存在。
+  ///
+  /// @note 从中心向外逐条累加：t = ±( Σ 内侧车道宽 + 本车道宽/2 )。
+  ///       直接写 `sign·(|id|−0.5)·width` 只在**所有车道等宽**时成立。
+  ///       本项目当前的地图确实等宽，但把这个巧合固化进代码，等到哪天加了一条
+  ///       展宽的右转专用道，车道中心会静默偏掉半个车道宽而没有任何报错。
+  double lane_offset_at(int lane_id, double s_m) const;
+
+  /// @brief 求某条车道的**中心线**在参考线弧长区间 [s_a_m, s_b_m] 上的长度。
+  /// @param lane_id 车道编号。0 时退化为参考线长度 |s_b − s_a|。
+  /// @param s_a_m 区间一端的参考线弧长，单位 m。
+  /// @param s_b_m 区间另一端的参考线弧长，单位 m。
+  /// @return 长度，单位 m，**恒为非负**。
+  /// @throw std::out_of_range 端点越界；
+  ///        std::invalid_argument 车道宽度非常数（见下）或车道退化。
+  ///
+  /// @note **两个参数谁大谁小都可以**，结果一样。长度是无向量，参数顺序不携带
+  ///       方向信息 —— 行驶方向由车道编号的符号决定，把方向塞进一个求长度的
+  ///       函数里只会制造混淆。
+  ///
+  /// @note 数学依据：等距偏移曲线 p(s) = r(s) + t·N(s)，由 Frenet 公式
+  ///       dT/ds = k·N、dN/ds = −k·T 得 dp/ds = (1 − t·k)·T，
+  ///       故弧长微元 |dp| = |1 − t·k|·ds。曲率 k 在一个几何段内是常数，
+  ///       t 在一个车道段内是常数，于是在「几何段 ∩ 车道段」的每一小块上
+  ///       长度 = Δs·(1 − t·k)。这是**精确解，不是数值积分**。
+  ///
+  /// @note **为什么不直接拿参考线长度当路由代价**：R = 12 m 的弯道上，
+  ///       右侧车道的半径是 13.75 m，长度差 14.6%。用参考线长度，路由在
+  ///       「多绕几个弯 vs 走直路」之间的比较就带着一个最多 14.6% 的系统偏差。
+  ///       在本项目的地图上后果是具体的：从东侧车道去它的对向车道，两条候选
+  ///       路线用参考线长度算**恰好并列**（都是 680.230 m），用车道中心线长度
+  ///       算相差 11 m（674.732 vs 685.728）。并列意味着 Dijkstra 返回哪条
+  ///       取决于遍历顺序 —— 一个**看起来正常、但换个编译器就变**的路由。
+  ///
+  /// @note 变宽车道（width 的 b/c/d 非零，或一个车道段里有多条 width 记录）
+  ///       会**抛异常而不是给近似值**。那种情况下 t 随 s 变化，弧长是椭圆积分。
+  ///       本项目的地图生成器不产生它；将来真要支持，应当来这里补数值积分，
+  ///       而不是让它悄悄按常宽算完返回一个偏小的数。
+  double lane_arc_length(int lane_id, double s_a_m, double s_b_m) const;
 
   /// @brief 找到覆盖弧长 s 的车道段。
   /// @throw std::out_of_range 当 s_m 越界或没有任何车道段时。
   const LaneSection & lane_section_at(double s_m) const;
+
+  /// @brief 找到覆盖弧长 s 的参考线几何段。
+  /// @throw std::out_of_range 当 s_m 越界或 <planView> 为空时。
+  const Geometry & geometry_at(double s_m) const;
 };
 
 /// @brief 路口连接里的车道对应关系。
