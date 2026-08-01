@@ -10,8 +10,44 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P1 已开工**（用户于 2026-07-31 选定 P1，不做 P0b）。
-P0a 已全部完成（S1–S5，29/29）+ 一轮收官复查（见下）。
+**当前位置**：**P1 进行中 —— S1、S2 完成，CP-P1-A 已通过。下一步是 S3（车道图 + Dijkstra 路由）。**
+用户于 2026-07-31 选定 P1，不做 P0b。P0a 已全部完成（S1–S5，29/29）+ 一轮收官复查（见下）。
+
+### 恢复步骤
+
+```bash
+# 宿主机
+cd ~/work/automated-driving-systems           # ⚠️ 必须在仓库根，COMPOSE_FILE 是相对路径
+export COMPOSE_FILE=docker/docker-compose.local.yml   # 每个新终端都要，漏了报 "no configuration file provided"
+docker compose up -d
+
+# 先确认没有残留仿真进程（有残留则所有测量作废）
+docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 launch" | grep -v grep'
+
+# 容器内确认基线
+docker compose exec dev bash -c '
+  set +u; source /opt/ros/jazzy/setup.bash; source /workspace/install/setup.bash; set -u
+  cd /workspace
+  colcon test-result --all                 # 应为 188 tests, 0 errors, 0 failures
+  ./build/ads_map/test_opendrive_parser'   # 13 个用例，含 CP-P1-A 对账
+python3 scripts/gen_map.py --check         # 三个生成物都同步（宿主机跑即可，无需 ROS）
+```
+
+对账应打印 `最大位置偏差 0.000728035 mm，最大朝向偏差 4.99745e-07 rad`。
+**数字变了就先查是不是有人改了地图却没重新生成采样基准** —— 那会让这个检查点
+用旧基准对账，给出虚假的通过。
+
+### S3 开工前要知道的三件事
+
+1. **车道图必须是有向图。** OpenDRIVE 的 lane −1 沿 s 行驶、+1 逆 s 行驶。
+   建成无向图的话，Dijkstra 会算出「掉头逆行更近」的路径，
+   而它在 RViz 里看起来是一条完全正常的平滑曲线，要到 P2 车真开上去才发现。
+   计划里 3.4 专门为此写了一条「逆行请求必须失败」的用例。
+2. **`ads_map` 现在只有 `lib/`，没有 `node/`。** S3 仍然是纯 C++、无 ROS；
+   ROS 包装层在 S4。往 `CMakeLists.txt` 里加 `rclcpp` 之前先想清楚是不是走错了切片。
+3. **多车道段（laneSection）目前只会有一个。** 解析和求值都支持 N 个，
+   但**建图时车道 id 跨段的对应关系没实现**。当前地图每条路只有一段，
+   所以不影响；将来遇到多段地图要先补这块，别假设它已经能用。
 
 ### ✅ 2026-07-31 收官复查：按数据流讲解一遍 + 修掉三处
 
@@ -199,16 +235,44 @@ config/campus_map.yaml ──gen_map.py──┬──▶ maps/campus.xodr      
 | headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需要升级到 TERM/KILL。（也可能是它退得比 3 s 慢，两种解释我没分辨开，**别把这条当定论**） |
 | 按路径加载含 `@dataclass` 的模块 | `AttributeError: 'NoneType' object has no attribute '__dict__'`，报错完全不提根因 | 必须先 `sys.modules[spec.name] = module` 再 `exec_module`。因为 `from __future__ import annotations` 让注解变成字符串，dataclass 要回 `sys.modules` 里查模块来解析它们。`test_sim_source.py` 没踩到是因为 launch 文件里没有 dataclass |
 
-## P1-S2　OpenDRIVE 解析 + 参考线求值【纯 C++】【CP-P1-A】
+## P1-S2　OpenDRIVE 解析 + 参考线求值【纯 C++】【CP-P1-A ✅ 已通过】
 
 | # | 任务 | 验收标准 | 状态 |
 |---|------|---------|:---:|
-| 2.1 | `ads_map` 包骨架：`lib/`（无 ROS）+ `node/` | 结构同 SPEC §5 | ☐ |
-| 2.2 | tinyxml2 解析 header / road / planView / lanes / junction | 字段全部读出 | ☐ |
-| 2.3 | 参考线求值 s → (x, y, θ)，支持 line + arc | 与解析解一致 | ☐ |
-| 2.4 | 车道中心线求值 (road, lane, s) → (x, y, θ) | 横向偏移正确 | ☐ |
-| 2.5 | 不支持的几何类型**显式抛异常** | 遇到即报错 | ☐ |
-| 2.6 | **与 Python 生成器逐点交叉比对** | **偏差 < 1 mm** | ☐ |
+| 2.1 | `ads_map` 包骨架：`lib/`（无 ROS）+ `node/` | 结构同 SPEC §5 | ✅ S1 提前建，S2 补 lib/ |
+| 2.2 | tinyxml2 解析 header / road / planView / lanes / junction | 字段全部读出 | ✅ |
+| 2.3 | 参考线求值 s → (x, y, θ)，支持 line + arc | 与解析解一致 | ✅ |
+| 2.4 | 车道中心线求值 (road, lane, s) → (x, y, θ) | 横向偏移正确 | ✅ |
+| 2.5 | 不支持的几何类型**显式抛异常** | 遇到即报错 | ✅ |
+| 2.6 | **与 Python 生成器逐点交叉比对** | **偏差 < 1 mm** | ✅ **0.00073 mm** |
+
+**CP-P1-A 实测（2026-07-31）**
+
+| 项 | 实测值 | 判据 | 余量 |
+|---|---|---|---|
+| 逐点位置偏差 | **0.000728 mm** | < 1 mm | ≈1400× |
+| 逐点朝向偏差 | **5.0e-7 rad** | < 1e-5 rad | ≈20× |
+| 采样点数 | 2820（15 条路 × 各车道 × 每 0.5 m + 全部几何接缝） | ≥ 2000 | — |
+| 测试总数 | `colcon test-result --all` → **188 / 0 failures**（S1 后是 130） | — | — |
+
+> **残差已经到了比对本身的分辨极限**：0.00073 mm 不是「两套实现的分歧」，
+> 而是 `reference_samples.csv` 自己的文本精度（6 位小数，舍入 5e-7，
+> 两个方向合成 ≈7.3e-7 m）。**别再靠调紧判据来「提高严格度」**，
+> 那只会撞上格式下限而误报。
+
+**对账的有效性已验证**：往 C++ 侧注入两处错误，偏差量正好印证了报错信息里的诊断提示。
+
+| 注入 | 最大偏差 | 说明 |
+|---|---|---|
+| 车道横向偏移的正负号写反 | **3500 mm** | 正好一个车道宽，与「差半个车道说明横向偏移方向反了」对上 |
+| 圆弧积分 y 分量符号写反 | **23997 mm** | 弯道整个镜像 |
+
+**S2 新踩到的坑**（S5 的 5.4 要同步进 CLAUDE.md）
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| **同一个浮点格式串套不同量纲** | 对账余量只剩 1.5 倍，是个随时会因为改地图而误报的脆弱判据 | `.xodr` 里坐标用 6 位小数（微米）绰绰有余，但**曲率**是小数值（1/12 只剩 5 位有效数字，相对误差 4e-6），**朝向**是力臂（5e-7 rad × 76 m = 38 µm，且随地图变大线性增长）。两者改用 `%.12g` 后余量回到两三位数倍。见 `gen_map.py` 的 `precise()` |
+| 手写 C++ 不过 clang-format | `colcon test-result` 报 91 处失败 | 写完直接跑 `clang-format --style=file:/workspace/.clang-format -i`，别靠手写对齐。**`colcon test` 的退出码照旧不可信** |
 
 ## P1-S3　车道图 + Dijkstra 路由【纯 C++】
 
@@ -238,7 +302,16 @@ config/campus_map.yaml ──gen_map.py──┬──▶ maps/campus.xodr      
 | 5.1 | `docs/modules/map_and_routing.md` 数学推导 | SPEC §11 要求 | ☐ |
 | 5.2 | CI 加 `gen_map.py --check` | 改 YAML 不重生成则 CI 红 | ☐ |
 | 5.3 | 修 SPEC §10 的 P0a 行（删「OpenDRIVE 地图」）、§5 加 `maps/` | 与事实一致 | ☐ |
-| 5.4 | 同步 `CLAUDE.md` 新包/新命令/新陷阱 | 无过时说法 | ☐ |
+| 5.4 | 同步 `CLAUDE.md` 新包/新命令/新陷阱 | 无过时说法 | 🔶 S1/S2 部分已同步 |
+
+> **5.4 为什么提前做了一半**：`CLAUDE.md` 原本写着「`src/` 下目前有六个包」，
+> 加了 `ads_map` 之后这句话就是错的。而这个文件**每个会话都会被加载进上下文** ——
+> 一条过时的说法不是「没帮上忙」，是会主动把下一个会话带偏。
+> 代码里的错误下次跑测试就暴露，文档里的不会。所以它不能攒到 S5 一起改。
+>
+> 已同步：包清单（六 → 七）、`gen_map.py` 的命令与三个生成物、两个世界并存的说明、
+> 新的架构小节「3b. 地图单一来源」、陷阱表新增 5 条 + 数值精度一节。
+> 待 S5 补：S3/S4 产出的车道图、路由、`map_node` 相关内容。
 
 **检查点**：**CP-P1-A**（S2 结束，双实现逐点 < 1 mm，不过不进 S3）、
 **CP-P1-B**（S4 结束，P1 验收）。**检查点处停下来汇报实测数据。**

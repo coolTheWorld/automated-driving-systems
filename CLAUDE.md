@@ -111,6 +111,8 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **`gz sim` 崩溃被 launch 报成"干净退出"** | RViz 里点云/TF 全空，只剩个孤零零的车模型，**launch 日志无任何错误** | launch.log 写 `[gz-1]: process has finished cleanly`，但看**存活时长**：几秒 = 崩了。铁证是仓库根目录冒出 `core.<pid>`。别去查 RViz 配置，查 gz 还在不在 |
 | WSL 下 D3D12 设备丢失 | `Removing Device` → `OGRE EXCEPTION: Out of GPU memory`，请求区区 128 MB 却失败 | **因果是反的**：设备先丢，之后所有 GL 调用一律返回 `GL_OUT_OF_MEMORY`。16 GB 显存不可能不够。宿主 GPU 驱动重置（锁屏/休眠/更新）触发，**瞬态，重跑即可**。判据：`verify_gpu.sh` 仍全过 + headless（`gz sim -s`）能跑 = 通路没坏，别去改 compose |
 | `gz sim` 退出时 segfault | 每次收 SIGINT 退出都产 400–600 MB `core.*` | Gazebo 已知的退出清理问题，**不影响功能**。但 core 落在 cwd（= 挂载的仓库根），跑几次就是 GB 级。已在 `.gitignore`，仍需定期 `rm -f core.*` |
+| **`setsid cmd &` 之后用 `$!` 取进程组** | 清理命令**静默地什么都没做**，仿真进程留下来继续跑 | `$!` 是 **setsid 自己**的 PID，它 fork 出新进程组后立刻退出，于是 `ps -o pgid= -p $!` 返回**空**，`kill -INT -- -` 变成空操作、还不报错。要按**进程名**查：`ps -eo pgid,args \| grep "gz sim"`。上面那条「用 `kill -INT -- -<PGID>`」是对的，坑在 PGID 怎么取到 |
+| headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需升级到 TERM/KILL。**也可能只是它退得比 3 s 慢，两种解释没分辨开 —— 别当定论** |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
@@ -123,10 +125,13 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有六个包**：`ads_msgs`、`ads_common`、`ads_bringup`、
+`src/` 下**目前有七个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_bringup`、
 `ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
 SPEC §5 列出的其余包（`ads_control`、`ads_planning`、`ads_perception` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
+
+`ads_map` 目前只有 `lib/`（OpenDRIVE 解析 + 参考线/车道中心线求值，P1-S2 完成），
+**没有 `node/`** —— ROS 包装层在 P1-S4 才加。车道图与路由（P1-S3）也还没有。
 
 ```bash
 # ---------- 构建（容器内） ----------
@@ -145,9 +150,11 @@ ros2 launch gazebo_bridge gazebo_sim.launch.py                      # 只起仿�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 188 tests）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
+./build/ads_map/test_geometry                # 参考线几何 vs 解析解
+./build/ads_map/test_opendrive_parser        # 解析 + **CP-P1-A 双实现逐点对账**
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
@@ -164,14 +171,34 @@ ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明�
 python3 scripts/gen_vehicle_model.py
 python3 scripts/gen_vehicle_model.py --check    # 校验生成物是否与 YAML 同步（CI 用）
 
+# 从 YAML 重新生成地图。改了 campus_map.yaml 必跑 —— 它有**三个**生成物：
+#   maps/campus.xodr（两环境共用）、models/campus_road/model.sdf（Gazebo 可视）、
+#   src/ads_map/test/data/reference_samples.csv（给 C++ 做逐点对账的基准）
+python3 scripts/gen_map.py
+python3 scripts/gen_map.py --check              # 三个生成物逐字节比对
+# ⚠️ 采样基准漏了重新生成的话，CP-P1-A 的对账用的是旧基准 → **虚假的通过**。
+#    所以它进了 OUTPUTS，也进了 colcon test（本地就能拦，不用等 CI）。
+
 # 容器内，需先 source ROS + install
 python3 scripts/check_cloud_frames.py    # 点云 frame_id / 频率 / 是否真的做了变换
 python3 scripts/check_tf_tree.py         # TF 树逐段连通性
 
 # 直接玩 Gazebo（需先 source /opt/ros/jazzy/setup.bash）
-gz sim -r campus_minimal.sdf                                      # 靠 GZ_SIM_RESOURCE_PATH 找世界
+gz sim -r campus_loop.sdf                                         # P1 起用这个（环线 + 2 个 T 路口）
+gz sim -r campus_minimal.sdf                                      # P0a 的回归基线，**冻结不动**
 gz topic -t /model/ego_vehicle/cmd_vel -m gz.msgs.Twist -p 'linear: {x: 3.0}'
-gz topic -e -t /world/campus_minimal/stats -n 12                  # 读 RTF
+gz topic -e -t /world/campus_loop/stats -n 12                     # 读 RTF（世界名要跟着换）
+```
+
+**两个世界并存，不是替换。** `campus_minimal.sdf` 是 `verify_sim.sh` /
+`verify_ros_bridge.sh` / `verify_teleop.sh` 三个脚本的回归基线（RTF 0.970、
+点云 10.00 Hz 等实测值都基于它），改动它那些数字全部作废 ——
+而它们是判断「环境有没有退化」的唯一依据。三个 verify 脚本都用
+`WORLD_FILE` / `WORLD_NAME` 环境变量参数化过，可以原样验收新世界：
+
+```bash
+docker compose exec -e WORLD_FILE=/workspace/worlds/campus_loop.sdf \
+                    -e WORLD_NAME=campus_loop dev /workspace/scripts/verify_sim.sh
 ```
 
 ---
@@ -238,6 +265,31 @@ P0b 的 `carla_bridge` 用 PythonAPI 的 `apply_physics_control()` 把 CARLA 车
 `base_link` 定在**后轴中心、地面高度**（Autoware 惯例）—— 自行车模型、Stanley、纯追踪都以
 后轴为参考点推导，原点选这里能让控制算法直接用位姿，不必到处做偏移换算。
 
+### 3b. 地图单一来源，`.xodr` 和 Gazebo 道路都是生成物
+
+与上一条完全同构，只是一个防车、一个防路。`config/campus_map.yaml` 是**唯一**手写的源头，
+`scripts/gen_map.py` 从它生成**三份**产物，**都不要手改**：
+
+| 生成物 | 消费者 | 决定什么 |
+|---|---|---|
+| `maps/campus.xodr` | `ads_map` 解析 → 车道图 → 路由；CARLA 的 `generate_opendrive_world()` | **车道语义**：哪里能走、往哪走 |
+| `models/campus_road/model.sdf` | Gazebo 渲染 | 你**看到的**路面长什么样 |
+| `src/ads_map/test/data/reference_samples.csv` | `test_opendrive_parser` 的逐点对账 | C++ 实现与生成器**是否理解一致** |
+
+**为什么 Gazebo 的路也必须是生成物**：Gazebo 不认识 OpenDRIVE，它需要三维路面几何。
+于是「车道语义」和「路面几何」天然是两份东西，各写各的就会漂移。漂移的症状是
+**路由算得出来、RViz 画得出来、车也开得动，但车沿着一条肉眼看不见的车道压着绿化带走** ——
+全程没有任何模块报错。
+
+**为什么路口不能手写**：OpenDRIVE 的路口是一块区域，内部由若干条「连接道路」填充，
+一个 T 型路口就有 6 条，每条都要手算圆弧切点、曲率、起始朝向再手填 `laneLink`。
+一个数填错的症状是车经过**那一个**路口时拐进绿化带，且看起来像控制问题。
+让程序算，错就每次都错 —— 而每次都错的东西，测试抓得住。
+
+**路口退让距离 `cutback` 是推导量而非配置项**：它必须 ≥ 转弯半径 + 半车道，
+否则转弯圆弧的切点会落到路口区域外面、连接道路接不上。把这种约束交给人填
+等于给一个填错就崩的机会；做成推导量，约束永远成立。
+
 ### 4. 算法与 ROS 强制解耦
 
 每个包分 `lib/`（纯 C++17，无 ROS 依赖）和 `node/`（ROS 包装层）。
@@ -284,6 +336,26 @@ P2 控制 → P3 规划 → P4 定位 → P5 感知。反直觉但正确：先�
 | `AMENT_LINT_AUTO_EXCLUDE` 设晚了 | 排除不生效且**不报错** | 必须在 `ament_lint_auto_find_test_dependencies()` **之前** —— 那个函数在调用时就把 linter 列表定死了 |
 | 中文句号 / docstring | pep257 报 D400 | pydocstyle 只认 ASCII 的 `.`。docstring 首行用英文句点，正文照常中文 |
 | cppcheck 显示 skipped | 看着有检查其实没跑 | 上游主动拒用 2.13.0（已知性能问题）。**有意保留跳过**，不要设 `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` 去覆盖 |
+| 手写 C++ 的排版 | `colcon test-result` 一次报 91 处 clang_format 失败 | 别靠手写对齐。写完直接跑 `clang-format --style=file:/workspace/.clang-format -i <文件>` |
+| `<tinyxml2.h>` 的 include 位置 | cpplint 报 include_order | 与 `<gtest/gtest.h>` 同理：按 `.h` 后缀被归成 C 系统头，**必须放在 C++ 标准库之前** |
+| 按路径加载含 `@dataclass` 的模块 | `AttributeError: 'NoneType' object has no attribute '__dict__'`，报错**完全不提根因** | 必须先 `sys.modules[spec.name] = module` 再 `exec_module`。因为 `from __future__ import annotations` 让注解变成字符串，dataclass 要回 `sys.modules` 里查模块才能解析它们。`test_sim_source.py` 没踩到只是因为 launch 文件里没有 dataclass |
+
+### 数值精度：同一个格式串套不同量纲是想当然（S2 实测）
+
+`gen_map.py` 生成 `.xodr` 时一度对所有浮点用同一个 `%.6f`。坐标用 6 位小数
+（微米级）绰绰有余，但**角度和曲率不是坐标**，两者各有各的机理：
+
+- **曲率是小数值** —— R=12 m 的曲率 0.0833333… 只剩 5 位有效数字，
+  相对误差 4e-6；乘上 18.85 m 弧长，终点朝向偏 6.3e-6 rad。这是**相对精度**不足。
+- **朝向是力臂** —— 5e-7 rad 舍入 × 76 m 直线段 = 38 µm 位置偏差，
+  且这一项**随地图变大线性增长**。这是**绝对精度**不足。
+
+后果不是"不准"，而是**判据变脆**：C++ 与 Python 的逐点对账余量一度只剩 1.5 倍，
+随时可能因为改地图而误报。改用 `%.12g`（见 `gen_map.py` 的 `precise()`）后
+余量回到两三位数倍，且不再随地图规模缩水。
+
+**这个洞是靠「打印实测最大值」而不是「只断言通过」暴露的。**
+只看绿灯的话，它会一直躺到某次改地图时突然变红，而那时没人记得判据是怎么来的。
 
 **`colcon test` 的退出码不可信** —— 它反映"测试有没有跑起来"，测试失败照样可能
 返回 0。判定成败一律用 `colcon test-result --all`。只看前者的话，CI 会在测试
