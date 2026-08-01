@@ -56,14 +56,20 @@ docker compose up -d
 docker compose exec dev bash
 ```
 
-### 环境自检（改动 docker/ 或换机器后先跑这三个）
+### 环境自检（改动 docker/ 或换机器后先跑前四个；改了地图或路由跑第五个）
 
 ```bash
 docker compose exec dev /workspace/scripts/verify_gpu.sh        # 10 项：GPU 硬件加速
 docker compose exec dev /workspace/scripts/verify_sim.sh        # 6 项：Gazebo 仿真基线 + RTF
 docker compose exec dev /workspace/scripts/verify_ros_bridge.sh # 6 项：ROS 桥接契约（CP2）
 docker compose exec dev /workspace/scripts/verify_teleop.sh     # 3 项：控制指令链路 + 限幅 + 看门狗
+docker compose exec dev /workspace/scripts/verify_map.sh        # 3 组：地图与路由（**不需要仿真器**）
 ```
+
+`verify_map.sh` 是唯一**能进 CI** 的端到端验收 —— `map_node` 只要一段
+`map→base_link` 的 TF 就能工作，用 `static_transform_publisher` 把自车钉在
+已知位姿上即可，不要 GPU、十几秒跑完、结果完全确定。
+其余三个要真仿真器，进不了 CI，只能靠人记得跑。
 
 **跑任何 verify 脚本前先确认没有残留的仿真进程**，否则两套仿真同时发
 `/clock` 和 `/tf`，所有测量值都是垃圾（`verify_ros_bridge.sh` / `verify_teleop.sh`
@@ -113,6 +119,9 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | `gz sim` 退出时 segfault | 每次收 SIGINT 退出都产 400–600 MB `core.*` | Gazebo 已知的退出清理问题，**不影响功能**。但 core 落在 cwd（= 挂载的仓库根），跑几次就是 GB 级。已在 `.gitignore`，仍需定期 `rm -f core.*` |
 | **`setsid cmd &` 之后用 `$!` 取进程组** | 清理命令**静默地什么都没做**，仿真进程留下来继续跑 | `$!` 是 **setsid 自己**的 PID，它 fork 出新进程组后立刻退出，于是 `ps -o pgid= -p $!` 返回**空**，`kill -INT -- -` 变成空操作、还不报错。要按**进程名**查：`ps -eo pgid,args \| grep "gz sim"`。上面那条「用 `kill -INT -- -<PGID>`」是对的，坑在 PGID 怎么取到 |
 | headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需升级到 TERM/KILL。**也可能只是它退得比 3 s 慢，两种解释没分辨开 —— 别当定论** |
+| **脚本里 `pgrep -f <名字>` 查残留** | 报「已经有 1 个在跑」然后拒绝启动，实际一个都没有 | 与 `pkill -f "gz sim"` 同源：`-f` 匹配**完整命令行**，而执行脚本的那条命令行里只要出现过这几个字（比如 `clang-format -i src/ads_map/node/map_node.cpp && verify_map.sh`）就会自己匹配自己。用 **`pgrep -x <进程名>`** 按进程名精确匹配 |
+| 杀掉 `static_transform_publisher` 想测「TF 没了」 | `lookupTransform` 照样成功，什么都测不出来 | 静态变换走 `/tf_static`，**tf2 的 buffer 对它永不过期**。要测「拿不到 TF」只能**一开始就不发**（这也正是真实场景：节点起来了、仿真还没起） |
+| 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
@@ -130,8 +139,10 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 SPEC §5 列出的其余包（`ads_control`、`ads_planning`、`ads_perception` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
-`ads_map` 目前只有 `lib/`（OpenDRIVE 解析 + 参考线/车道中心线求值，P1-S2 完成），
-**没有 `node/`** —— ROS 包装层在 P1-S4 才加。车道图与路由（P1-S3）也还没有。
+`ads_map` 已有完整两层：`lib/`（OpenDRIVE 解析 + 几何求值 + 车道级有向图 +
+Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1-S4）。
+`libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
+这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
 
 ```bash
 # ---------- 构建（容器内） ----------
@@ -145,16 +156,24 @@ colcon build --packages-select gazebo_bridge    # 单个包
 ros2 launch ads_bringup stack.launch.py                             # 全栈入口，默认 sim:=gazebo
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false      # headless
 ros2 launch gazebo_bridge gazebo_sim.launch.py                      # 只起仿真侧，调链路时更快
+ros2 run ads_map map_node                                           # 只起地图节点（不需要仿真器）
+
+# ⚠️ stack.launch.py 的默认世界是 **campus_loop.sdf**（P1 起），
+#    而 gazebo_sim.launch.py 的默认仍是 campus_minimal.sdf —— 这不是笔误：
+#    三个 verify 脚本都不传 world、直接吃后者的默认值，它们的实测基线
+#    （RTF 0.970、点云 10.00 Hz…）全部建立在 campus_minimal 上。
 
 # 键盘开车（**另开一个终端**，必须走 drive.sh 而不是 ros2 launch，见陷阱表）
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 188 tests）
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 248 tests）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
 ./build/ads_map/test_opendrive_parser        # 解析 + **CP-P1-A 双实现逐点对账**
+./build/ads_map/test_lane_graph              # 车道图：18 节点 / 24 边 + 每条边的几何连续性
+./build/ads_map/test_routing                 # Dijkstra：路径与长度 vs 穷举脚本
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
@@ -290,6 +309,31 @@ P0b 的 `carla_bridge` 用 PythonAPI 的 `apply_physics_control()` 把 CARLA 车
 否则转弯圆弧的切点会落到路口区域外面、连接道路接不上。把这种约束交给人填
 等于给一个填错就崩的机会；做成推导量，约束永远成立。
 
+### 3c. 车道图是**有向**的，路由代价是**车道中心线**长度
+
+两条都不是精细化，都是「做错了不会报错、只会给出一条看起来正常的错路径」。
+
+**有向**：OpenDRIVE 的 lane −1 沿 s 行驶、+1 逆 s 行驶，同一条物理道路的两个方向
+是**两个节点，之间没有边**。建成无向图的话，Dijkstra 会算出「原地掉头」是通往对向
+车道的最短路 —— 而它在 RViz 里是一条平滑的短线，长度也合理。要到 P2 车真开上去才发现。
+`test_lane_graph.cpp` 的 `EveryEdgeIsGeometricallyContinuous` 是这条的守卫：
+它不看任何 OpenDRIVE 约定，只问「上一条车道的出口点是不是下一条的入口点、
+**行驶朝向**接不接得上」，所以约定理解错了它一定红。
+
+**代价用车道中心线长度**（`Road::lane_arc_length()`），不能用道路参考线长度。
+R=12 m 的弯上右侧车道半径 13.75 m，差 14.6%。在本项目这张地图上后果是具体的：
+从东侧顺行车道到它对向车道的两条候选路线，用车道长度算是 674.73 vs 685.73（赢家唯一），
+用参考线长度算**恰好并列 680.23**（两者用到的参考线长度是同一个多重集）。
+**并列意味着返回哪条取决于堆的遍历顺序**，换个标准库实现就可能变。
+
+闭式解：等距偏移曲线 p(s) = r(s) + t·N(s)，Frenet 下 dp/ds = (1 − t·k)·T。
+曲率 k 在一个几何段内是常数、横向偏移 t 在一个车道段内是常数，
+所以在「几何段 ∩ 车道段」的每一小块上长度 = Δs·(1 − t·k)，是**精确值不是数值积分**。
+变宽车道（width 的 b/c/d 非零）会**抛异常**而不是按常宽给个偏小的值。
+
+**最近车道查询必须传朝向**（`LaneGraph::nearest_lane` 的 `heading_rad`）。
+不传的话自车偏左一点就被判到对向车道，路由第一步就要求掉头 —— 路径本身依然平滑正常。
+
 ### 4. 算法与 ROS 强制解耦
 
 每个包分 `lib/`（纯 C++17，无 ROS 依赖）和 `node/`（ROS 包装层）。
@@ -301,6 +345,20 @@ P0b 的 `carla_bridge` 用 PythonAPI 的 `apply_physics_control()` 把 CARLA 车
 
 - `map`（全局 ENU）→ `odom` → `base_link`（x 前 y 左 z 上），**全部走 TF2，禁止手写变换矩阵**
 - 所有节点 `use_sim_time=true`，**禁止用 `now()` 做算法时序**
+
+**`map → odom` 不是单位变换**（P1-S4 实测修正）。Gazebo 的 `AckermannSteering`
+把 `odom` 原点放在**自车 spawn 的位置**，所以这一段的正确取值是「自车 spawn 位姿
+在世界里的坐标」。发单位变换等于宣称「地图原点 = 自车出生点」。
+
+P0a 一直发的是单位变换，而 `campus_minimal.sdf` 里自车 spawn 在 `(0, −1.75)`
+几乎就是原点，所以从没露过马脚 —— 那个世界里没有任何东西依赖世界坐标。
+换到 `campus_loop.sdf`（自车在 `(30, −51.75)`）症状立刻出来：**RViz 里车画在
+园区正中央的草地上，Gazebo 里它好端端停在南边那条路上，两边差 60 m，
+而没有任何一层报错**。全局路径于是从一个错误的起点出发，看起来完全正常。
+
+现在 `gazebo_sim.launch.py` 从**世界文件里读** spawn 位姿再发这段静态 TF
+（节点名 `map_to_odom_static`）。不要在 launch 里写死那几个数 ——
+写死就是给「换个世界忘了改」留一个必然会踩的坑。P4 接上定位后删掉这个节点。
 
 ### 6. 路线图顺序：控制排在感知前面
 

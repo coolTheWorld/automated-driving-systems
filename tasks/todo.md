@@ -10,7 +10,8 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P1 进行中 —— S1、S2 完成，CP-P1-A 已通过。下一步是 S3（车道图 + Dijkstra 路由）。**
+**当前位置**：**P1 进行中 —— S1–S4 的代码全部完成并量化验收通过，CP-P1-A 已通过。⏳ 卡在 CP-P1-B 的肉眼验收上（需要你打开 RViz 看一眼）。**
+剩余：S5 的 5.1（`docs/modules/map_and_routing.md` 数学推导）尚未写；5.2/5.3/5.4 已完成。
 用户于 2026-07-31 选定 P1，不做 P0b。P0a 已全部完成（S1–S5，29/29）+ 一轮收官复查（见下）。
 
 ### 恢复步骤
@@ -28,26 +29,50 @@ docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 lau
 docker compose exec dev bash -c '
   set +u; source /opt/ros/jazzy/setup.bash; source /workspace/install/setup.bash; set -u
   cd /workspace
-  colcon test-result --all                 # 应为 188 tests, 0 errors, 0 failures
-  ./build/ads_map/test_opendrive_parser'   # 13 个用例，含 CP-P1-A 对账
+  colcon test-result --all                 # 应为 248 tests, 0 errors, 0 failures
+  ./build/ads_map/test_opendrive_parser    # 13 个用例，含 CP-P1-A 对账
+  ./build/ads_map/test_lane_graph          # 17 个用例，含每条边的几何连续性
+  ./build/ads_map/test_routing'            # 10 个用例，含「对向车道必须绕行」
 python3 scripts/gen_map.py --check         # 三个生成物都同步（宿主机跑即可，无需 ROS）
 ```
 
-对账应打印 `最大位置偏差 0.000728035 mm，最大朝向偏差 4.99745e-07 rad`。
-**数字变了就先查是不是有人改了地图却没重新生成采样基准** —— 那会让这个检查点
+两条应当打印出来的数字：
+
+- CP-P1-A 对账 `最大位置偏差 0.000728035 mm，最大朝向偏差 4.99745e-07 rad`
+- 车道图连续性 `检查 24 条边，最大位置断裂 4.04211e-07 mm，最大朝向断裂 9.79306e-12 rad`
+
+**第一条变了就先查是不是有人改了地图却没重新生成采样基准** —— 那会让检查点
 用旧基准对账，给出虚假的通过。
 
-### S3 开工前要知道的三件事
+### ⏳ CP-P1-B 怎么验（这是 P1 的验收，需要你亲眼看）
 
-1. **车道图必须是有向图。** OpenDRIVE 的 lane −1 沿 s 行驶、+1 逆 s 行驶。
-   建成无向图的话，Dijkstra 会算出「掉头逆行更近」的路径，
-   而它在 RViz 里看起来是一条完全正常的平滑曲线，要到 P2 车真开上去才发现。
-   计划里 3.4 专门为此写了一条「逆行请求必须失败」的用例。
-2. **`ads_map` 现在只有 `lib/`，没有 `node/`。** S3 仍然是纯 C++、无 ROS；
-   ROS 包装层在 S4。往 `CMakeLists.txt` 里加 `rclcpp` 之前先想清楚是不是走错了切片。
-3. **多车道段（laneSection）目前只会有一个。** 解析和求值都支持 N 个，
-   但**建图时车道 id 跨段的对应关系没实现**。当前地图每条路只有一段，
-   所以不影响；将来遇到多段地图要先补这块，别假设它已经能用。
+```bash
+cd ~/work/automated-driving-systems
+export COMPOSE_FILE=docker/docker-compose.local.yml
+docker compose up -d
+docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 launch|map_node" | grep -v grep'   # 先确认无残留
+docker compose exec dev bash -c '
+  set +u; source /opt/ros/jazzy/setup.bash; source /workspace/install/setup.bash; set -u
+  ros2 launch ads_bringup stack.launch.py'
+```
+
+看四件事：
+
+1. **车道图铺在路上**：青蓝 = 常规道路，橙 = 路口连接道路。
+   每个 T 型路口应当有 **6 条橙线** —— 少了就是 laneLink 漏了。
+2. **白色箭头指向行驶方向**：双向道路的两条车道箭头**相反**。
+   这是「车道图是有向图」的唯一肉眼证据，没有箭头的话有向无向长得一模一样。
+3. **车停在南边那条路上**，不是园区正中央的草地上。
+   （在草地上说明 `map→odom` 又变回单位变换了，见下面那条 P0a 遗留 bug。）
+4. **点 RViz 工具栏的 "2D Goal Pose"**，在任意一条路上点一下 →
+   应当立刻出现一条绿色路径，贴着车道中心线，**不掉头、不逆行**。
+   终端里 `map_node` 会打一行「路径已发布：N 段车道、M 个点、X m、耗时 …」。
+
+跑完记得清 `core.*`（Gazebo 退出时的已知 segfault，一次 400–600 MB）。
+
+**点不出路径时按这个顺序查**（四种失败的表象都是「RViz 里没有路径」，
+所以 `map_node` 对每一种都单独打日志，看它说的是哪一环）：
+TF 拿不到 → 自车不在路上（> 5 m）→ 目标点太远（> 10 m）→ 图上不可达。
 
 ### ✅ 2026-07-31 收官复查：按数据流讲解一遍 + 修掉三处
 
@@ -274,44 +299,168 @@ config/campus_map.yaml ──gen_map.py──┬──▶ maps/campus.xodr      
 | **同一个浮点格式串套不同量纲** | 对账余量只剩 1.5 倍，是个随时会因为改地图而误报的脆弱判据 | `.xodr` 里坐标用 6 位小数（微米）绰绰有余，但**曲率**是小数值（1/12 只剩 5 位有效数字，相对误差 4e-6），**朝向**是力臂（5e-7 rad × 76 m = 38 µm，且随地图变大线性增长）。两者改用 `%.12g` 后余量回到两三位数倍。见 `gen_map.py` 的 `precise()` |
 | 手写 C++ 不过 clang-format | `colcon test-result` 报 91 处失败 | 写完直接跑 `clang-format --style=file:/workspace/.clang-format -i`，别靠手写对齐。**`colcon test` 的退出码照旧不可信** |
 
-## P1-S3　车道图 + Dijkstra 路由【纯 C++】
+## P1-S3　车道图 + Dijkstra 路由【纯 C++】✅ 完成
 
 | # | 任务 | 验收标准 | 状态 |
 |---|------|---------|:---:|
-| 3.1 | 车道图：节点 = 车道段，边 = 前后继 + 路口连接 | 节点/边数与手数一致 | ☐ |
-| 3.2 | Dijkstra 最短路（代价 = 车道长度） | 与手算一致 | ☐ |
-| 3.3 | 最近车道查询：世界坐标 → (road, lane, s) | 已知点定位正确 | ☐ |
-| 3.4 | **方向性**：不允许逆行 | 逆行请求返回失败 | ☐ |
-| 3.5 | 不可达返回明确失败，不返回空路径 | 有区分 | ☐ |
+| 3.1 | 车道图：节点 = 车道段，边 = 前后继 + 路口连接 | 节点/边数与手数一致 | ✅ **18 节点 / 24 边** |
+| 3.2 | Dijkstra 最短路（代价 = 车道长度） | 与手算一致 | ✅ 4 条路线逐条对上 |
+| 3.3 | 最近车道查询：世界坐标 → (road, lane, s) | 已知点定位正确 | ✅ 残差 < 1e-6 m |
+| 3.4 | **方向性**：不允许逆行 | 逆行请求返回失败 | ✅ 见下面的说明 |
+| 3.5 | 不可达返回明确失败，不返回空路径 | 有区分 | ✅ `nullopt` vs 单段零长路径 |
+
+**产出**：`lib/` 加了 `lane_graph.{hpp,cpp}` 与 `routing.{hpp,cpp}`，`road_map` 加了
+`lane_offset_at` / `lane_arc_length` / `geometry_at` 三个查询。仍然**无 ROS**
+（`ldd libads_map.so` 只有 `libtinyxml2` 和 `libads_common`，后者自身也禁 ROS）。
+
+**S3 实测（2026-08-01）**
+
+| 项 | 实测值 | 判据 |
+|---|---|---|
+| 节点 / 边 | **18 / 24** | 手数一致（3 路 × 双向 + 12 连接路；6 × 2 + 12 × 1） |
+| 每条边的几何断裂 | **4.0e-7 mm / 9.8e-12 rad** | < 1 µm / 1e-8 rad |
+| 转弯车道中心线半径 | **8.000000 m**（8 条全部） | = `campus_map.yaml` 的 `turn_radius_m` |
+| 掉头边 | **0 条** | 必须为 0 |
+| 测试总数 | `colcon test-result --all` → **241 / 0 failures**（S2 后是 188） | — |
+| 新增用例耗时 | 27 个用例共 **5 ms** | L1 要求毫秒级 |
+
+**3.4 的验收标准需要说明**：计划写的是「逆行请求返回失败」，但**本地图上不存在
+会失败的逆行请求** —— 两个 T 型路口把 6 条常规车道连成了强连通图，任何一对起终点
+都可达，只是要绕。所以这条用它的**两种形态**验收：
+
+1. 合成的断头路地图上，「目标在身后」确实返回 `nullopt`（`GoalBehindOnADeadEndLaneIsUnreachable`）。
+2. 真实地图上，从东侧顺行车道到它**对向**车道（相距 3.5 m）的最短路是 **674.73 m**
+   而不是 ≈0 m（`OppositeDirectionOfTheSameRoadRequiresGoingAround`）。
+   这条比第一条更有分量：无向图给出的那条 3.5 m「路径」在 RViz 里是一条平滑的短线，
+   长度也合理，肉眼永远看不出问题。
+
+**一个不显然的发现：路由代价用参考线长度会让两条候选路线恰好并列。**
+
+从 (road 1, lane −1) 到 (road 1, lane +1) 有两条候选：借横穿路兜回来、或绕整圈。
+用**车道中心线**长度算是 674.73 vs 685.73，差 11 m，赢家唯一；
+用**参考线**长度算两条**都是 680.23 m** —— 因为它们用到的参考线长度是同一个多重集
+（一条 22 m 直行、一条左转、一条右转、loop_west 全长、cross 全长），只是分配不同。
+
+并列的后果不是「算错」，而是**返回哪条取决于堆的遍历顺序** —— 换个标准库实现就可能变，
+而两条路径看起来都完全正常。这就是 `Road::lane_arc_length()` 存在的理由：
+弯道上车道中心线与参考线最多差 14.6%（R=12 的弯，右侧车道半径 13.75）。
+
+**测试有效性已用故障注入验证**（5 处注入全部被抓）
+
+| 注入 | 被哪些用例抓住 |
+|---|---|
+| 正/负编号车道的出口端搞反 | `add_edge` 的符号自洽检查直接让**建图抛异常**，两个 fixture 全红 |
+| 代价改用参考线长度 | `LaneCostIsTheLaneCentreLength…` + 3 条路由长度用例 |
+| 弧长因子写成 `1 + t·k` | `TurningLanesHaveTheConfiguredTurnRadius`（半径变成 11.5 m）等 6 条 |
+| 建成无向图（每条边加反向边） | `EdgeCount…`、`EveryEdgeIsGeometricallyContinuous`、`Opposite…` 等 6 条 |
+| Dijkstra 松弛时漏加边权 | `RoutesAcrossTheJunction…`、`SameLaneWithTheGoalBehind…` |
+
+> ⚠️ 注入「代价改用参考线长度」时，`LaneGraphRejects.VaryingLaneWidth` **也跟着红了**。
+> 原因是变宽车道的守卫在 `lane_arc_length()` 里，而它只在建图算车道长度时被调用。
+> 这个耦合是真实存在的：哪天 `build_nodes()` 不再算车道长度，那个守卫就没人测了。
+> 好在注入把它自己报了出来 —— 记在这里，将来改建图时留意。
+
+**S3 新踩到的坑**（S5 的 5.4 要同步进 CLAUDE.md）
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| 路由代价用参考线长度 | 两条候选路线**并列**，返回哪条随实现变，且两条看起来都正常 | 代价必须是车道中心线长度。闭式解：等距偏移曲线 `dp/ds = (1 − t·k)·T`，在「几何段 ∩ 车道段」内 `k` 与 `t` 都是常数，逐块乘起来是**精确值**不是数值积分 |
+| 最近车道查询不给朝向 | 自车偏左一点就被判到对向车道，路由第一步就要求掉头 —— 而路径本身平滑正常 | `nearest_lane()` 的 `heading_rad` 参数会把行驶方向夹角 > 90° 的车道整条排除。S4 从 TF 拿到的位姿带朝向，**必须传进去** |
+| Dijkstra 里把起点 `dist` 预置成 0 | 「起点终点同车道且目标在后方」时前驱链绕成环，回溯**死循环/越界** | 引入一个虚拟源点（下标 = `node_count()`），起点节点就成了普通节点，可被重新访问。这类 bug 只在这一种输入下触发，很容易漏测 |
 
 ## P1-S4　ROS 节点 + RViz【CP-P1-B = P1 验收】
 
 | # | 任务 | 验收标准 | 状态 |
 |---|------|---------|:---:|
-| 4.1 | `map_node` 发布 `/map/lane_graph`（MarkerArray，`transient_local`） | RViz 看到车道图 | ☐ |
-| 4.2 | 订阅 `/goal_pose`，起点取 TF `map→base_link` | 点击有响应 | ☐ |
-| 4.3 | 发布 `/route/path`（`nav_msgs/Path`，map 系） | 贴合车道中心线 | ☐ |
-| 4.4 | 接入 `stack.launch.py` + RViz 配置 | 一条命令起全栈 | ☐ |
-| 4.5 | L2 launch_testing | 全绿 | ☐ |
-| 4.6 | `scripts/verify_map.sh` 可复跑量化验收 | 退出码 0 | ☐ |
+| 4.1 | `map_node` 发布 `/map/lane_graph`（MarkerArray，`transient_local`） | RViz 看到车道图 | ✅ 18+18 marker |
+| 4.2 | 订阅 `/goal_pose`，起点取 TF `map→base_link` | 点击有响应 | ✅ |
+| 4.3 | 发布 `/route/path`（`nav_msgs/Path`，map 系） | 贴合车道中心线 | ✅ 1119 点 / 571.451 m |
+| 4.4 | 接入 `stack.launch.py` + RViz 配置 | 一条命令起全栈 | ✅ 全栈 headless 实测 |
+| 4.5 | ~~L2 launch_testing~~ → **pytest × 3 + CI 跑 verify_map.sh** | 全绿 | ✅ 见下 |
+| 4.6 | `scripts/verify_map.sh` 可复跑量化验收 | 退出码 0 | ✅ |
+| — | **CP-P1-B 肉眼验收：RViz 里看车道图 + 点目标出路径** | 用户确认 | ⏳ **待你确认** |
+
+**S4 实测（2026-08-01）**
+
+| 项 | 实测值 | 判据 |
+|---|---|---|
+| 车道图 marker | **18 条中心线 + 18 个方向箭头** | = 车道数 |
+| 路径点数 / 长度 | **1119 点 / 571.451 m** | vs 穷举脚本 571.460 m，**误差 0.002%** |
+| 端点 | 首点离自车 **0.000 m**，末点离目标 **0.000 m** | ≤ 1 m |
+| 相邻点距 | 最大 **0.634 m** / 最小 **0.494 m** | ≤ 0.75 m，无重复点 |
+| 朝向自洽 | 最大偏差 **2.27°** | ≤ 15° |
+| 路由耗时 | **0.7 – 2.0 ms** | 回调内 < 10 ms |
+| `libads_map.so` | **零 ROS 依赖**（ldd） | SPEC §3.3 |
+| 全量测试 | **248 / 0 failures**（S3 后 241） | — |
+| 回归 | `verify_ros_bridge.sh` **6/6**（RTF 1.002）、`verify_teleop.sh` **3/3** | 无回归 |
+
+**4.5 换了做法，理由**：计划写 L2 launch_testing，实际做成 `ads_bringup` 的
+**三条 pytest**（0.15 s）+ **CI 直接跑 `verify_map.sh`**。launch_testing 能验的
+（节点起得来、话题发得出）是 `verify_map.sh` 的真子集，再写一遍只是第三套机制；
+而那三条 pytest 补的是 `verify_map.sh` **验不到**的一层 —— `stack.launch.py`
+有没有把 `map_node` 正确装配进去。三条都做了注入验证：
+
+| 注入 | 被哪条抓住 |
+|---|---|
+| 可执行文件名拼成 `map_nodee` | `test_every_launched_executable_actually_exists` |
+| 漏设 `use_sim_time` | `test_every_launched_node_uses_sim_time` |
+| 整个 `map_node` 块被删掉 | `test_map_node_is_assembled_into_the_stack` |
+
+> `--show-args` 挡不住第一条 —— 它只执行 `generate_launch_description()`，
+> 不检查 package/executable 存不存在。症状是全栈起来了、话题少一条、
+> RViz 里没有车道图，而第一反应会去查 QoS。
+
+### ⚠️ S4 挖出一个 P0a 遗留的真 bug：`map → odom` 不该是单位变换
+
+Gazebo 的 `AckermannSteering` 把 `odom` 原点放在**自车 spawn 的位置**，
+所以这一段的正确取值是「自车 spawn 位姿在世界里的坐标」。P0a 一直发单位变换，
+而 `campus_minimal.sdf` 里自车在 `(0, −1.75)` 几乎就是原点，从没露过马脚。
+
+换到 `campus_loop.sdf`（自车在 `(30, −51.75)`）立刻现形：**TF 报自车在 `map` 系
+的 `(0, 0)`，而它 physically 在 `(30, −51.75)`，差 60 m。** 全局路径于是从园区
+正中央的草地上出发 —— 而它在 RViz 里是一条平滑正常的线，没有任何一层报错。
+
+修法：`gazebo_sim.launch.py` **从世界文件里读** spawn 位姿（不写死，否则换个世界
+忘了改就又中招），节点名同步改成 `map_to_odom_static`
+（`verify_ros_bridge.sh` 里硬编码过旧名字，一并改了）。
+
+> 这个 bug 的形状值得记住：**一个错误的默认值，被一个恰好让它成立的场景
+> 掩盖了整个 P0a。** 它不是被测试抓到的，是被「换了一个真实的地图」抓到的。
+
+**S4 新踩到的坑**
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| 脚本里 `pgrep -f <名字>` 查残留 | 报「已经有 1 个在跑」然后拒绝启动，实际一个都没有 | 与 `pkill -f "gz sim"` 同源：`-f` 匹配完整命令行，执行脚本的那条命令行里出现过这几个字就会自己匹配自己。用 **`pgrep -x`** 按进程名精确匹配 |
+| 杀掉 `static_transform_publisher` 想测「TF 没了」 | `lookupTransform` 照样成功 | 静态变换走 `/tf_static`，**tf2 buffer 对它永不过期**。要测只能一开始就不发 |
+| 采样 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 看不出，下游弧长参数化除以零 | `span/step` 恰为整数时浮点上可能是 `80.00000000000001`，ceil 多算一步。改成**等分** `offset = span·i/count` |
+| `setsid` 起进程后查 PGID 用错关键字 | 收尾时**杀了别人的进程组，自己的留下来** | `start_node /log ros2 run ads_map map_node` 里 `shift` 后的 `$2` 是 `run`，grep "run" 命中一堆无关进程。关键字必须显式传 |
+| 私有函数的 docstring 摘要写在第一行 | pep257 报 D213 | 本仓库启用了 D213：**多行 docstring 的摘要必须从第二行开始**，且首行句点用 ASCII |
 
 ## P1-S5　文档 + CI + 收尾（可与 S4 并行）
 
 | # | 任务 | 验收标准 | 状态 |
 |---|------|---------|:---:|
-| 5.1 | `docs/modules/map_and_routing.md` 数学推导 | SPEC §11 要求 | ☐ |
-| 5.2 | CI 加 `gen_map.py --check` | 改 YAML 不重生成则 CI 红 | ☐ |
-| 5.3 | 修 SPEC §10 的 P0a 行（删「OpenDRIVE 地图」）、§5 加 `maps/` | 与事实一致 | ☐ |
-| 5.4 | 同步 `CLAUDE.md` 新包/新命令/新陷阱 | 无过时说法 | 🔶 S1/S2 部分已同步 |
+| 5.1 | `docs/modules/map_and_routing.md` 数学推导 | SPEC §11 要求 | ☐ **未做** |
+| 5.2 | CI 加 `gen_map.py --check` | 改 YAML 不重生成则 CI 红 | ✅ 顺带把 `verify_map.sh` 也加进 CI |
+| 5.3 | 修 SPEC §10 的 P0a 行（删「OpenDRIVE 地图」）、§5 加 `maps/` | 与事实一致 | ✅ 另修了 `/dev/dri` → `/dev/dxg` |
+| 5.4 | 同步 `CLAUDE.md` 新包/新命令/新陷阱 | 无过时说法 | ✅ |
 
 > **5.4 为什么提前做了一半**：`CLAUDE.md` 原本写着「`src/` 下目前有六个包」，
 > 加了 `ads_map` 之后这句话就是错的。而这个文件**每个会话都会被加载进上下文** ——
 > 一条过时的说法不是「没帮上忙」，是会主动把下一个会话带偏。
 > 代码里的错误下次跑测试就暴露，文档里的不会。所以它不能攒到 S5 一起改。
->
-> 已同步：包清单（六 → 七）、`gen_map.py` 的命令与三个生成物、两个世界并存的说明、
-> 新的架构小节「3b. 地图单一来源」、陷阱表新增 5 条 + 数值精度一节。
-> 待 S5 补：S3/S4 产出的车道图、路由、`map_node` 相关内容。
+
+**5.2 加进 CI 的两步**：
+- `gen_map.py --check` —— 与 `gen_vehicle_model.py --check` 并列。
+- **`verify_map.sh`** —— 它是唯一能进 CI 的端到端验收，因为 `map_node`
+  不需要 Gazebo。其余三个 verify 脚本要真仿真器（要 GPU、跑不确定），
+  只能靠人记得跑，而人记得跑的测试三个月后一定没人跑。
+
+**5.3 顺带修的第三处**：SPEC §5 的目录树里 compose 注释写着「挂载 `/dev/dri`」。
+真正的通路是 `/dev/dxg`，`/dev/dri` 只是 WSL 的兼容外观 —— 这个错误说法
+CLAUDE.md 里早就改过了，SPEC 里还躺着一份。**同一个错误在几个地方各躺一份，
+比只错一处更难清理。**
 
 **检查点**：**CP-P1-A**（S2 结束，双实现逐点 < 1 mm，不过不进 S3）、
 **CP-P1-B**（S4 结束，P1 验收）。**检查点处停下来汇报实测数据。**
