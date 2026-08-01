@@ -24,15 +24,98 @@
 #  这个分层就是 SPEC §4.1「切换仿真源 = 换一个 launch 参数」的落地方式。
 # =============================================================================
 
+import os
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import yaml
+
+# 自车在世界文件里的模型名。世界文件的 <include><name> 用的就是它。
+EGO_MODEL_NAME = 'ego_vehicle'
+
+
+def _resolve_world_file(world_name: str) -> Path:
+    """
+    Locate a world file the same way Gazebo does.
+
+    照抄 Gazebo 的解析规则（沿 GZ_SIM_RESOURCE_PATH 逐个目录找），
+    而不是假设它一定在 /workspace/worlds —— 那个路径只在本容器成立。
+
+    :param world_name: 世界文件名，例如 campus_loop.sdf
+    :return: 世界文件的绝对路径
+    """
+    candidate = Path(world_name)
+    if candidate.is_absolute() and candidate.is_file():
+        return candidate
+    for entry in os.environ.get('GZ_SIM_RESOURCE_PATH', '').split(os.pathsep):
+        if not entry:
+            continue
+        found = Path(entry) / world_name
+        if found.is_file():
+            return found
+    raise RuntimeError(
+        f'在 GZ_SIM_RESOURCE_PATH 里找不到世界文件 "{world_name}"。\n'
+        f'当前 GZ_SIM_RESOURCE_PATH = {os.environ.get("GZ_SIM_RESOURCE_PATH", "<未设置>")}')
+
+
+def _ego_spawn_pose(world_file: Path) -> list[str]:
+    """
+    Read the ego vehicle's spawn pose out of a world file.
+
+    SDF 的 <pose> 是六个数：x y z roll pitch yaw，单位分别是米和弧度。
+
+    :param world_file: 世界文件路径
+    :return: 六个字符串，顺序同上
+    """
+    root = ET.parse(world_file).getroot()
+    for include in root.iter('include'):
+        name = include.find('name')
+        if name is None or name.text != EGO_MODEL_NAME:
+            continue
+        pose = include.find('pose')
+        if pose is None or pose.text is None:
+            # 没写 <pose> 在 SDF 里是合法的（默认原点），但对我们不是：
+            # 它意味着 map→odom 该用什么值这件事被留在了一个默认值里。
+            raise RuntimeError(f'{world_file} 里的 {EGO_MODEL_NAME} 没有 <pose>')
+        values = pose.text.split()
+        if len(values) != 6:
+            raise RuntimeError(f'{world_file} 里的 <pose> 应当是 6 个数，实际是 "{pose.text}"')
+        return values
+    raise RuntimeError(f'{world_file} 里没有名为 {EGO_MODEL_NAME} 的模型')
+
+
+def _map_to_odom_from_spawn_pose(context, *args, **kwargs):
+    """
+    Publish map -> odom as the ego vehicle's spawn pose.
+
+    详细理由见调用处的注释。一句话：Gazebo 把 odom 原点放在自车出生点，
+    所以 map→odom 就是自车出生点在世界坐标里的位姿。
+
+    :param context: launch 运行时上下文
+    :return: 要执行的 launch 动作列表
+    """
+    world_name = LaunchConfiguration('world').perform(context)
+    x, y, z, roll, pitch, yaw = _ego_spawn_pose(_resolve_world_file(world_name))
+    return [
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='map_to_odom_static',
+            arguments=[
+                '--x', x, '--y', y, '--z', z,
+                '--roll', roll, '--pitch', pitch, '--yaw', yaw,
+                '--frame-id', 'map', '--child-frame-id', 'odom',
+            ],
+            parameters=[{'use_sim_time': True}],
+            output='screen',
+        ),
+    ]
 
 
 def ego_box_params(vehicle_params: dict) -> dict:
@@ -247,28 +330,29 @@ def generate_launch_description():
         ),
 
         # ---------------------------------------------------------------------
-        # 5. map → odom（单位变换）
+        # 5. map → odom
         #
-        # 真实系统里这一段由**定位模块**发布，它表示的是「轮式里程计累积了
-        # 多少漂移」。P4 之前没有定位，所以这里发单位变换 ——
-        # 含义是「我们假装里程计不漂移」。这不是敷衍：TF 树必须连通，
-        # 否则 RViz 以 map 为固定坐标系时什么都画不出来。
+        # 真实系统里这一段由**定位模块**发布。P4 之前没有定位，用静态变换顶上。
+        #
+        # ⚠️ 它**不是单位变换**，这一点很容易搞错，而且搞错了不报任何错。
+        #    Gazebo 的 AckermannSteering 把 odom 原点放在**自车 spawn 的位置**，
+        #    所以 map→odom 的正确取值就是「自车 spawn 位姿在世界里的坐标」。
+        #    发单位变换等于宣称「地图原点 = 自车出生点」。
+        #
+        #    P0a 一直用的是单位变换，而 campus_minimal 里自车 spawn 在
+        #    (0, −1.75)，几乎就是原点，所以从没露过马脚 —— 反正那个世界里
+        #    没有任何东西依赖世界坐标。到了 campus_loop（自车在 (30, −51.75)）
+        #    症状立刻出来：RViz 里车画在园区正中央的草地上，而 Gazebo 里它
+        #    好端端停在南边那条路上，两边差 60 m。**没有任何一层会报错。**
+        #
+        #    spawn 位姿从**世界文件里读**，不在这里写死 —— 写死就等于给
+        #    「换个世界忘了改这里」留了一个必然会踩的坑，而症状是全局路径
+        #    从一个错误的起点出发，看起来完全正常。
         #
         # ⚠️ P4 接上定位后必须删掉这个节点，否则会和定位模块抢着发同一段 TF，
         #    症状是车在 RViz 里疯狂跳动。
         # ---------------------------------------------------------------------
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='map_to_odom_identity',
-            arguments=[
-                '--x', '0', '--y', '0', '--z', '0',
-                '--roll', '0', '--pitch', '0', '--yaw', '0',
-                '--frame-id', 'map', '--child-frame-id', 'odom',
-            ],
-            parameters=[use_sim_time],
-            output='screen',
-        ),
+        OpaqueFunction(function=_map_to_odom_from_spawn_pose),
 
         # ---------------------------------------------------------------------
         # 6. RViz2

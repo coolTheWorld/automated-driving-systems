@@ -1,7 +1,8 @@
 # =============================================================================
-#  P0a 默认 RViz 布局：点云 + TF + 车模型
+#  默认 RViz 布局：点云 + TF + 车模型（P0a）+ 车道图与全局路径（P1）
 #
-#  ⚠️ 两个容易踩的坑，都已经在下面配好，改动时留意：
+#  ⚠️ 四个容易踩的坑，都已经在下面配好，改动时留意。
+#     前三个是同一类：**QoS 配不上时 RViz 不报错，只是什么都不显示**。
 #
 #  1. RobotModel 的 Description Topic 必须用 Transient Local 持久性。
 #     robot_state_publisher 只在启动时发一次 /robot_description（latched）。
@@ -12,6 +13,12 @@
 #     发布端 pointcloud_to_base_link 用的是 SensorDataQoS（best-effort）。
 #     RViz 默认是 Reliable，而 best-effort 发布者 + reliable 订阅者
 #     **QoS 不兼容**，连接根本建立不起来，同样是静默地什么都不显示。
+#
+#  3. LaneGraph 的 Durability 必须用 Transient Local，与第 1 条同理：
+#     map_node 只在启动时发一次车道图。
+#
+#  4. Tools 里必须有 SetGoal（工具栏的 "2D Goal Pose"）。
+#     缺了它，车道图看得见但**点不出路径** —— 而这看起来像路由坏了。
 #
 #  ⚠️ 从 RViz 图形界面「Save Config」会重写本文件并**删掉以上注释**。
 #     调完布局要保存的话，记得把这段注释补回来。
@@ -114,6 +121,61 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    # -------------------------------------------------------------------------
+    #  P1：车道图（青蓝 = 常规道路，橙 = 路口连接道路，白箭头 = 行驶方向）
+    #
+    #  ⚠️ Durability 必须是 Transient Local，与 RobotModel 同理：
+    #     map_node 在启动时**只发一次**车道图。RViz 用默认的 Volatile 订阅时，
+    #     只要它晚于 map_node 启动就永远收不到 —— 话题在、发布者在、
+    #     RViz 一片空白，还不报错。
+    # -------------------------------------------------------------------------
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LaneGraph
+      Namespaces:
+        {}
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map/lane_graph
+      Value: true
+    # -------------------------------------------------------------------------
+    #  P1：全局路径。用工具栏的 "2D Goal Pose" 点一个终点即可。
+    #
+    #  Line Style 用 Billboards 而不是 Lines：Lines 画出来永远是 1 px 宽，
+    #  在 180×100 m 的园区上从高处看几乎不可见。
+    # -------------------------------------------------------------------------
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 60; 255; 60
+      Enabled: true
+      Head Diameter: 0.3
+      Head Length: 0.2
+      Length: 0.3
+      Line Style: Billboards
+      Line Width: 0.4
+      Name: RoutePath
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.03
+      Shaft Diameter: 0.1
+      Shaft Length: 0.1
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /route/path
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -127,6 +189,15 @@ Visualization Manager:
     - Class: rviz_default_plugins/FocusCamera
     - Class: rviz_default_plugins/Measure
       Line color: 128; 128; 0
+    # P1：工具栏里的 "2D Goal Pose"。点一下地图就发一条 /goal_pose，
+    # map_node 收到后算全局路径。**没有这个 Tool，车道图能看见但点不出路径**。
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
@@ -134,7 +205,9 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 30
+      # 120 m：园区环线是 180×100 m，30 m 的话只看得见车周围一小块，
+      # 车道图铺开之后完全不知道自己在图的哪个位置。
+      Distance: 120
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.06
         Stereo Focal Distance: 1
