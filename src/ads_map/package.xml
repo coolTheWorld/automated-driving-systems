@@ -24,6 +24,22 @@
        注意它只出现在 opendrive_parser.cpp 里，公开头文件不含 tinyxml2 类型。 -->
   <depend>tinyxml2_vendor</depend>
 
+  <!-- 角度归一化（angle_diff）。本仓库自己的纯 C++ 公共库，不是第三方依赖，
+       而且它同样禁止链接 ROS，所以不会破坏本包「lib/ 无 ROS」的约束。 -->
+  <depend>ads_common</depend>
+
+  <!-- 以下全部只服务于 node/map_node.cpp（ROS 包装层）。
+       lib/ 那一半（libads_map.so）一个都不链接 —— 由 scripts/verify_map.sh
+       的 ldd 检查机械保证，见 CMakeLists.txt 里的说明。 -->
+  <depend>rclcpp</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
