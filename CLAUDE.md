@@ -334,6 +334,12 @@ R=12 m 的弯上右侧车道半径 13.75 m，差 14.6%。在本项目这张地�
 **最近车道查询必须传朝向**（`LaneGraph::nearest_lane` 的 `heading_rad`）。
 不传的话自车偏左一点就被判到对向车道，路由第一步就要求掉头 —— 路径本身依然平滑正常。
 
+完整推导（圆弧闭式解、横向偏移、弧长因子、建边规则、Dijkstra 的虚拟源点）
+以及**全部参数的物理含义与调大调小的后果**见
+[docs/modules/map_and_routing.md](docs/modules/map_and_routing.md)。
+改这个模块前先读它 —— 那里也列了**已实现与未实现的边界**（spiral 几何、
+多 laneSection、变宽车道都会显式抛异常，不要假设它们能用）。
+
 ### 4. 算法与 ROS 强制解耦
 
 每个包分 `lib/`（纯 C++17，无 ROS 依赖）和 `node/`（ROS 包装层）。
