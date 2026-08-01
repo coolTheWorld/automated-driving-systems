@@ -86,6 +86,22 @@ jobs:
             ads-dev:jazzy \
             python3 scripts/gen_vehicle_model.py --check
 
+      # ---------------------------------------------------------------------
+      # 同理，地图也有三个生成物：maps/campus.xodr（两环境共用的车道语义）、
+      # models/campus_road/model.sdf（Gazebo 里看到的路面）、
+      # src/ads_map/test/data/reference_samples.csv（C++ 逐点对账的基准）。
+      #
+      # 三者漂移的症状各不相同，但都不报错：
+      #   语义 vs 路面漂移 → 车沿一条肉眼看不见的车道压着绿化带走；
+      #   采样基准没跟着重新生成 → CP-P1-A 拿旧基准对账，给出**虚假的通过**。
+      # 后者尤其危险，所以它同时也进了 colcon test（本地就能拦，不用等 CI）。
+      # ---------------------------------------------------------------------
+      - name: 校验地图生成物与 campus_map.yaml 同步
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy \
+            python3 scripts/gen_map.py --check
+
       - name: 构建工作空间
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
@@ -199,6 +215,23 @@ jobs:
               # 拼写错误 → 应当告诉用户这个值根本不认识，别去翻路线图
               assert_launch_fails gazbo 未知的
             '
+
+      # ---------------------------------------------------------------------
+      # 地图与路由的端到端验收（P1 任务 4.6）
+      #
+      # ★ 这一步能进 CI，是因为 verify_map.sh **不需要 Gazebo** ——
+      #   map_node 只要一段 map→base_link 的 TF 就能工作，用
+      #   static_transform_publisher 把自车钉在已知位姿上即可。
+      #   不要 GPU、十几秒跑完、结果完全确定。
+      #
+      #   相比之下 verify_ros_bridge.sh / verify_teleop.sh 要真仿真器，
+      #   进不了 CI，只能靠人记得跑 —— 而人记得跑的测试三个月后一定没人跑。
+      #   所以凡是能剥离仿真器的验收，都值得多花点力气剥出来。
+      # ---------------------------------------------------------------------
+      - name: 地图与路由端到端验收
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy /workspace/scripts/verify_map.sh
 
       # 失败时把测试结果捞出来，省得靠日志一行行翻。
       - name: 上传测试结果

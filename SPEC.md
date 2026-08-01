@@ -477,11 +477,21 @@ automated-driving-systems/
 ├── CLAUDE.md                   # 给 AI Agent 的项目指引
 ├── docker/
 │   ├── Dockerfile              # Ubuntu 24.04 + Jazzy + Gazebo Harmonic + CARLA PythonAPI
-│   ├── docker-compose.local.yml    #   环境 A：挂载 /dev/dri，本机 Gazebo
+│   ├── docker-compose.local.yml    #   环境 A：挂载 /dev/dxg，本机 Gazebo
 │   └── docker-compose.cloud.yml    #   环境 B：NVIDIA runtime，云端 CARLA
 ├── docs/
 │   ├── adr/                    # 架构决策记录
 │   └── modules/                # 每模块的算法推导文档
+├── config/                     # ★ 手写的**单一来源**，见 §4.1
+│   ├── vehicle_params.yaml     #   车辆参数（轴距、限值、传感器外参）
+│   └── campus_map.yaml         #   园区地图（路段、路口、车道）
+├── scripts/                    # 生成器与验证脚本
+│   ├── gen_vehicle_model.py    #   vehicle_params.yaml → SDF + URDF
+│   ├── gen_map.py              #   campus_map.yaml → xodr + 路面 SDF + 采样基准
+│   └── verify_*.sh             #   各阶段的可复跑量化验收
+├── maps/                       # ★ 生成物：两环境共用的 OpenDRIVE 地图
+├── models/                     # ★ 生成物：Gazebo 模型（自车、路面）
+├── worlds/                     # 手写的 Gazebo 世界（引用 models/）
 ├── src/
 │   ├── ads_msgs/               # 自定义消息接口
 │   ├── ads_common/             # 几何、坐标变换、时间、配置工具
@@ -797,7 +807,7 @@ Windows 宿主为 **AMD Radeon 780M**（RDNA3 核显，UMA 共享内存，无 CU
 
 | 阶段 | 环境 | 内容 | 阶段性成果（可演示） |
 |------|:---:|------|---------------------|
-| **P0a** | A | 建 Docker 镜像（24.04 + Jazzy）→ 装 Gazebo Harmonic → `/dev/dri` 直通 → 车辆模型 + OpenDRIVE 地图 | 本机 RViz2 里看到车和合成点云，键盘能开动 |
+| **P0a** | A | 建 Docker 镜像（24.04 + Jazzy）→ 装 Gazebo Harmonic → GPU 直通 → 车辆模型 + 最小世界 | 本机 RViz2 里看到车和合成点云，键盘能开动 |
 | **P0b** | B | Vast.ai 选机 + Vulkan 验证 → 装 CARLA 0.9.16 → 验证 `--ros2` 与 Jazzy 互通 → 写 PythonAPI sidecar → SSH/noVNC → **建立一致性测试** | 云端 RViz2 看到 CARLA 点云；两环境轨迹偏差 < 0.5 m |
 | **P1** | A | `ads_common` + `ads_map`：坐标变换、OpenDRIVE 解析、路由 | RViz 中显示车道图和 A→B 全局路径 |
 | **P2** | A | `ads_control`：Stanley + PID | 车辆沿预设路径自动行驶 |
