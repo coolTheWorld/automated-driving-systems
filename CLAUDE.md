@@ -108,6 +108,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | `ros2 topic hz` / `tf2_echo` 接管道 | 被 `timeout` 打断后**完全没输出**，看着像没数据 | 输出是全缓冲的。用常驻 Python 节点测（见 `scripts/check_*.py`），或 `stdbuf -oL` |
 | `ros2 topic list` 紧接 daemon 启动 | 只返回 `/rosout` `/parameter_events` | daemon 的节点图还没建好。先 `ros2 daemon start` 再等几秒 |
 | `gpu_lidar` 的无回波射线 | `skip_nans` 滤不掉，`min/max` 变 `±inf` | 返回的是 **±inf 不是 NaN**。求极值/质心/体素前必须显式 `isfinite` 过滤 |
+| **用比较去拦非有限值** | 校验代码看着写了、实际**一条都没拦住**，脏数据一路往下传 | `NaN` 参与**任何**比较都返回 `false`，所以 `if (x < limit) reject;` 对 NaN 恒为假，`clamp` 也会原样放行。**必须单独 `isfinite`，而且要判 ±inf 不只是 NaN**（上一行）。已经咬过两次：`vehicle_cmd_bridge` 的指令限幅、`ads_control` 的路径点距校验。后果不是崩溃而是**误诊** —— NaN 传到转角后被下游 isfinite 挡下、看门狗刹停，现场是「车自己停了」，于是人去查控制器，而错在上游 |
 | 雷达打到自车车顶 | 34% 的点落在自己车顶上，感知会当成零距离障碍物 | 雷达 z=1.6 而车顶 z=1.5，只高 10 cm。**抬高雷达没用**（车顶长 4.4 m），只能按自车轮廓裁剪。已在 `lidar_preprocessor` 实现 |
 | 读 stdin 的节点在 `ros2 launch` 下假死 | 进程活着、`topic info` 有 publisher，**一条消息都不发**，无报错 | `termios` 的 `VMIN/VTIME` **只对终端生效**；launch 下 stdin 是管道，`read()` 永久阻塞、卡死回调。必须另加 **`O_NONBLOCK`**（对所有 fd 都管用） |
 | 用 `ros2 launch` 起交互式节点 | 键盘输入到不了节点 | launch 接管子进程 stdio。键盘开车用 `scripts/drive.sh`（走 `ros2 run`） |
@@ -134,15 +135,23 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有七个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_bringup`、
-`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_control`、`ads_planning`、`ads_perception` 等）**尚未创建**，
+`src/` 下**目前有八个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_planning`、`ads_perception`、`ads_localization` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
 `ads_map` 已有完整两层：`lib/`（OpenDRIVE 解析 + 几何求值 + 车道级有向图 +
 Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1-S4）。
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
+
+`ads_control`（P2，**建设中**）目前**只有 `lib/path_tracking`**：弧长参数化、
+逐点曲率、最近点局部搜索、横向/航向误差。Stanley（S2）、速度规划与 PID（S3）、
+`node/control_node.cpp`（S4）**都还没有**。`libads_control.so` 同样零 ROS 依赖，
+且**不依赖 `ads_map`** —— 两者是 SPEC §3.3 意义上的两个模块，只通过 ROS 话题通信。
+推导与参数见 [docs/modules/control.md](docs/modules/control.md)，**改这个模块前先读它**：
+里面有三条「做错了不会报错，只会给出一个看起来能开的车」的结论
+（前轴换算、按弧长而非点数、**不要加曲率前馈**）。
 
 ```bash
 # ---------- 构建（容器内） ----------
@@ -167,19 +176,21 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 248 tests）
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 285 tests）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
 ./build/ads_map/test_opendrive_parser        # 解析 + **CP-P1-A 双实现逐点对账**
 ./build/ads_map/test_lane_graph              # 车道图：18 节点 / 24 边 + 每条边的几何连续性
 ./build/ads_map/test_routing                 # Dijkstra：路径与长度 vs 穷举脚本
+./build/ads_control/test_path_tracking       # 弧长/曲率/最近点，全部 vs 解析解（P2-S1）
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
 
-# ---------- 尚不可用（包还没建） ----------
-./build/ads_control/test_stanley                    # P2 才有
+# ---------- 尚不可用（还没做到那一步） ----------
+./build/ads_control/test_stanley                    # P2-S2 才有
+ros2 run ads_control control_node                   # P2-S4 才有
 ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ```
 

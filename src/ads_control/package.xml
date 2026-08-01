@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_control</name>
+  <version>0.1.0</version>
+  <description>
+    路径跟踪控制：横向 Stanley + 纵向速度规划与速度环 PID（SPEC §3.2）。
+
+    输入是 /route/path（ads_map 发布的全局路径）、TF map→base_link 与 /odom，
+    输出是 /vehicle_cmd（前轮转角 rad + 纵向加速度 m/s²，SPEC §4.1 的规范话题）。
+
+    ⚠️ 本包**不依赖 ads_map**。两者是 SPEC §3.3 意义上的两个模块，
+    只通过 ROS 话题通信，不允许跨模块直接函数调用 —— 否则换一个路径来源
+    （P3 的规划器）就要动控制器。代价是 Pose2D 这类 POD 结构各有一份，
+    这是有意接受的重复：它没有逻辑，不会"改出分歧"。
+
+    按 SPEC §3.3 分层：lib/ 是纯 C++17 无 ROS 依赖的算法，node/ 是 ROS 包装层。
+    数学推导、参数含义与已知边界见 docs/modules/control.md。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 角度归一化与最短角度差。本仓库自己的纯 C++ 公共库，不是第三方依赖，
+       且它同样禁止链接 ROS，不会破坏本包「lib/ 无 ROS」的约束。
+
+       为什么控制器一定要用它：航向误差是**周期量**。裸写 to - from 在跨越
+       ±π 时会得到接近 ±2π 的值，控制器据此打满方向盘。本包有两处必须用它 ——
+       曲率的中心差分（docs/modules/control.md §2.2）和航向误差（§2.4）。 -->
+  <depend>ads_common</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <!-- L1 测试用 gtest：控制律与路径预处理全部脱离 ROS 测，毫秒级。 -->
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,69 @@
+cmake_minimum_required(VERSION 3.16)
+project(ads_control)
+
+# SPEC §7：C++17，全量警告。理由见 ads_common/CMakeLists.txt。
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+
+# 角度归一化与最短角度差。纯 C++、无 ROS，见 package.xml 里的说明。
+find_package(ads_common REQUIRED)
+
+# -----------------------------------------------------------------------------
+# 库：纯 C++17，**不链接任何 ROS 库**
+# -----------------------------------------------------------------------------
+# SPEC §3.3「算法与 ROS 强制解耦」。P2-S4 会加 node/control_node.cpp，
+# 届时本文件里会出现 rclcpp —— 但那是 control_node 这个 target 的依赖，
+# 本 target（libads_control.so）依然一个 ROS 库都不许链接。
+#
+# 与 ads_map 完全同构，包括那道机械校验：靠纪律维持的约束迟早会破，
+# 靠脚本维持的不会。P2-S4 的 verify_control.sh 会 ldd 这个 .so。
+add_library(${PROJECT_NAME} SHARED
+  src/path_tracking.cpp)
+
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+# PRIVATE：ads_common 只出现在 .cpp 里，公开头文件不含它的任何类型。
+# 下游链接 ads_control 时不该被迫知道我们用谁算角度差。
+target_link_libraries(${PROJECT_NAME} PRIVATE ads_common::ads_common)
+
+install(DIRECTORY include/
+  DESTINATION include)
+
+install(TARGETS ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_include_directories(include)
+
+# -----------------------------------------------------------------------------
+# 测试
+# -----------------------------------------------------------------------------
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # 用 clang-format 取代 uncrustify。必须设在 find_test_dependencies 之前才生效
+  # —— 那个函数在调用时就把 linter 列表定死了，设晚了不生效**且不报错**。
+  list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_uncrustify)
+  set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../.clang-format)
+  ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # L1：路径预处理（弧长、曲率、最近点投影、横向/航向误差）。
+  # 全部与解析解比对，不读任何文件、不起 ROS，毫秒级。
+  ament_add_gtest(test_path_tracking test/test_path_tracking.cpp)
+  target_link_libraries(test_path_tracking ${PROJECT_NAME} ads_common::ads_common)
+endif()
+
+ament_package()
