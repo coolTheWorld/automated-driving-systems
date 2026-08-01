@@ -20,6 +20,8 @@
        用 exec_depend 而非 depend：本包不编译任何代码，只在运行时 include
        它们的 launch 文件。 -->
   <exec_depend>gazebo_bridge</exec_depend>
+  <!-- P1：stack.launch.py 起 map_node（车道图 + 全局路由） -->
+  <exec_depend>ads_map</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

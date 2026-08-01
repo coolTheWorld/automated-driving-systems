@@ -45,6 +45,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 # 仿真数据源注册表：sim 参数值 → (包名, launch 文件名)。
 #
@@ -116,8 +117,17 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'sim', default_value='gazebo',
             description='仿真数据源：gazebo（可用）/ carla（P0b）/ bag（P1 之后）'),
+        # P1 起默认 campus_loop.sdf：全栈跑起来时，地图节点画出来的车道图必须
+        # 和脚下的路面对得上。留在 campus_minimal.sdf 的话，RViz 里会是一张
+        # 悬在空处的车道图 —— 数据全对，但看着像坏了。
+        #
+        # ⚠️ **只改这里，不要动 gazebo_sim.launch.py 的默认值**。
+        #    verify_sim / verify_ros_bridge / verify_teleop 三个脚本都不传 world，
+        #    直接吃那一个默认值，而它们的实测基线（RTF 0.970、点云 10.00 Hz…）
+        #    全部建立在 campus_minimal 上。改了那些数字一次性作废，
+        #    而那是判断「环境有没有退化」的唯一依据。
         DeclareLaunchArgument(
-            'world', default_value='campus_minimal.sdf',
+            'world', default_value='campus_loop.sdf',
             description='世界文件名，仅对 sim:=gazebo 有效'),
         DeclareLaunchArgument(
             'gui', default_value='true',
@@ -129,11 +139,27 @@ def generate_launch_description():
         OpaqueFunction(function=_resolve_sim_source),
 
         # ---------------------------------------------------------------------
-        # 算法节点挂在这里（P2 起）
+        # 算法节点挂在这里
         #
-        # 顺序按 SPEC §12 的路线图：P2 控制 → P3 规划 → P4 定位 → P5 感知。
+        # 顺序按 SPEC §12 的路线图：P1 地图 → P2 控制 → P3 规划 → P4 定位 → P5 感知。
         # 每个节点都只订阅 §4.1 的规范话题，**不允许**出现任何
         # "这是 Gazebo 所以……" 的判断 —— 那种判断一旦写进算法节点，
         # 上面那张 SIM_SOURCES 表就白做了。
         # ---------------------------------------------------------------------
+
+        # P1：地图与路由。
+        #
+        # 它对仿真源**一无所知** —— 只读 .xodr、只要 TF map→base_link。
+        # 所以 sim:=carla 那天它一行都不用改，这正是 §4.1 那套契约要买的东西。
+        #
+        # 这里不传 map_file：默认值由节点自己从 ads_map 的 share 里取，
+        # 在这儿再写一遍路径就等于把地图位置写了第二份。
+        Node(
+            package='ads_map',
+            executable='map_node',
+            name='map_node',
+            # SPEC §5：所有节点 use_sim_time=true，禁止用墙钟做算法时序。
+            parameters=[{'use_sim_time': True}],
+            output='screen',
+        ),
     ])

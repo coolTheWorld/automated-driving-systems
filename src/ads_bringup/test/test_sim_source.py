@@ -45,6 +45,8 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.utilities import perform_substitutions
+from launch_ros.actions import Node as RosNode
 import pytest
 
 # 测试文件在 <pkg>/test/，launch 文件在 <pkg>/launch/
@@ -201,3 +203,87 @@ def test_registries_do_not_overlap():
     assert not overlap, (
         f'这些数据源同时出现在两张表里：{sorted(overlap)}。'
         f'实现完成后必须从 PLANNED_SOURCES 删除，否则它永远被当成「尚未实现」。')
+
+
+# -----------------------------------------------------------------------------
+# 算法节点的装配（P1 起）
+#
+# 为什么这一层值得测，而 CI 的 `--show-args` 挡不住：
+# --show-args 只执行 generate_launch_description()，它**不检查** Node 里的
+# package / executable 是不是真的存在。把 executable 写成 'map_nodee' 的话，
+# --show-args 照样绿，要等到真的 ros2 launch 起来才报「找不到可执行文件」。
+#
+# 而这类错误的症状很不像它的成因：全栈起来了、话题列表里少一条、
+# RViz 里没有车道图 —— 第一反应是去查 QoS 或者 RViz 配置。
+# -----------------------------------------------------------------------------
+
+def _launched_nodes():
+    """Return every launch_ros Node action in the stack launch description."""
+    return [
+        entity for entity in stack.generate_launch_description().entities
+        if isinstance(entity, RosNode)
+    ]
+
+
+def _node_parameters(node):
+    """
+    Flatten a Node's inline parameter dicts into one plain dict.
+
+    launch_ros 把参数名规范化成了「替换序列」（哪怕它本来就是字符串），
+    所以键要 perform 一次才拿得到 'use_sim_time' 这样的名字。
+
+    ⚠️ 这里读的是私有属性 _Node__parameters —— launch_ros 没有公开的读取口。
+       将来升级 launch_ros 时它可能改名，届时本用例会以 AttributeError
+       **响亮地**失败，而不是悄悄跳过。那正是想要的：宁可测试炸掉，
+       也不要它变成一条永远为真的空断言。
+    """
+    context = LaunchContext()
+    flattened = {}
+    for entry in node._Node__parameters or ():
+        if not isinstance(entry, dict):
+            continue
+        for key, value in entry.items():
+            flattened[perform_substitutions(context, list(key))] = value
+    return flattened
+
+
+def test_map_node_is_assembled_into_the_stack():
+    """The stack must launch ads_map/map_node — that is P1's deliverable."""
+    nodes = _launched_nodes()
+    assert nodes, 'stack.launch.py 里一个算法节点都没有'
+    packages = {node.node_package for node in nodes}
+    assert 'ads_map' in packages, (
+        f'stack.launch.py 没有装配 ads_map 的节点，实际有：{sorted(packages)}')
+
+
+def test_every_launched_executable_actually_exists():
+    """
+    Every declared executable must exist on disk.
+
+    这条才是真正挡住拼写错误的那一条：上一条只证明「写了 ads_map」，
+    这一条证明「写的那个可执行文件装得出来」。
+    对**所有**节点生效，所以 P2 加控制节点时自动被覆盖。
+    """
+    for node in _launched_nodes():
+        # ROS 2 的可执行文件装在 <install_prefix>/lib/<package>/ 下，
+        # 而 get_package_share_directory 给的是 <install_prefix>/share/<package>。
+        share = Path(get_package_share_directory(node.node_package))
+        executable = share.parent.parent / 'lib' / node.node_package / node.node_executable
+        assert executable.is_file(), (
+            f'stack.launch.py 声明要起 {node.node_package}/{node.node_executable}，'
+            f'但 {executable} 不存在。拼错可执行文件名时 --show-args 是绿的，'
+            f'只有真 launch 才会报错。')
+
+
+def test_every_launched_node_uses_sim_time():
+    """
+    Every launched node must run on simulation time (SPEC §5).
+
+    混用真实时间的后果在 RTF≈1 时几乎看不出来，等场景变复杂 RTF 掉下去
+    才爆发成 TF extrapolation 和多传感器错配 —— 那时没人会想到是这里。
+    """
+    for node in _launched_nodes():
+        parameters = _node_parameters(node)
+        assert parameters.get('use_sim_time') is True, (
+            f'{node.node_package}/{node.node_executable} 没有设置 use_sim_time=True，'
+            f'实际参数：{parameters}')
