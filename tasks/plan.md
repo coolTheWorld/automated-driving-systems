@@ -667,7 +667,7 @@ Gazebo 的 `AckermannSteering` 把 `odom` 原点放在**自车 spawn 的位置**
 
 | # | 任务 | 验收标准 | 验证方法 |
 |---|------|---------|---------|
-| 5.1 | `docs/modules/map_and_routing.md`：几何求值与路由的数学推导 | SPEC §11「新增算法前先写推导」 | 人工 |
+| 5.1 | `docs/modules/map_and_routing.md`：几何求值与路由的数学推导 | SPEC §11「新增算法前先写推导」 | 人工 ✅ |
 | 5.2 | CI 加 `gen_map.py --check` | 改 YAML 不重生成则 CI 红 | 故意改一下验证 |
 | 5.3 | **修 SPEC §10 的 P0a 行**（去掉「OpenDRIVE 地图」）、**§5 加 `maps/`** | 与事实一致 | 人工 |
 | 5.4 | 同步 `CLAUDE.md`（新包、新命令、新陷阱）、`todo.md` | 无过时说法 | 人工 |
