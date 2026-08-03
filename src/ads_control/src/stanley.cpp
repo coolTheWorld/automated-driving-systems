@@ -19,38 +19,22 @@
 #include <stdexcept>
 #include <string>
 
+#include "numeric_checks.hpp"
+
 namespace ads_control
 {
 
 namespace
 {
 
-/// 校验一个"必须是有限正数"的参数，失败时报出**名字**。
-///
-/// 不内联成 `if (!(x > 0)) throw` 的原因很实际：五个参数如果共用一句
-/// 「参数非法」的错误信息，排查时还得回来读代码才知道是哪一项。
-/// 启动期的一次字符串拼接换来的是"看日志就知道改哪一行 YAML"。
-void RequireFinitePositive(double value, const char * name)
-{
-  // ⚠️ 必须先判 isfinite。NaN 参与任何比较都返回 false，所以 `value <= 0.0`
-  //    对 NaN **恒为假** —— 只写那半句的话 NaN 会被原样放行。
-  //    ±inf 也要拦：它能通过 `> 0` 但会让整条控制律失去意义。
-  if (!std::isfinite(value) || value <= 0.0) {
-    throw std::invalid_argument(
-      std::string("StanleyParams::") + name + " 必须是有限正数，收到 " + std::to_string(value) +
-      "。是不是配置里漏了这一项（聚合初始化会把漏掉的项填 0）？");
-  }
-}
+// 校验失败时报出**名字**：五个参数共用一句「参数非法」的话，
+// 排查时还得回来读代码才知道是哪一项。启动期的一次字符串拼接，
+// 换来的是"看日志就知道改哪一行 YAML"。实现见 numeric_checks.hpp。
+using internal::RequireFinite;
+using internal::RequireFinitePositive;
 
-/// 校验一个"必须有限"的运行期入参（正负都合法）。
-void RequireFinite(double value, const char * name)
-{
-  if (!std::isfinite(value)) {
-    throw std::invalid_argument(
-      std::string("StanleyController: ") + name + " 非有限（" + std::to_string(value) +
-      "）。坏数据在上游，不要让它污染控制器的持久状态。");
-  }
-}
+constexpr char kStanleyParams[] = "StanleyParams";
+constexpr char kStanleyController[] = "StanleyController";
 
 }  // namespace
 
@@ -61,9 +45,9 @@ Pose2D front_axle_pose(const Pose2D & rear_axle_pose, double wheelbase_m)
       "front_axle_pose: 轴距必须是有限正数，收到 " + std::to_string(wheelbase_m) +
       " m。轴距为 0 会让前轴等于后轴，也就是静默退化成 Stanley 最经典的实现错误。");
   }
-  RequireFinite(rear_axle_pose.x_m, "rear_axle_pose.x_m");
-  RequireFinite(rear_axle_pose.y_m, "rear_axle_pose.y_m");
-  RequireFinite(rear_axle_pose.heading_rad, "rear_axle_pose.heading_rad");
+  RequireFinite(rear_axle_pose.x_m, "front_axle_pose", "rear_axle_pose.x_m");
+  RequireFinite(rear_axle_pose.y_m, "front_axle_pose", "rear_axle_pose.y_m");
+  RequireFinite(rear_axle_pose.heading_rad, "front_axle_pose", "rear_axle_pose.heading_rad");
 
   // 刚体：前轴沿**车身**朝向前移一个轴距，朝向不变。
   // 注意这里用的是车身朝向 θ，不是"前轮指向" θ+δ —— 前轮能转，前轴不能。
@@ -76,10 +60,10 @@ Pose2D front_axle_pose(const Pose2D & rear_axle_pose, double wheelbase_m)
 
 StanleyController::StanleyController(const StanleyParams & params) : params_(params)
 {
-  RequireFinitePositive(params_.gain_inv_s, "gain_inv_s");
-  RequireFinitePositive(params_.soft_speed_mps, "soft_speed_mps");
-  RequireFinitePositive(params_.max_steer_angle_rad, "max_steer_angle_rad");
-  RequireFinitePositive(params_.max_steer_rate_rad_s, "max_steer_rate_rad_s");
+  RequireFinitePositive(params_.gain_inv_s, kStanleyParams, "gain_inv_s");
+  RequireFinitePositive(params_.soft_speed_mps, kStanleyParams, "soft_speed_mps");
+  RequireFinitePositive(params_.max_steer_angle_rad, kStanleyParams, "max_steer_angle_rad");
+  RequireFinitePositive(params_.max_steer_rate_rad_s, kStanleyParams, "max_steer_rate_rad_s");
 }
 
 double StanleyController::raw_steering_rad(
@@ -108,10 +92,10 @@ double StanleyController::raw_steering_rad(
 double StanleyController::update(
   double heading_error_rad, double lateral_error_m, double speed_mps, double dt_s)
 {
-  RequireFinite(heading_error_rad, "heading_error_rad");
-  RequireFinite(lateral_error_m, "lateral_error_m");
-  RequireFinite(speed_mps, "speed_mps");
-  RequireFinite(dt_s, "dt_s");
+  RequireFinite(heading_error_rad, kStanleyController, "heading_error_rad");
+  RequireFinite(lateral_error_m, kStanleyController, "lateral_error_m");
+  RequireFinite(speed_mps, kStanleyController, "speed_mps");
+  RequireFinite(dt_s, kStanleyController, "dt_s");
   if (dt_s < 0.0) {
     throw std::invalid_argument(
       "StanleyController: dt_s 为负（" + std::to_string(dt_s) +
@@ -147,7 +131,7 @@ double StanleyController::update(
 
 void StanleyController::reset(double steering_rad)
 {
-  RequireFinite(steering_rad, "reset(steering_rad)");
+  RequireFinite(steering_rad, kStanleyController, "reset(steering_rad)");
   // 夹到机械极限，维持"任何时候 |steering_rad_| ≤ max_steer_angle_rad"这条不变量。
   steering_rad_ =
     std::clamp(steering_rad, -params_.max_steer_angle_rad, params_.max_steer_angle_rad);
