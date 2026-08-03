@@ -187,7 +187,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 399 tests）
+colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 414 tests，约 20 s）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
@@ -198,6 +198,11 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_control/test_stanley             # Stanley + **CP-P2-A 闭环收敛判据**（P2-S2）
 ./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）
+
+# L3-G：**不需要 GPU** 的端到端闭环（假车 + map_node + control_node），已进 CI。
+# 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。
+# 它抓得住 /route/path 那个 QoS bug —— 退回 volatile 立刻红。
+colcon test --packages-select ads_control --ctest-args -R test_closed_loop
 
 # ---------- 闭环实测（P2-S4，需要真仿真器，进不了 CI）----------
 # 先起 headless 全栈，再跑记录脚本；判据来自 plan.md 的 CP-P2-B 表，脚本里不重新发明
