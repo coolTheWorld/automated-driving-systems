@@ -347,6 +347,18 @@
       <right_steering_joint>front_right_steer_joint</right_steering_joint>
       <kingpin_width>1.5500</kingpin_width>
       <steering_limit>0.6000</steering_limit>
+      <!-- 转向伺服的 P 增益 = 1 / actuator.steer_response_time_s（推导量）。
+
+           ⚠️ **这一行以前不在，用的是插件默认值 1.0，代价很具体**：
+           实测转角阶跃的 63% 上升时间 1.198 s，比 Stanley 自己的闭环时间常数
+           （1/k_e = 1.0 s）还大 —— 被控对象比控制器慢，弯道横向误差因此在
+           ±0.8 m 之间震荡（同一条弯在 L1 的运动学模型上只有 1.6 cm）。
+           CP-P2-B 就是被这一条卡住的。
+
+           关键在于它**稳态是准的**（达成率 99.7–100.3%），只是慢：
+           定转角测转弯半径的检查完全看不出问题，只有**阶跃响应**才量得到。
+           见 docs/modules/control.md §3.9 与 scripts/probe_steering_response.py。 -->
+      <steer_p_gain>20.0000</steer_p_gain>
       <wheel_base>2.7000</wheel_base>
       <wheel_separation>1.5500</wheel_separation>
       <wheel_radius>0.3100</wheel_radius>

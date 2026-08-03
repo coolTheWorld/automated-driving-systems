@@ -113,6 +113,15 @@ def derive(p: dict) -> dict:
         "chassis_center_z": chassis_center_z,
         "chassis_width": chassis_width,
         "steer_limit": p["limits"]["max_steer_angle_rad"],
+        # AckermannSteering 对转向关节用**速度控制**：关节速度 = gain × 角度误差。
+        # 那就是一个一阶环节，时间常数恰为 1/gain。所以把 YAML 里的**物理量**
+        # （响应时间常数）换算成插件要的**实现量**（P 增益）就是取倒数。
+        #
+        # 做成推导量而不是让人直接填 gain，理由同 gen_map.py 里的 cutback：
+        # 增益是求解器的实现细节，换个仿真器就没有对应物；
+        # 而"给一个转角阶跃，多久转到 63%"是能拿去和 CARLA / 真车对齐的物理量。
+        # 让人填 gain 等于把一个只有 Gazebo 认识的数字放进双环境的单一来源里。
+        "steer_p_gain": 1.0 / p["actuator"]["steer_response_time_s"],
     }
     d["c_ixx"], d["c_iyy"], d["c_izz"] = box_inertia(
         chassis_mass, length, chassis_width, chassis_len_z)
@@ -142,6 +151,7 @@ def render_sdf(p: dict) -> str:
     w_ixx, w_iyy, w_izz = d["w_ixx"], d["w_iyy"], d["w_izz"]
     half_track = d["half_track"]
     steer_limit = d["steer_limit"]
+    steer_p_gain = d["steer_p_gain"]
 
     lidar = sen["lidar"]
     imu = sen["imu"]
@@ -401,6 +411,18 @@ def render_sdf(p: dict) -> str:
       <right_steering_joint>front_right_steer_joint</right_steering_joint>
       <kingpin_width>{track:.4f}</kingpin_width>
       <steering_limit>{steer_limit:.4f}</steering_limit>
+      <!-- 转向伺服的 P 增益 = 1 / actuator.steer_response_time_s（推导量）。
+
+           ⚠️ **这一行以前不在，用的是插件默认值 1.0，代价很具体**：
+           实测转角阶跃的 63% 上升时间 1.198 s，比 Stanley 自己的闭环时间常数
+           （1/k_e = 1.0 s）还大 —— 被控对象比控制器慢，弯道横向误差因此在
+           ±0.8 m 之间震荡（同一条弯在 L1 的运动学模型上只有 1.6 cm）。
+           CP-P2-B 就是被这一条卡住的。
+
+           关键在于它**稳态是准的**（达成率 99.7–100.3%），只是慢：
+           定转角测转弯半径的检查完全看不出问题，只有**阶跃响应**才量得到。
+           见 docs/modules/control.md §3.9 与 scripts/probe_steering_response.py。 -->
+      <steer_p_gain>{steer_p_gain:.4f}</steer_p_gain>
       <wheel_base>{wheelbase:.4f}</wheel_base>
       <wheel_separation>{track:.4f}</wheel_separation>
       <wheel_radius>{wheel_r:.4f}</wheel_radius>
@@ -444,6 +466,7 @@ def render_urdf(p: dict) -> str:
     wheel_r = d["wheel_r"]
     half_track = d["half_track"]
     steer_limit = d["steer_limit"]
+    steer_p_gain = d["steer_p_gain"]
 
     # URDF 的 <limit> 要求填 effort 和 velocity。effort 对 RViz 显示没有影响
     # （robot_state_publisher 只做运动学），但字段是必填的，给个合理量级即可。
