@@ -116,8 +116,8 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | SDF 转向关节缺 `<effort>` | Gazebo 报错，**前轮能转过机械极限** | 速度控制下 dartsim 需要力矩上限才检查位置限位 |
 | `<gz_frame_id>` 报 SDF 警告 | `XML Element[gz_frame_id] ... not defined in SDF` | **正常**，功能有效（frame_id 确实被改写）。它不在 SDF 规范里，Gazebo 自己解析 |
 | **`gz sim` 崩溃被 launch 报成"干净退出"** | RViz 里点云/TF 全空，只剩个孤零零的车模型，**launch 日志无任何错误** | launch.log 写 `[gz-1]: process has finished cleanly`，但看**存活时长**：几秒 = 崩了。铁证是仓库根目录冒出 `core.<pid>`。别去查 RViz 配置，查 gz 还在不在 |
-| WSL 下 D3D12 设备丢失 | `Removing Device` → `OGRE EXCEPTION: Out of GPU memory`，请求区区 128 MB 却失败 | **因果是反的**：设备先丢，之后所有 GL 调用一律返回 `GL_OUT_OF_MEMORY`。16 GB 显存不可能不够。宿主 GPU 驱动重置（锁屏/休眠/更新）触发，**瞬态，重跑即可**。判据：`verify_gpu.sh` 仍全过 + headless（`gz sim -s`）能跑 = 通路没坏，别去改 compose |
-| `gz sim` 退出时 segfault | 每次收 SIGINT 退出都产 400–600 MB `core.*` | Gazebo 已知的退出清理问题，**不影响功能**。但 core 落在 cwd（= 挂载的仓库根），跑几次就是 GB 级。已在 `.gitignore`，仍需定期 `rm -f core.*` |
+| WSL 下 D3D12 设备丢失 | `Removing Device` → `OGRE EXCEPTION: Out of GPU memory`，请求区区 128 MB 却失败 | **因果是反的**：设备先丢，之后所有 GL 调用一律返回 `GL_OUT_OF_MEMORY`。16 GB 显存不可能不够。宿主 GPU 驱动重置（锁屏/休眠/更新）触发，**瞬态**。⚠️ **连挂两次也仍然是瞬态** —— 2026-08-03 实测 08:53 与 08:54 连崩，几分钟后同一条命令一次过。驱动复位的窗口没那么短，别挂两次就去改配置。诊断阶梯（四步全过就是它）：`verify_gpu.sh` → headless → 只开 gz GUI → GUI+RViz 同开。**通路没坏就别动 compose** |
+| `gz sim` 退出时 segfault | 每次收 SIGINT 退出都产 400–600 MB `core.*` | Gazebo 已知的退出清理问题，**不影响功能**。但 core 落在 cwd（= 挂载的仓库根），跑几次就是 GB 级 —— 上面那次 D3D12 崩溃两下就攒了 1.4 GB。已在 `.gitignore`，仍需定期 `rm -f core.*` |
 | **`setsid cmd &` 之后用 `$!` 取进程组** | 清理命令**静默地什么都没做**，仿真进程留下来继续跑 | `$!` 是 **setsid 自己**的 PID，它 fork 出新进程组后立刻退出，于是 `ps -o pgid= -p $!` 返回**空**，`kill -INT -- -` 变成空操作、还不报错。要按**进程名**查：`ps -eo pgid,args \| grep "gz sim"`。上面那条「用 `kill -INT -- -<PGID>`」是对的，坑在 PGID 怎么取到 |
 | headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需升级到 TERM/KILL。**也可能只是它退得比 3 s 慢，两种解释没分辨开 —— 别当定论** |
 | **脚本里 `pgrep -f <名字>` 查残留** | 报「已经有 1 个在跑」然后拒绝启动，实际一个都没有 | 与 `pkill -f "gz sim"` 同源：`-f` 匹配**完整命令行**，而执行脚本的那条命令行里只要出现过这几个字（比如 `clang-format -i src/ads_map/node/map_node.cpp && verify_map.sh`）就会自己匹配自己。用 **`pgrep -x <进程名>`** 按进程名精确匹配 |
