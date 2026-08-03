@@ -22,8 +22,15 @@ find_package(ads_common REQUIRED)
 # 届时本文件里会出现 rclcpp —— 但那是 control_node 这个 target 的依赖，
 # 本 target（libads_control.so）依然一个 ROS 库都不许链接。
 #
-# 与 ads_map 完全同构，包括那道机械校验：靠纪律维持的约束迟早会破，
-# 靠脚本维持的不会。P2-S4 的 verify_control.sh 会 ldd 这个 .so。
+# 与 ads_map 同构，包括那道机械校验：靠纪律维持的约束迟早会破，靠脚本维持的不会。
+# 校验在下面的 BUILD_TESTING 段里（no_ros_dependencies），跟着 colcon test 走，
+# 所以 CI 每次推送都会跑。
+#
+# ⚠️ 这行注释从 P2-S1 起写的是「P2-S4 的 verify_control.sh 会 ldd 这个 .so」，
+#    **而那个脚本从来没被写出来过** —— P2-S5 逐个 grep 才发现。
+#    也就是说整个 P2 期间这条约束只靠纪律维持，而这段注释自己论证的
+#    恰恰是纪律靠不住。教训不是"要仔细"，是**凡是声称"有脚本守着"的地方，
+#    都得能被 grep 证伪**。
 add_library(${PROJECT_NAME} SHARED
   src/path_tracking.cpp
   src/stanley.cpp
@@ -132,6 +139,36 @@ if(BUILD_TESTING)
   # 的抗饱和环节建模 —— 见 docs/modules/control.md §4.5。
   ament_add_gtest(test_speed_controller test/test_speed_controller.cpp)
   target_link_libraries(test_speed_controller ${PROJECT_NAME})
+
+  # 假车节点：不需要 GPU 的闭环时间源 + 运动学车辆（L3-G，见文件头）。
+  # 放在 test/ 且**不 install**：它是测试夹具，不是仿真数据源，
+  # 不该出现在 SIM_SOURCES 里，也不该被人误当仿真器用。
+  # launch_testing 通过 $<TARGET_FILE:> 直接拿绝对路径，不需要 install。
+  find_package(rosgraph_msgs REQUIRED)
+  add_executable(fake_vehicle test/fake_vehicle_node.cpp)
+  ament_target_dependencies(fake_vehicle
+    rclcpp ads_msgs nav_msgs geometry_msgs rosgraph_msgs tf2 tf2_ros)
+
+  # L3-G：不需要 GPU 的端到端闭环（假车 + map_node + control_node）。
+  # 验的是**节点接线**（话题/QoS/TF/参数/时序），不是控制律也不是真物理 ——
+  # 三层各验各的，见 test_closed_loop.py 的文件头。
+  #
+  # 假车的可执行文件路径通过环境变量传进去：它**不 install**（是测试夹具，
+  # 不是仿真数据源），所以 launch 里没法用 package/executable 的方式找到它。
+  find_package(ament_cmake_ros REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_closed_loop.py
+    TIMEOUT 120
+    ENV FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>)
+
+  # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
+  #
+  # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——
+  # colcon test 会跑它，CI 也就跟着跑了。校验逻辑与理由见那个 .cmake 文件。
+  add_test(NAME no_ros_dependencies
+    COMMAND ${CMAKE_COMMAND}
+      -DTARGET_FILE=$<TARGET_FILE:${PROJECT_NAME}>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_no_ros_deps.cmake)
 endif()
 
 ament_package()
