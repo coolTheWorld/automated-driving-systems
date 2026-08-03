@@ -154,7 +154,20 @@ public:
     // 症状是「话题确实在、RViz 一片空白」。P0a 已经踩过一次同类 QoS 坑。
     lane_graph_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
       "/map/lane_graph", rclcpp::QoS(1).transient_local().reliable());
-    route_pub_ = create_publisher<nav_msgs::msg::Path>("/route/path", rclcpp::QoS(1).reliable());
+    // ⚠️ **路径同样必须 transient_local**，理由和车道图一模一样，
+    //    而这一行在 P1 里漏了 —— 修于 P2-S4（见 tasks/plan.md §P2-3）。
+    //
+    //    /route/path 只在收到 /goal_pose 时发布**一次**。订阅者若晚于那一刻
+    //    启动（或中途重启），volatile 订阅就**永远收不到**已经发布的那条路径。
+    //    症状是车停着不动、`ros2 topic echo /route/path` 也是空的，
+    //    而本节点日志里明明白白写着「路径已发布：N 个点」——
+    //    排查方向会全跑偏到"话题名对不对""QoS 兼不兼容"上。
+    //
+    //    P1 阶段唯一的订阅者是 RViz，而人总是**先起 RViz 再点目标点**，
+    //    所以从没露过马脚。这和 `map → odom` 那个 bug 是同一个模式：
+    //    **错误一直在，只是当时没有东西依赖它。**
+    route_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/route/path", rclcpp::QoS(1).reliable().transient_local());
     goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       "/goal_pose", rclcpp::QoS(1),
       [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr goal) { on_goal(*goal); });

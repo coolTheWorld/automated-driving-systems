@@ -30,6 +30,26 @@
        曲率的中心差分（docs/modules/control.md §2.2）和航向误差（§2.4）。 -->
   <depend>ads_common</depend>
 
+  <!-- 以下全部只服务于 node/control_node.cpp（ROS 包装层）。
+       lib/ 那一半（libads_control.so）一个都不链接 —— 由 CMakeLists 里
+       target_link_libraries 的 PRIVATE 约束 + verify 脚本的 ldd 机械保证。 -->
+  <depend>rclcpp</depend>
+  <depend>ads_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <!-- 诊断量（横向误差、目标/实测速度、单拍耗时）用 DiagnosticArray 发出来，
+       给 scripts/record_control_run.py 和 rqt 用。
+       用它而不是往 ads_msgs 里加一条新消息，有两个理由：
+       ① 改 ads_msgs 影响所有下游模块，是 CLAUDE.md 的「先问后做」项；
+       ② 这些是**调试量**不是模块间契约，放进 SPEC §4.1 的消息集里名不正言不顺。
+       diagnostic_msgs 是 ROS 2 核心接口包（common_interfaces），镜像里已有，
+       不是新引入的第三方依赖。 -->
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->

@@ -122,6 +122,9 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需升级到 TERM/KILL。**也可能只是它退得比 3 s 慢，两种解释没分辨开 —— 别当定论** |
 | **脚本里 `pgrep -f <名字>` 查残留** | 报「已经有 1 个在跑」然后拒绝启动，实际一个都没有 | 与 `pkill -f "gz sim"` 同源：`-f` 匹配**完整命令行**，而执行脚本的那条命令行里只要出现过这几个字（比如 `clang-format -i src/ads_map/node/map_node.cpp && verify_map.sh`）就会自己匹配自己。用 **`pgrep -x <进程名>`** 按进程名精确匹配 |
 | 杀掉 `static_transform_publisher` 想测「TF 没了」 | `lookupTransform` 照样成功，什么都测不出来 | 静态变换走 `/tf_static`，**tf2 的 buffer 对它永不过期**。要测「拿不到 TF」只能**一开始就不发**（这也正是真实场景：节点起来了、仿真还没起） |
+| **Gazebo 的转向执行机构慢得离谱** | 控制器在 L1 上完美收敛（1.6 cm），一上 Gazebo 弯道横向误差就在 ±0.8 m 之间震荡 | 开环实测：转角阶跃的 **63% 上升时间 1.20 s**，比 Stanley 自己的闭环时间常数 `1/k_e`=1.0 s 还大 —— 被控对象比控制器慢，这是震荡配方。稳态是**准的**（99.7–100.3%），只是慢，所以定转角测半径完全看不出问题。转向**关节**与横摆角速度的上升时间只差 0.04 s → 滞后全部来自执行机构，不是车身动力学。根子是 `AckermannSteering` 的转向 P 增益**SDF 里从没设过**。用 `scripts/probe_steering_response.py` 量，**P0b 对齐 CARLA 时要拿同一把尺子再量一遍** |
+| **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `path_tracking.hpp` 早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
+| **纯 P 速度环跟不上剖面的斜坡** | 车总是"入弯偏快、终点冲过头"，而稳态巡航时速度跟得很准 | 「纯 P 对常值目标无稳态误差」只对**常值**成立。速度剖面在入弯前和终点前是**斜坡**，一阶系统跟踪斜坡的稳态误差 = 斜率/`K_p` = 3.0/1.0 = **3.0 m/s**。解法是加速度前馈 `a = v·dv/ds + K_p·(v_ref − v)`，**不是调大 K_p** |
 | 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
@@ -149,7 +152,8 @@ Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1
 逐点曲率、最近点局部搜索、横向/航向误差）、**`stanley`**（前轴换算 + 控制律 +
 转角/转向速率双重限幅）、**`speed_profile`**（曲率限速 + 前后向扫描）、
 **`speed_controller`**（速度环 PI + 条件积分抗饱和）。
-`node/control_node.cpp`（S4）**还没有**。`libads_control.so` 同样零 ROS 依赖，且**不依赖 `ads_map`** ——
+`node/control_node.cpp`（S4）已跑通闭环，但 **CP-P2-B 未达标**（8 项里 4 项超标，
+根因见上面陷阱表的最后三条）。`libads_control.so` 同样零 ROS 依赖，且**不依赖 `ads_map`** ——
 两者是 SPEC §3.3 意义上的两个模块，只通过 ROS 话题通信。
 推导与参数见 [docs/modules/control.md](docs/modules/control.md)，**改这个模块前先读它**：
 里面有三条「做错了不会报错，只会给出一个看起来能开的车」的结论
@@ -181,7 +185,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 391 tests）
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 395 tests）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
@@ -193,11 +197,18 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）
 
+# ---------- 闭环实测（P2-S4，需要真仿真器，进不了 CI）----------
+# 先起 headless 全栈，再跑记录脚本；判据来自 plan.md 的 CP-P2-B 表，脚本里不重新发明
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false
+python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/run.csv
+# 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
+python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
+
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
 
 # ---------- 尚不可用（还没做到那一步） ----------
-ros2 run ads_control control_node                   # P2-S4 才有
+ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ```
 
