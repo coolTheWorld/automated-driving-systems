@@ -25,7 +25,8 @@ find_package(ads_common REQUIRED)
 # 与 ads_map 完全同构，包括那道机械校验：靠纪律维持的约束迟早会破，
 # 靠脚本维持的不会。P2-S4 的 verify_control.sh 会 ldd 这个 .so。
 add_library(${PROJECT_NAME} SHARED
-  src/path_tracking.cpp)
+  src/path_tracking.cpp
+  src/stanley.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -64,6 +65,15 @@ if(BUILD_TESTING)
   # 全部与解析解比对，不读任何文件、不起 ROS，毫秒级。
   ament_add_gtest(test_path_tracking test/test_path_tracking.cpp)
   target_link_libraries(test_path_tracking ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：横向 Stanley + CP-P2-A 的闭环收敛判据。
+  # 闭环用的运动学自行车模型在 test/kinematic_bicycle.hpp —— **测试夹具，非产品代码**，
+  # 所以它不进 add_library。P2-S5 若把它包成 ROS 假车节点，那时才搬家。
+  ament_add_gtest(test_stanley test/test_stanley.cpp)
+  # PRIVATE 的 ads_common 不会传递过来，而测试自己要用 normalize_angle，所以显式链接。
+  target_link_libraries(test_stanley ${PROJECT_NAME} ads_common::ads_common)
+  # 夹具头文件与被测头文件不在同一目录，给测试单独加 test/ 到搜索路径。
+  target_include_directories(test_stanley PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
 endif()
 
 ament_package()
