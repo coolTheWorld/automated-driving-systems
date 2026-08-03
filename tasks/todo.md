@@ -2,7 +2,7 @@
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
 > 状态：**P0a 完成 29/29**、**P1 完成 28/28**（CP-P1-A / CP-P1-B 达成）　|
-> **当前阶段：P2 控制 12/28**（S1 ✓、S2 ✓ —— **CP-P2-A 达成**）
+> **当前阶段：P2 控制 17/28**（S1 ✓、S2 ✓、S3 ✓ —— **CP-P2-A 达成**）
 > 更新：2026-08-02　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：[P2 清单](#p2-控制stanley--pid当前阶段)（当前）→
@@ -13,26 +13,37 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P2 控制 —— S2 完成 6/6，🚩 CP-P2-A 已达成（2026-08-02）。
-下一步是 S3 速度规划 + 纵向 PID。**
+**当前位置**：**P2 控制 —— S3 完成 5/5。下一步是 S4 `control_node` + 闭环【CP-P2-B】。**
+（CP-P2-A 已于 2026-08-02 达成。）
 计划见 [plan.md 第三部分](./plan.md#第三部分p2-控制stanley--pid)。
 
-S1 产出：`docs/modules/control.md`（8 节推导）+ `ads_control` 包 + `lib/path_tracking`
-（16 个 L1 用例、0 ms）。S2 产出：`lib/stanley`（前轴换算 + 控制律 + 双重限幅）
-+ `test/kinematic_bicycle.hpp` 夹具 + `test_stanley`（27 个用例、7 ms）。
-全量回归 **329 tests / 0 failures**（S1 后基线 285）。
-**CP-P2-A 四条判据全过且一条未放宽**，数字见 P2-S2 那节。
+S1 产出：`lib/path_tracking`（16 用例）。S2 产出：`lib/stanley` + `test/kinematic_bicycle.hpp`
+夹具 + `test_stanley`（27 用例，**CP-P2-A 四条判据全过且一条未放宽**）。
+S3 产出：`lib/speed_profile`（曲率限速 + 前后向扫描）、`lib/speed_controller`
+（速度环 PI + 条件积分抗饱和）、`test/path_fixtures.hpp`（路径构造器，两个测试共用）、
+`src/numeric_checks.hpp`（三处共用的入参校验）。
+全量回归 **391 tests / 0 failures**（S2 后基线 329）。
 
-**S3 开工前必须知道的两件事**（都是 S2 实测出来的，不是推测）：
+**S4 开工前必须知道的四件事**：
 
-1. **`a_lat_max` 与转向速率限幅是耦合的。** 入弯所需的转向速率就是 `v/R`，
-   所以限幅起作用的临界车速是 `v* = R · max_steer_rate` = 8 × 0.5 = **4.0 m/s**。
-   `a_lat_max = 1.5` → 3.464 m/s（低 13%，安全）；
-   **`a_lat_max = 2.0` → `√(2.0×8)` 恰好 4.0 m/s，正好顶在临界值上。**
-   调这个参数时不能只想舒适性。
-2. **推翻了一条立项时的判断**：「0.5 rad/s 的速率限幅是个不小的相位滞后，
-   可能把稳定增益变成震荡的」—— 在本地图几何上**不成立**，因为入弯不是阶跃。
-   plan.md / control.md 都已同步改掉。
+1. **`/route/path` 的 QoS 要改成 `transient_local`**（plan.md §P2-3 那笔账）。
+   不改的话，控制节点起晚于 map_node 就永远收不到路径 —— 而两边都不报错。
+   两种启动顺序各验一次。
+2. **`StanleyParams` / `SpeedProfileParams` / `SpeedControllerParams` 都故意不给默认值。**
+   必须从 YAML 逐项读；漏读一项会被聚合初始化填 0，再被构造函数指名报错。
+   **不要为了"方便"给它们加默认值** —— 那会把"漏读配置"变成一个跑得起来、
+   只是开得不对的系统。
+3. **负车速要打限流告警。** `raw_steering_rad` 对负速是夹到 0（数值保护，
+   不是倒车支持），这一层安静地把倒车当静止 —— 告警只能由节点打。
+4. **换路径时必须同时换剖面并重置 hint。** `SpeedProfile::speed_at` 索引越界会抛异常
+   （有意的，不夹取）；`TrackedPath::project` 的 hint 不重置会在新路径上乱跳。
+
+**S3 交给 S4 的两条实测约束**：
+
+- **`a_lat_max` 与转向速率限幅耦合**：临界车速 `v* = R·max_steer_rate` = 4.0 m/s，
+  而 `a_lat_max = 2.0` 给出的限速**恰好就是 4.0**。调这个参数不能只想舒适性。
+- **bridge 的"设定值超前实测 ≤ 1 m/s"只在车跟不上时才触发**（实测：正常跟随时
+  一次都没碰到）。Gazebo 起步会不会触发取决于插件的跟随滞后，**那个数没实测过**。
 
 **动 `lib/stanley` 之前先读 `docs/modules/control.md` §3**，尤其 §3.2 / §3.4 / §3.5 ——
 那三节各推翻了一个几乎一定会犯的直觉（后轴当前轴、"定曲率有固有稳态误差"、
@@ -71,12 +82,14 @@ docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 lau
 docker compose exec dev bash -c '
   set +u; source /opt/ros/jazzy/setup.bash; source /workspace/install/setup.bash; set -u
   cd /workspace
-  colcon test-result --all                 # 应为 329 tests, 0 errors, 0 failures（P2-S2 后）
+  colcon test-result --all                 # 应为 391 tests, 0 errors, 0 failures（P2-S3 后）
   ./build/ads_map/test_opendrive_parser    # 13 个用例，含 CP-P1-A 对账
   ./build/ads_map/test_lane_graph          # 17 个用例，含每条边的几何连续性
   ./build/ads_map/test_routing             # 10 个用例，含「对向车道必须绕行」
   ./build/ads_control/test_path_tracking   # 16 个用例，弧长/曲率/最近点（P2-S1）
-  ./build/ads_control/test_stanley'        # 27 个用例，含 CP-P2-A 四条判据（P2-S2）
+  ./build/ads_control/test_stanley         # 27 个用例，含 CP-P2-A 四条判据（P2-S2）
+  ./build/ads_control/test_speed_profile   # 16 个用例，曲率限速 + 前后向扫描（P2-S3）
+  ./build/ads_control/test_speed_controller'  # 12 个用例，速度环 + 抗饱和（P2-S3）
 python3 scripts/gen_map.py --check         # 三个生成物都同步（宿主机跑即可，无需 ROS）
 ```
 
@@ -520,15 +533,76 @@ v* = R · max_steer_rate_rad_s = 8 × 0.5 = 4.0 m/s
 
 | # | 任务 | 验收标准 | 状态 |
 |---|------|---------|:---:|
-| 3.1 | 曲率限速 `v = min(v_cruise, √(a_lat_max/\|k\|))` | R=8 处得 **3.464 m/s** | ☐ |
-| 3.2 | 终点归零 + **后向扫描**限减速 | 处处 `v_i² ≤ v_{i+1}² + 2·a_dec·Δs` | ☐ |
-| 3.3 | **前向扫描**限加速 | 处处 `v_i² ≤ v_{i-1}² + 2·a_acc·Δs` | ☐ |
-| 3.4 | 速度环 PID + 积分抗饱和 | 阶跃响应无稳态误差、无积分饱和 | ☐ |
-| 3.5 | 输出加速度限幅 `[−3.000, +1.500]` | 任意输入下成立 | ☐ |
+| 3.1 | 曲率限速 `v = min(v_cruise, √(a_lat_max/\|k\|))` | R=8 处得 **3.464 m/s** | ✅ **3.46382**（偏差机理已量化） |
+| 3.2 | 终点归零 + **后向扫描**限减速 | 处处 `v_i² ≤ v_{i+1}² + 2·a_dec·Δs` | ✅ 逐点 vs 闭式解 **8.9e-13 mm/s** |
+| 3.3 | **前向扫描**限加速 | 处处 `v_i² ≤ v_{i-1}² + 2·a_acc·Δs` | ✅ |
+| 3.4 | 速度环 PID + 积分抗饱和 | 阶跃响应无稳态误差、无积分饱和 | ✅ 稳态 **3.9e-5 mm/s** |
+| 3.5 | 输出加速度限幅 `[−3.000, +1.500]` | 任意输入下成立 | ✅ |
 
-**三条不显然的**：
+**S3 实测（2026-08-02）**
 
-- **3.2/3.3 顺序不能反**：后向扫描只会把速度调低，所以前向不会破坏它；反过来会。
+| 项 | 实测值 |
+|---|---|
+| `test_speed_profile` / `test_speed_controller` | **16 + 12 = 28 个用例，8 ms** |
+| R=8 / R=13.75 曲率限速 | **3.46382 / 4.54135**（闭式解 3.46410 / 4.54148） |
+| 全程最大横向加速度 | **1.5 m/s²**（恰好贴住上限） |
+| 终点制动段逐点 vs `√(2a_d·剩余)` | **8.9e-13 mm/s** |
+| 入弯提前减速 / 出弯回巡航 | **3.0026 m / 6.5026 m**（闭式解 3.1449 / 6.2897，差一个采样步） |
+| 两种扫描顺序 / 左转 vs 右转 | 逐点差异 **0 / 0** |
+| 纯 P（`K_i`=0）稳态误差 | **3.9e-5 mm/s** —— §4.4 那条反直觉结论成立 |
+| 一个时间常数后剩余误差 | **36.42%**（连续解 36.79%，前向欧拉离散值 36.42%） |
+| 抗饱和：顶着墙 10 s | 积分 **2.58**（冻结点 2.60）；无抗饱和会到 10.0，松开后冲到 **3.97 m/s** |
+| bridge 超前上限卡住时刻 | **0.68 s**（闭式解 0.667 s）—— **且只在车跟不上时** |
+| `libads_control.so` | 仍**零 ROS 依赖** |
+| 全量回归 | **391 tests / 0 failures**（S2 后基线 329） |
+
+**故障注入 9 处，8 处被预期用例抓住；1 处没抓住 —— 而它暴露的是我注释又写错了**：
+
+| 注入的错误 | 结果 |
+|---|---|
+| 曲率限速漏掉 `min(cruise, ·)` | `AGentleEnoughCurveIsCappedByCruise…`（**只有它**） |
+| 曲率漏掉 `std::abs`（右转变 NaN） | `RightTurnsAreLimitedIdenticallyToLeftTurns`（**只有它**） |
+| 去掉终点归零 | `TheProfileEndsAtExactlyZero` + 另 3 条 |
+| 去掉后向扫描 | `TheDecelerationConstraintHoldsEverywhere` + 另 4 条 |
+| 去掉前向扫描 | `TheAccelerationConstraintHoldsEverywhere` + 另 2 条 |
+| 前后向的 `a_acc`/`a_dec` 对调 | 5 条闭式解用例 |
+| 速度环下限用 −5.0 而不是 −3.0 | `OutputIsClampedToTheComfortLimitsNotThePhysicalOnes`（**只有它**） |
+| 去掉抗饱和（无条件积分） | `TheIntegralStopsGrowingOnceTheOutputSaturates` + 反例那条 |
+| 饱和时**完全**冻结积分 | **一条都不红** —— 见下 |
+
+### 🔍 S3 自检抓到的三处（2026-08-02，全部已修）
+
+**① 「前后向扫描顺序不能反」是错的。** 20000 组随机剖面（随机点距/曲率限速/加减速度）
+实测：两种顺序**逐点完全相同**（最大差 0.0），对调后两条约束一个点都不违反。
+理由恰恰是那句"只会调低" —— 两个扫描各自都调到对方约束的安全侧。
+`control.md` §4.2、`plan.md`、本文件已一并改掉，并补了 `ScanOrderDoesNotMatter` 用例：
+它在测试里独立实现对调的顺序再逐点比对，**将来加了下界约束会先红**。
+
+**② 所有测试路径都是左转 —— 一个真实的覆盖漏洞。** 曲率限速漏掉 `std::abs`
+会在右转（κ<0）上算出 `√(负数)` = NaN，而全左转的用例里一条都不红，
+地图上左右转各占一半。已补 `MakeRightArc` 和 `RightTurnsAreLimitedIdenticallyToLeftTurns`。
+
+**③ 「条件积分 vs 饱和就完全冻结」在本实现里没有区别。** 我在注释里写过
+"完全冻结会让反方向误差进不来、退饱和滞后"。注入实测：改成完全冻结，28 条一条不红。
+证明：条件积分保证 `K_i·I ≤ a_max`，于是"误差反向却仍饱和"（需要
+`K_i·I > a_max + K_p·|e|`）从干净初值出发根本到不了。仍保留条件积分是因为
+它在前提被打破时（非零 reset、运行期改限幅）才对 —— 注释和用例都已注明
+**现在没有测试在保护这个区别**。
+
+### ⚠️ S3 澄清的一条 bridge 行为
+
+`control.md` §4.5 原本说「积出 1.0 m/s 超前量需要 0.667 s，起步瞬间会触发」。
+那个算法隐含前提是**实测速度全程为 0**。实测：
+
+- 车正常跟随设定值（0 → 巡航，10 s）：超前上限**一次都没碰到**（超前量恒为一拍的 0.03 m/s）
+- 车完全动不了：**0.68 s** 卡住，设定值被摁在 1.0 m/s
+
+所以"起步会触发"要加限定：**只有车实际跟不上时才触发**。真车/Gazebo 起步会不会，
+取决于 `AckermannSteering` 插件的跟随滞后 —— 那个时间常数**没实测过，
+不要凭空编一个数**，CP-P2-B 才量得到。
+
+**两条不显然的**：
+
 - **剖面在「路径来的时候」算一次**，控制回调里只做按弧长查表 + 线性插值。
   剖面是纯几何量（只依赖曲率和长度），路径不变则剖面不变。
   1119 点两遍扫描约 2200 次开方 —— 算一次没问题，50 Hz 算就是白烧 CPU（SPEC §7）。
@@ -605,8 +679,8 @@ v* = R · max_steer_rate_rad_s = 8 × 0.5 = 4.0 m/s
 ## P2 进度
 
 ```
-S1 ██████  6/6 ✓    S2 ██████  6/6 ✓   S3 _____  0/5
-S4 ______  0/6      S5 _____  0/5                        总计 12/28
+S1 ██████  6/6 ✓    S2 ██████  6/6 ✓   S3 █████  5/5 ✓
+S4 ______  0/6      S5 _____  0/5                        总计 17/28
 ```
 
 **待达成的检查点**：CP-P2-A（S2 结束，纯 C++ 闭环收敛）　CP-P2-B（S4 结束，P2 验收）
