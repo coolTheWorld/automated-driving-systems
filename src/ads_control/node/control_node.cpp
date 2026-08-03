@@ -384,20 +384,37 @@ private:
     }
 
     // ---- 控制律 ----
-    // 到终点后目标速度直接给 0，走**同一个速度环**而不是硬塞 −max_decel：
-    // 剖面末端本来就已经降到很低，再急刹一下反而不舒服，也测不出"停得准不准"。
-    const double target_speed_mps = goal_reached ? 0.0 : profile_->speed_at(projection);
+    // 正常段：目标速度和**目标加速度**都查剖面。
+    //
+    // ⚠️ 前馈不是可选项。剖面在入弯前和终点前是**斜坡**，而纯 P 跟踪斜坡的
+    //    稳态误差 = 斜率/K_p = 3.0/1.0 = 3.0 m/s —— S4 首测就是这么冲过终点
+    //    4.26 m 的，同一个原因还把最大横向加速度顶到 2.113（入弯超速 0.85 m/s）。
+    //
+    // 到终点后：目标速度 0，前馈直接给 **−max_decel**，也就是"承诺全力停住"。
+    //    这不是硬塞一个数 —— 它与 goal.stop_distance_m 是**自洽**的：
+    //    剖面在距终点 d 处的速度是 √(2·a_dec·d)，而从那个速度按 a_dec 刹停
+    //    需要的距离恰好又是 d。d = 0.5 → 进入时 1.73 m/s，刹停 0.5 m，正好停在终点。
+    //    若这里沿用剖面前馈（随速度衰减），末端会拖成一条长尾巴，
+    //    表现为"车蹭到终点"。
+    double target_speed_mps = 0.0;
+    double feedforward_accel_mps2 = -max_decel_mps2_;
+    if (!goal_reached) {
+      target_speed_mps = profile_->speed_at(projection);
+      feedforward_accel_mps2 = profile_->target_accel_at(projection);
+    }
+
     const double steer_rad = stanley_->update(
       projection.heading_error_rad, projection.lateral_error_m, measured_speed_mps_, dt_s);
-    const double accel_mps2 =
-      speed_controller_->update(target_speed_mps, measured_speed_mps_, dt_s);
+    const double accel_mps2 = speed_controller_->update(
+      target_speed_mps, feedforward_accel_mps2, measured_speed_mps_, dt_s);
 
     publish_command(steer_rad, accel_mps2);
     const double cycle_ms = (now() - tick_start).seconds() * 1e3;
     publish_debug(front, projection, target_speed_mps);
     publish_diagnostics(
       goal_reached ? ControlState::kGoalReached : ControlState::kTracking, "", projection,
-      target_speed_mps, steer_rad, accel_mps2, remaining_m, goal_distance_m, cycle_ms);
+      target_speed_mps, feedforward_accel_mps2, steer_rad, accel_mps2, remaining_m, goal_distance_m,
+      cycle_ms);
   }
 
   /// 降级：**减速停车**并把原因说清楚。
@@ -425,7 +442,8 @@ private:
     }
 
     PathProjection empty;
-    publish_diagnostics(state, reason, empty, 0.0, steer_rad, accel_mps2, 0.0, 0.0, 0.0);
+    publish_diagnostics(
+      state, reason, empty, 0.0, accel_mps2, steer_rad, accel_mps2, 0.0, 0.0, 0.0);
   }
 
   void publish_command(double steer_rad, double accel_mps2)
@@ -522,8 +540,8 @@ private:
 
   void publish_diagnostics(
     ControlState state, const std::string & reason, const PathProjection & projection,
-    double target_speed_mps, double steer_rad, double accel_mps2, double remaining_m,
-    double goal_distance_m, double cycle_ms)
+    double target_speed_mps, double feedforward_accel_mps2, double steer_rad, double accel_mps2,
+    double remaining_m, double goal_distance_m, double cycle_ms)
   {
     diagnostic_msgs::msg::DiagnosticStatus status;
     status.name = "ads_control/control_node";
@@ -543,6 +561,7 @@ private:
     // 与 path_remaining_m 的区别见 on_timer 里的说明：冲过终点后前者恒为 0，后者继续增长。
     status.values.push_back(MakeKeyValue("goal_distance_m", goal_distance_m));
     status.values.push_back(MakeKeyValue("target_speed_mps", target_speed_mps));
+    status.values.push_back(MakeKeyValue("feedforward_accel_mps2", feedforward_accel_mps2));
     status.values.push_back(MakeKeyValue("measured_speed_mps", measured_speed_mps_));
     status.values.push_back(MakeKeyValue("steer_angle_rad", steer_rad));
     status.values.push_back(MakeKeyValue("accel_mps2", accel_mps2));

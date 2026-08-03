@@ -111,6 +111,34 @@ public:
   /// @brief 同上，直接给线段索引与段内比例。
   double speed_at(std::size_t index, double ratio) const;
 
+  /// @brief 剖面**自身要求的加速度** `a_ref = ½·d(v²)/ds`，单位 m/s²。给速度环做前馈。
+  ///
+  /// @param projection `TrackedPath::project()` 的返回值。
+  /// @return 期望加速度，m/s²。负 = 剖面要求减速；巡航段为 0。
+  /// @throw std::out_of_range 同 `speed_at`。
+  ///
+  /// @note **为什么必须有这个东西**：`v_ref` 沿路径是一条**斜坡**（入弯前和
+  ///       终点前都按 `√(2a·Δs)` 下降），而纯 P 控制器跟踪斜坡有稳态误差
+  ///       `= 斜率 / K_p`。本项目里那是 `3.0 / 1.0 = 3.0 m/s` —— S4 实测
+  ///       车到终点时还有 4.36 m/s、冲过去 4.26 m，
+  ///       同一个原因还把最大横向加速度顶到 2.113（入弯超速 0.85 m/s）。
+  ///       **调大 `K_p` 只能按比例减小它，而前馈能把它消掉**（推导见
+  ///       `docs/modules/control.md` §4.4）。
+  ///
+  /// @note **不需要车速参数，这一点值得说清楚**（初版收了一个，后来去掉了）：
+  ///       严格的链式法则是 `dv_ref/dt = (dv_ref/ds)·(ds/dt)`，而 `ds/dt` 是
+  ///       **实际**车速。但前馈的定义就是"车跟在剖面上时需要多大加速度"，
+  ///       那时 `ds/dt = v_ref`，于是它化简成 `½·d(v²)/ds` —— 一个只依赖剖面的量。
+  ///       车偏离剖面带来的那一份差额是**反馈该管的**，塞进前馈只会让两者
+  ///       职责混淆，而且在 `v_ref → 0`（终点）时还要处理除零。
+  double target_accel_at(const PathProjection & projection) const;
+
+  /// @brief 同上，直接给线段索引与段内比例。
+  ///
+  /// @note `ratio` 不影响结果（`v²` 在段内线性，斜率是常数），但仍然收下它 ——
+  ///       将来若改成高阶插值，调用方不必跟着改签名。
+  double target_accel_at(std::size_t index, double ratio) const;
+
   /// @brief 逐点的剖面速度，m/s。与路径点一一对应。
   const std::vector<double> & speeds_mps() const noexcept { return speeds_mps_; }
 

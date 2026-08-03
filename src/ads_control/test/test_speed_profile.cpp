@@ -451,10 +451,80 @@ TEST(Scans, ScanOrderDoesNotMatter)
 }
 
 // =============================================================================
+//  ④ 剖面自身的加速度（给速度环做前馈）
+// =============================================================================
+
+TEST(Feedforward, MatchesTheDecelerationLimitOnTheTerminalRamp)
+{
+  // 终点制动段上剖面满足 v² = 2·a_dec·剩余距离，对 s 求导得 v·dv/ds = −a_dec。
+  // 所以**前馈在整条制动段上恒等于 −a_dec**，这是闭式解，不是近似。
+  //
+  // 它存在的理由：纯 P 跟踪斜坡的稳态误差 = 斜率/K_p = 3.0/1.0 = 3.0 m/s。
+  // S4 首测就是这么冲过终点 4.26 m 的。
+  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const SpeedProfile profile(path, DefaultParams());
+  const double braking_distance_m = DistanceForSpeedChangeM(kCruiseSpeedMps, 0.0, kMaxDecelMps2);
+
+  double worst_deviation_mps2 = 0.0;
+  int checked = 0;
+  for (std::size_t i = 0; i + 1 < path.points().size(); ++i) {
+    const double remaining_m = path.length_m() - path.points()[i].s_m;
+    // 只查制动段内部：更靠前的段还被巡航值盖着，那里前馈本来就该是 0。
+    if (remaining_m > braking_distance_m - 0.5) {
+      continue;
+    }
+    const double accel_mps2 = profile.target_accel_at(i, 0.0);
+    worst_deviation_mps2 = std::max(worst_deviation_mps2, std::abs(accel_mps2 + kMaxDecelMps2));
+    ++checked;
+  }
+  ASSERT_GT(checked, 5) << "制动段里没取到足够的点，这条用例什么都没测";
+  std::cout << "  [前馈] 终点制动段 " << checked << " 个点，与 −a_dec 的最大偏差 "
+            << worst_deviation_mps2 << " m/s²\n";
+  // ⚠️ 判据卡到 1e-9 是**有意的**：剖面插的是 v²，而 v² = v₀² + 2a·Δs 在
+  //    制动段上严格线性，所以 ½·d(v²)/ds **恰好**等于 −a_dec，是闭式解不是近似。
+  //    初版剖面插的是 v，这里的偏差是 0.515 m/s²（末端最大）——
+  //    正好落在最需要前馈准的地方，所以才改成插 v²。
+  EXPECT_LT(worst_deviation_mps2, 1e-9);
+}
+
+TEST(Feedforward, IsZeroOnCruiseAndPositiveWhenAcceleratingOutOfACurve)
+{
+  // 巡航段速度恒定 → d(v²)/ds = 0 → 前馈为 0。给一个常值目标却发非零前馈，
+  // 会让车持续加/减速而稳态误差永远消不掉。
+  const TrackedPath straight(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const SpeedProfile straight_profile(straight, DefaultParams());
+  EXPECT_NEAR(straight_profile.target_accel_at(20, 0.0), 0.0, 1e-12);
+
+  // 出弯加速段：前馈应当**恰好**等于 +a_acc（前向扫描卡住的那些段上是闭式解）。
+  std::vector<Pose2D> poses = MakeLeftArc(kTurnRadiusM, 0.0, 0.0, 0.0, M_PI_2, 0.5, false);
+  AppendStraight(&poses, 40.0, 0.5);
+  const TrackedPath path(poses);
+  const SpeedProfile profile(path, DefaultParams());
+
+  const double curve_exit_s_m = kTurnRadiusM * M_PI_2;
+  std::size_t index = 0;
+  while (path.points()[index].s_m < curve_exit_s_m + 1.0) {
+    ++index;
+  }
+  std::cout << "  [前馈] 出弯加速段 a_ff = " << profile.target_accel_at(index, 0.0)
+            << " m/s²（应为 +" << kMaxAccelMps2 << "）\n";
+  EXPECT_NEAR(profile.target_accel_at(index, 0.0), kMaxAccelMps2, 1e-9);
+}
+
+TEST(Feedforward, RejectsAnIndexBeyondTheProfile)
+{
+  const TrackedPath path(MakeStraightAlongX(20.0, 0.0, 0.5));
+  const SpeedProfile profile(path, DefaultParams());
+  const std::size_t last_segment = profile.speeds_mps().size() - 2;
+  EXPECT_NO_THROW(profile.target_accel_at(last_segment, 1.0));
+  EXPECT_THROW(profile.target_accel_at(last_segment + 1, 0.0), std::out_of_range);
+}
+
+// =============================================================================
 //  查表
 // =============================================================================
 
-TEST(Lookup, InterpolatesLinearlyInsideASegment)
+TEST(Lookup, InterpolatesInSpeedSquaredNotInSpeed)
 {
   const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
@@ -467,7 +537,11 @@ TEST(Lookup, InterpolatesLinearlyInsideASegment)
 
   EXPECT_NEAR(profile.speed_at(index, 0.0), lo, 1e-12);
   EXPECT_NEAR(profile.speed_at(index, 1.0), hi, 1e-12);
-  EXPECT_NEAR(profile.speed_at(index, 0.25), lo + 0.25 * (hi - lo), 1e-12);
+  // 段内插的是 **v²**：剖面是用 v² = v₀² + 2a·Δs 构造的，插 v² 才精确复现
+  // 那条 √ 曲线。插 v 的话前馈（= 曲线斜率）在末端偏 0.5 m/s²，见 Feedforward 那组。
+  EXPECT_NEAR(
+    profile.speed_at(index, 0.25), std::sqrt(lo * lo + 0.25 * (hi * hi - lo * lo)), 1e-12);
+  EXPECT_GT(profile.speed_at(index, 0.5), std::min(lo, hi)) << "插值结果应落在两端之间";
 }
 
 TEST(Lookup, RejectsAnIndexBeyondTheProfile)

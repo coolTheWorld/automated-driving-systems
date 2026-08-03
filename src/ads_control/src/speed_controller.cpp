@@ -46,9 +46,11 @@ SpeedController::SpeedController(const SpeedControllerParams & params) : params_
   RequireFinitePositive(params_.max_decel_mps2, kParams, "max_decel_mps2");
 }
 
-double SpeedController::update(double target_speed_mps, double measured_speed_mps, double dt_s)
+double SpeedController::update(
+  double target_speed_mps, double feedforward_accel_mps2, double measured_speed_mps, double dt_s)
 {
   RequireFinite(target_speed_mps, kController, "target_speed_mps");
+  RequireFinite(feedforward_accel_mps2, kController, "feedforward_accel_mps2");
   RequireFinite(measured_speed_mps, kController, "measured_speed_mps");
   RequireFinite(dt_s, kController, "dt_s");
   if (dt_s < 0.0) {
@@ -83,7 +85,12 @@ double SpeedController::update(double target_speed_mps, double measured_speed_mp
   //    将来若加一个"把积分重置成某个非零值"的接口、或者运行期改限幅，
   //    完全冻结就会真的卡住。**但别以为现在有测试在保护这个区别 —— 没有。**
   const double candidate_integral_ms = integral_ms_ + error_mps * dt_s;
-  const double raw_accel_mps2 = params_.proportional_gain_inv_s * error_mps +
+  // 前馈直接加在输出上，**不经过任何增益** —— 它已经是加速度量纲了。
+  // 代入闭环 v̇ = a、误差 e = v_ref − v：
+  //     ė = v̇_ref − a_ff − K_p·e − K_i·∫e = −K_p·e − K_i·∫e   （当 a_ff = v̇_ref）
+  // 斜坡那一项被整个消掉，剩下的才是反馈该管的偏差。
+  const double raw_accel_mps2 = feedforward_accel_mps2 +
+                                params_.proportional_gain_inv_s * error_mps +
                                 params_.integral_gain_inv_s2 * candidate_integral_ms;
 
   accel_mps2_ = std::clamp(raw_accel_mps2, -params_.max_decel_mps2, params_.max_accel_mps2);

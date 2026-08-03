@@ -122,6 +122,35 @@ double SpeedProfile::speed_at(const PathProjection & projection) const
   return speed_at(projection.index, projection.ratio);
 }
 
+double SpeedProfile::target_accel_at(const PathProjection & projection) const
+{
+  return target_accel_at(projection.index, projection.ratio);
+}
+
+double SpeedProfile::target_accel_at(std::size_t index, double ratio) const
+{
+  (void)ratio;  // v² 在段内线性 → 它的斜率是常数，与段内位置无关
+  if (index + 1 >= speeds_mps_.size()) {
+    throw std::out_of_range(
+      "SpeedProfile::target_accel_at: 线段索引 " + std::to_string(index) + " 超出剖面范围（共 " +
+      std::to_string(speeds_mps_.size()) + " 点）。换路径时必须同时换剖面。");
+  }
+  const double delta_s_m = arc_lengths_m_[index + 1] - arc_lengths_m_[index];
+  // 构造时已拒掉所有过短的段（TrackedPath::kMinSpacingM），这里只是除零兜底。
+  if (delta_s_m <= 0.0) {
+    return 0.0;
+  }
+  // a_ref = ½ · d(v²)/ds。
+  //
+  // 由 v² = v₀² + 2a·Δs 直接得来 —— 这正是剖面**构造时**用的那条关系，
+  // 所以在任何一个被扫描卡住的段上，它给出的**恰好**是 ±a_dec / ±a_acc，
+  // 是闭式解不是近似。巡航段 v 恒定 → d(v²)/ds = 0 → 前馈为 0。
+  const double speed_squared_gradient =
+    (speeds_mps_[index + 1] * speeds_mps_[index + 1] - speeds_mps_[index] * speeds_mps_[index]) /
+    delta_s_m;
+  return 0.5 * speed_squared_gradient;
+}
+
 double SpeedProfile::speed_at(std::size_t index, double ratio) const
 {
   if (index + 1 >= speeds_mps_.size()) {
@@ -129,10 +158,19 @@ double SpeedProfile::speed_at(std::size_t index, double ratio) const
       "SpeedProfile::speed_at: 线段索引 " + std::to_string(index) + " 超出剖面范围（共 " +
       std::to_string(speeds_mps_.size()) + " 点）。剖面和路径对不上了 —— 换路径时必须同时换剖面。");
   }
-  // 线性插值。剖面本身是按 v² 的约束构造的，所以对 v 线性插值并不精确满足约束，
-  // 误差是 O(Δs²) 且**偏保守**（弦在弧下方）。0.5 m 点距下量级是 mm/s，忽略。
+  // ⚠️ 插值的是 **v² 而不是 v**，这一条是 S4 补前馈时改的，理由很实在：
+  //
+  //    剖面从头到尾是用 v² = v₀² + 2a·Δs 构造的，所以**在每个被扫描卡住的段上
+  //    v² 都严格线性**。插 v² 再开方 = 精确复现那条 √ 曲线；插 v 则是拿弦去
+  //    近似一条曲线，越接近终点（v 越小、曲线越陡）误差越大。
+  //
+  //    对速度本身影响不大（mm/s 量级），但**对前馈是致命的**：前馈是这条曲线的
+  //    斜率，而弦的斜率在末端偏差可达 0.5 m/s²（实测），正好落在最需要它准的地方。
+  //    改成插 v² 之后前馈变成闭式解 ½·d(v²)/ds ≡ −a_dec。
   const double clamped_ratio = std::clamp(ratio, 0.0, 1.0);
-  return speeds_mps_[index] + clamped_ratio * (speeds_mps_[index + 1] - speeds_mps_[index]);
+  const double lo_squared = speeds_mps_[index] * speeds_mps_[index];
+  const double hi_squared = speeds_mps_[index + 1] * speeds_mps_[index + 1];
+  return std::sqrt(lo_squared + clamped_ratio * (hi_squared - lo_squared));
 }
 
 }  // namespace ads_control
