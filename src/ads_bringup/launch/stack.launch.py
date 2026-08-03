@@ -46,6 +46,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+import yaml
 
 # 仿真数据源注册表：sim 参数值 → (包名, launch 文件名)。
 #
@@ -111,8 +112,55 @@ def _resolve_sim_source(context, *args, **kwargs):
     ]
 
 
+def control_node_params() -> dict:
+    """
+    control_node 的全部参数，来自两个 YAML 且**不引入任何新数字**.
+
+    分工是刻意的，判据是「换一辆车它会不会变」：
+
+      * vehicle_params.yaml —— **车能做什么**（轴距、转角、转向速率、加减速）。
+        换车会变，所以它必须和 Gazebo/CARLA 用同一份，否则就是 SPEC §4.1
+        的头号风险「行为漂移」：本地调好的参数一上 CARLA 就震荡，
+        而你分不清是算法错了还是环境不同。
+      * control_params.yaml —— **我们想怎么开**（增益、限速策略、安全阈值）。
+        换车不变，换驾驶风格才变。
+
+    参数名保持与 YAML 的层级一致，这样看到日志里的参数名就知道去哪一段改。
+
+    :return: 传给 control_node 的参数字典
+    """
+    share = Path(get_package_share_directory('ads_control')) / 'config'
+    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
+    control = yaml.safe_load((share / 'control_params.yaml').read_text(encoding='utf-8'))
+
+    geo = vehicle['geometry']
+    lim = vehicle['limits']
+    return {
+        # 车辆能力 —— 控制器不得重新定义
+        'geometry.wheelbase_m': geo['wheelbase_m'],
+        'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
+        'limits.max_steer_rate_rad_s': lim['max_steer_rate_rad_s'],
+        'limits.cruise_speed_mps': lim['cruise_speed_mps'],
+        'limits.max_accel_mps2': lim['max_accel_mps2'],
+        # ⚠️ 注意用的是 max_decel（3.0，舒适约束）而**不是** emergency_decel（5.0，
+        #    物理能力）。后者只允许安全模块下发；常规控制器自己不得越过 3.0。
+        'limits.max_decel_mps2': lim['max_decel_mps2'],
+        # 控制器调参
+        'lateral.gain': control['lateral']['gain'],
+        'lateral.soft_speed_mps': control['lateral']['soft_speed_mps'],
+        'lateral.search_window': control['lateral']['search_window'],
+        'longitudinal.kp': control['longitudinal']['kp'],
+        'longitudinal.ki': control['longitudinal']['ki'],
+        'profile.max_lateral_accel_mps2': control['profile']['max_lateral_accel_mps2'],
+        'goal.stop_distance_m': control['goal']['stop_distance_m'],
+        'safety.max_lateral_error_m': control['safety']['max_lateral_error_m'],
+        'safety.odom_timeout_s': control['safety']['odom_timeout_s'],
+        'control_rate_hz': control['control_rate_hz'],
+    }
+
+
 def generate_launch_description():
-    """装配全栈：仿真数据源 + （待 P2 起）算法节点."""
+    """装配全栈：仿真数据源 + 算法节点（P1 地图、P2 控制）."""
     return LaunchDescription([
         DeclareLaunchArgument(
             'sim', default_value='gazebo',
@@ -160,6 +208,23 @@ def generate_launch_description():
             name='map_node',
             # SPEC §5：所有节点 use_sim_time=true，禁止用墙钟做算法时序。
             parameters=[{'use_sim_time': True}],
+            output='screen',
+        ),
+
+        # P2：路径跟踪控制（横向 Stanley + 纵向速度剖面/PI）。
+        #
+        # 它同样对仿真源**一无所知** —— 只订阅 /route/path、/odom 和 TF，
+        # 只发 /vehicle_cmd。这三个都是 SPEC §4.1 的规范话题，
+        # 所以 sim:=carla 那天它也一行不用改。
+        #
+        # ⚠️ 参数**全部**从 YAML 读，这个文件里一个数字都不写。
+        #    在 launch 里写死"顺手改一下试试"的那个值，是参数漂移最常见的起点：
+        #    它不在任何一个 config 文件里，grep 不到，而且会盖掉 YAML。
+        Node(
+            package='ads_control',
+            executable='control_node',
+            name='control_node',
+            parameters=[control_node_params(), {'use_sim_time': True}],
             output='screen',
         ),
     ])

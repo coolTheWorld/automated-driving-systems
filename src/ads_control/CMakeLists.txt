@@ -51,6 +51,53 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 
 # -----------------------------------------------------------------------------
+# 节点：ROS 包装层（P2-S4）
+# -----------------------------------------------------------------------------
+# 这一层**只做翻译**：ROS 消息 ↔ lib 的调用。控制算法一行都不在这里，
+# 所以它没有自己的单元测试也不可怕 —— 该测的都在 lib 的 71 个 L1 用例里。
+find_package(rclcpp REQUIRED)
+find_package(ads_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+
+add_executable(control_node node/control_node.cpp)
+target_link_libraries(control_node ${PROJECT_NAME})
+ament_target_dependencies(control_node
+  rclcpp
+  ads_msgs
+  geometry_msgs
+  nav_msgs
+  visualization_msgs
+  diagnostic_msgs
+  tf2
+  tf2_geometry_msgs
+  tf2_ros)
+
+install(TARGETS control_node
+  DESTINATION lib/${PROJECT_NAME})
+
+# 控制器自己的调参装进本包 share。
+#
+# ⚠️ **车辆能力参数（轴距/转角/加减速）不在这里**，它们在
+#    config/vehicle_params.yaml，由 launch 搬运。两份参数文件的分工是
+#    「车能做什么」vs「我们想怎么开」—— 混在一起的话，换一辆车要去
+#    控制参数里翻，而那正是 SPEC §4.1「行为漂移」的温床。
+#
+# 车辆参数也装一份进来（**符号链接，不是拷贝**，SPEC §4.1 的单一来源仍成立）。
+# 与 gazebo_bridge / ads_map 装它们各自需要的文件是同一个理由：
+# ROS 包安装后必须**自包含**，不能依赖"工作区恰好挂在 /workspace"这种
+# 只在本容器成立的假设 —— 云端那侧路径就不一样。
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/control_params.yaml
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/vehicle_params.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
+
+# -----------------------------------------------------------------------------
 # 测试
 # -----------------------------------------------------------------------------
 if(BUILD_TESTING)
