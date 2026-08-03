@@ -26,7 +26,9 @@ find_package(ads_common REQUIRED)
 # 靠脚本维持的不会。P2-S4 的 verify_control.sh 会 ldd 这个 .so。
 add_library(${PROJECT_NAME} SHARED
   src/path_tracking.cpp
-  src/stanley.cpp)
+  src/stanley.cpp
+  src/speed_profile.cpp
+  src/speed_controller.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -74,6 +76,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_stanley ${PROJECT_NAME} ads_common::ads_common)
   # 夹具头文件与被测头文件不在同一目录，给测试单独加 test/ 到搜索路径。
   target_include_directories(test_stanley PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+
+  # L1：速度剖面（曲率限速 + 前后向扫描）。纯几何，判据全是闭式解。
+  ament_add_gtest(test_speed_profile test/test_speed_profile.cpp)
+  target_link_libraries(test_speed_profile ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：速度环 PI + 抗饱和。含 gazebo_bridge 那段"设定值超前实测不得超过 1 m/s"
+  # 的抗饱和环节建模 —— 见 docs/modules/control.md §4.5。
+  ament_add_gtest(test_speed_controller test/test_speed_controller.cpp)
+  target_link_libraries(test_speed_controller ${PROJECT_NAME})
 endif()
 
 ament_package()
