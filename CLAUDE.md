@@ -97,6 +97,25 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 
 `screen 0 does not appear to be DRI3 capable` 是**干扰项**，宿主也报，与硬件加速无关。
 
+### ⚠️ 本机有硬件 OpenGL，但**没有硬件 Vulkan**（2026-08-03 实测）
+
+这两件事在 WSL 下走**完全不同的路**，极易混为一谈：
+
+| | 通路 | 本机状态 |
+|---|---|---|
+| **OpenGL** | Mesa 的 **d3d12** Gallium 驱动 → `/dev/dxg` | ✅ 硬件加速（`verify_gpu.sh` 全过，Radeon 780M，16.5 GB） |
+| **Vulkan** | 需要 Mesa 的 **`dzn`**（Vulkan-on-D3D12） | ❌ **只有 `llvmpipe`（CPU 软件光栅化）** |
+
+`/usr/share/vulkan/icd.d/` 里有 `radeon_icd.json`，但 RADV 绑不上 —— WSL 不暴露
+`amdgpu` 内核驱动，GPU 通路是 `dxg`。而 `dzn_icd.json` 没有。
+
+**后果**：**CARLA 强制要求 Vulkan，所以它在本机跑不了**（llvmpipe 下是秒级每帧）。
+这正是 SPEC §4.1 把环境 B 放在云端的直接原因 —— 现在这条有实测依据，不再是假设。
+
+> **别看到 `verify_gpu.sh` 全过就以为 Vulkan 也行。** 那个脚本只验 OpenGL。
+> 零安装的验法（不往宿主装 `vulkan-tools`）：用 ctypes 调 `libvulkan.so.1` 的
+> `vkCreateInstance` + `vkEnumeratePhysicalDevices`，看设备类型是不是 `CPU`。
+
 ### 仿真进程与测量的陷阱（S3 实测，会重复踩）
 
 | 陷阱 | 症状 | 处理 |
@@ -210,6 +229,11 @@ ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false
 python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/run.csv
 # 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
 python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
+
+# ---------- P0b 方案 B：CARLA 最小对齐验证（需要云 GPU，本机跑不了）----------
+# 上机手册见 docs/p0b_minimal_alignment.md。**本机只有软件 Vulkan**，见环境陷阱表。
+python3 scripts/carla_align_vehicle.py --dry-run        # 验单位换算，不需要 CARLA
+python3 scripts/carla_align_vehicle.py --host 127.0.0.1 # 需要 CARLA 0.9.16
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
