@@ -18,9 +18,9 @@
 // =============================================================================
 //  纵向：速度环 —— 纯 C++17，**不依赖 ROS**
 //
-//      a = K_p·(v_ref − v) + K_i·∫(v_ref − v)dt      然后限幅到 [−a_dec, +a_acc]
+//      a = a_ff + K_p·(v_ref − v) + K_i·∫(v_ref − v)dt   然后限幅到 [−a_dec, +a_acc]
 //
-//  完整推导见 docs/modules/control.md §4.4–§4.5。三条反直觉的：
+//  完整推导见 docs/modules/control.md §4.4–§4.5。四条反直觉的：
 //
 //  1. **纯 P 对常值目标速度就没有稳态误差。** 因为被控对象本身是个积分器
 //     （控制器输出加速度，而 a = v̇）。闭环 `v̇ = K_p·(v_ref − v)` 是一阶滞后，
@@ -36,6 +36,14 @@
 //  3. **即便 `K_i = 0` 也要把抗饱和写进去。** 因为它一旦被调成非零，
 //     没有抗饱和的积分器会在限幅期间一路累积，症状是**松开限幅后车猛窜**，
 //     而那时人只会觉得"增益调大了"。结构上留好比事后补便宜得多。
+//
+//  4. **第 1 条只对**常值**目标成立，而速度剖面是**斜坡**。**
+//     一阶系统跟踪斜坡的稳态误差 = 斜率 / `K_p`，本项目里是 `3.0/1.0 = 3.0 m/s`。
+//     S4 闭环实测：车到终点时还有 4.36 m/s、冲过去 4.26 m，
+//     而且同一个原因还把最大横向加速度顶到 2.113（入弯超速 0.85 m/s）。
+//     **解法是加速度前馈 `a_ff`，不是调大 `K_p`** —— 后者只能按比例减小误差，
+//     还会同时放大噪声、更早撞上限幅。`a_ff` 由 `SpeedProfile::target_accel_at()`
+//     给出，代入后闭环变成 `ė = −K_p·e`，误差指数收敛到 0。
 //
 //  ⚠️ 本层**只做速度环**，没有加速度内环。SPEC §3.2 写的是双闭环 ——
 //     这是 2026-08-01 拍板的取舍：当前链路上加速度内环没有可闭合的对象
@@ -90,11 +98,18 @@ public:
 
   /// @brief 走一拍。
   ///
-  /// @param target_speed_mps   期望速度（查 `SpeedProfile` 得到），m/s。
+  /// @param target_speed_mps   期望速度（查 `SpeedProfile::speed_at`），m/s。
+  /// @param feedforward_accel_mps2 剖面自身要求的加速度
+  ///                           （`SpeedProfile::target_accel_at`），m/s²。
+  ///                           **常值目标时传 0**。
   /// @param measured_speed_mps 实测速度（来自 `/odom`），m/s。
   /// @param dt_s               距上一拍的时间间隔，s，**必须用节点时钟**（SPEC §3.3）。
   /// @return 加速度指令，m/s²，已限幅到 `[−max_decel, +max_accel]`。
   /// @throw std::invalid_argument 任一入参非有限；或 `dt_s < 0`。
+  ///
+  /// @note **前馈是必填参数，没有默认值 0。** 给个默认值的话，调用方
+  ///       "忘了传"和"确实是常值目标"就再也分不开了 —— 而前者的症状是
+  ///       车入弯偏快、终点冲过头，恰好又是那种"看着像要调参"的表现。
   ///
   /// @note **抗饱和用的是条件积分**：输出饱和、且误差还在往饱和方向推时，
   ///       这一拍**不积分**。
@@ -107,7 +122,8 @@ public:
   /// @note 非有限入参一律抛异常。积分是**持久状态**，一拍的 NaN 会让控制器
   ///       永久输出 NaN。现场表现是「车自己停了」，而错在上游 ——
   ///       见 CLAUDE.md 陷阱表「用比较去拦非有限值」。
-  double update(double target_speed_mps, double measured_speed_mps, double dt_s);
+  double update(
+    double target_speed_mps, double feedforward_accel_mps2, double measured_speed_mps, double dt_s);
 
   /// @brief 清空积分状态。
   void reset() noexcept { integral_ms_ = 0.0; }

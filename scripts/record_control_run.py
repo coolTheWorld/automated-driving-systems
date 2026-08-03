@@ -57,7 +57,8 @@ CRITERIA = {
 
 FIELDS = [
     'time_s', 'state', 'lateral_error_m', 'heading_error_rad', 'curvature_inv_m',
-    'path_s_m', 'path_remaining_m', 'goal_distance_m', 'target_speed_mps', 'measured_speed_mps',
+    'path_s_m', 'path_remaining_m', 'goal_distance_m', 'target_speed_mps',
+    'feedforward_accel_mps2', 'measured_speed_mps',
     'steer_angle_rad', 'accel_mps2', 'cycle_time_ms',
 ]
 

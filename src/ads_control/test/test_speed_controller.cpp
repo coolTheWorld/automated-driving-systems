@@ -161,13 +161,13 @@ TEST(SpeedControllerInputs, NonFiniteInputThrowsAndLeavesTheIntegralUnpoisoned)
   SpeedControllerParams params = DefaultParams();
   params.integral_gain_inv_s2 = 0.5;
   SpeedController controller(params);
-  controller.update(2.0, 1.0, kControlDtS);
+  controller.update(2.0, 0.0, 1.0, kControlDtS);
   const double before_ms = controller.integral_ms();
 
-  EXPECT_THROW(controller.update(std::nan(""), 1.0, kControlDtS), std::invalid_argument);
-  EXPECT_THROW(controller.update(2.0, HUGE_VAL, kControlDtS), std::invalid_argument);
-  EXPECT_THROW(controller.update(2.0, 1.0, std::nan("")), std::invalid_argument);
-  EXPECT_THROW(controller.update(2.0, 1.0, -kControlDtS), std::invalid_argument);
+  EXPECT_THROW(controller.update(std::nan(""), 0.0, 1.0, kControlDtS), std::invalid_argument);
+  EXPECT_THROW(controller.update(2.0, 0.0, HUGE_VAL, kControlDtS), std::invalid_argument);
+  EXPECT_THROW(controller.update(2.0, 0.0, 1.0, std::nan("")), std::invalid_argument);
+  EXPECT_THROW(controller.update(2.0, 0.0, 1.0, -kControlDtS), std::invalid_argument);
 
   EXPECT_TRUE(std::isfinite(controller.integral_ms()));
   EXPECT_NEAR(controller.integral_ms(), before_ms, 1e-15);
@@ -178,9 +178,9 @@ TEST(SpeedControllerInputs, ZeroTimeStepDoesNotAdvanceTheIntegral)
   SpeedControllerParams params = DefaultParams();
   params.integral_gain_inv_s2 = 0.5;
   SpeedController controller(params);
-  controller.update(2.0, 1.0, kControlDtS);
+  controller.update(2.0, 0.0, 1.0, kControlDtS);
   const double before_ms = controller.integral_ms();
-  controller.update(2.0, 1.0, 0.0);
+  controller.update(2.0, 0.0, 1.0, 0.0);
   EXPECT_NEAR(controller.integral_ms(), before_ms, 1e-15);
 }
 
@@ -190,7 +190,7 @@ TEST(SpeedControllerInputs, ResetClearsTheIntegral)
   params.integral_gain_inv_s2 = 0.5;
   SpeedController controller(params);
   for (int i = 0; i < 50; ++i) {
-    controller.update(2.0, 1.0, kControlDtS);
+    controller.update(2.0, 0.0, 1.0, kControlDtS);
   }
   ASSERT_GT(controller.integral_ms(), 0.0);
   controller.reset();
@@ -210,7 +210,7 @@ TEST(IdealPlant, PureProportionalHasNoSteadyStateError)
   IdealIntegratorPlant plant;
 
   for (int i = 0; i < 1000; ++i) {  // 20 s
-    plant.step(controller.update(kCruiseSpeedMps, plant.speed_mps, kControlDtS), kControlDtS);
+    plant.step(controller.update(kCruiseSpeedMps, 0.0, plant.speed_mps, kControlDtS), kControlDtS);
   }
   const double residual_mps = std::abs(kCruiseSpeedMps - plant.speed_mps);
   std::cout << "  [纵向] 纯 P（K_i=0）20 s 后稳态误差 " << residual_mps * 1e3 << " mm/s\n";
@@ -231,7 +231,7 @@ TEST(IdealPlant, TheClosedLoopTimeConstantIsOneOverKp)
   const int steps_for_one_tau =
     static_cast<int>(std::lround(1.0 / kProportionalGainInvS / kControlDtS));
   for (int i = 0; i < steps_for_one_tau; ++i) {
-    const double accel_mps2 = controller.update(kStepMps, plant.speed_mps, kControlDtS);
+    const double accel_mps2 = controller.update(kStepMps, 0.0, plant.speed_mps, kControlDtS);
     ASSERT_LE(std::abs(accel_mps2), kMaxAccelMps2) << "阶跃选大了，撞到限幅就测不到时间常数";
     plant.step(accel_mps2, kControlDtS);
   }
@@ -248,13 +248,70 @@ TEST(IdealPlant, OutputIsClampedToTheComfortLimitsNotThePhysicalOnes)
   SpeedController controller(DefaultParams());
 
   // 一个巨大的正误差 → 顶到 +1.5，不会更高。
-  EXPECT_NEAR(controller.update(100.0, 0.0, kControlDtS), kMaxAccelMps2, 1e-12);
+  EXPECT_NEAR(controller.update(100.0, 0.0, 0.0, kControlDtS), kMaxAccelMps2, 1e-12);
 
   // 一个巨大的负误差 → 顶到 **−3.0**，**不是** bridge 允许的 −5.0。
   // −5.0 是车辆的物理能力，只有安全模块可以下发；常规控制器自己不得越过 −3.0。
   // 写反的话不会有任何一层拦下来 —— bridge 按 −5.0 截断，正好放行。
   controller.reset();
-  EXPECT_NEAR(controller.update(0.0, 100.0, kControlDtS), -kMaxDecelMps2, 1e-12);
+  EXPECT_NEAR(controller.update(0.0, 0.0, 100.0, kControlDtS), -kMaxDecelMps2, 1e-12);
+}
+
+// =============================================================================
+//  ① 之二：加速度前馈 —— 斜坡目标（S4 补）
+// =============================================================================
+
+TEST(IdealPlant, PureProportionalCannotTrackARampAndFeedforwardFixesIt)
+{
+  // §4.4 那条「纯 P 没有稳态误差」只对**常值**目标成立。速度剖面不是常值：
+  // 入弯前和终点前都是按 √(2a·Δs) 下降的，换算成时间就是一条斜率 −a_dec 的斜坡。
+  //
+  // 一阶系统跟踪斜坡的稳态误差 = 斜率 / K_p = 3.0 / 1.0 = **3.0 m/s**。
+  // S4 闭环实测就是这么冲过终点 4.26 m 的，而同一个原因还把最大横向加速度
+  // 顶到 2.113（入弯超速 0.85 m/s）。
+  //
+  // 这条用例把「有没有前馈」这一个因素单独摘出来：同一条斜坡跑两遍。
+  // ⚠️ 斜率取 −1.0 而不是真实的 a_dec = −3.0，是为了让斜坡**跑得够久**：
+  //    稳态误差要 3 个时间常数（3/K_p = 3 s）才建立起来，而 −3.0 的斜坡
+  //    从巡航 5.556 降到 0 只有 1.85 s —— 那时误差才走到理论值的 78%
+  //    （实测 2.29 / 3.0），拿它当"稳态"是测错了东西。
+  //
+  //    这件事本身值得记一笔：**真实终点的减速段短到误差根本来不及收敛**，
+  //    而且 v_ref = √(2a·剩余) 在末端的**时间**斜率是发散的
+  //    （dv_ref/dt = −a·v/v_ref，v_ref → 0），所以 S4 实测的末端误差
+  //    4.36 m/s 比"稳态"的 3.0 还大 —— 不矛盾，是同一件事的更极端版本。
+  constexpr double kRampSlopeMps2 = -1.0;
+  constexpr double kStartSpeedMps = 8.0;
+
+  auto run = [](bool use_feedforward) {
+    SpeedController controller(DefaultParams());
+    IdealIntegratorPlant plant;
+    plant.speed_mps = kStartSpeedMps;
+    double reference_mps = kStartSpeedMps;
+    double worst_error_mps = 0.0;
+    // 跑 5 s：斜坡从 8.0 降到 3.0，全程不触加速度限幅（|a| ≤ 3.0）。
+    for (int i = 0; i < 250; ++i) {
+      reference_mps += kRampSlopeMps2 * kControlDtS;
+      const double accel_mps2 = controller.update(
+        reference_mps, use_feedforward ? kRampSlopeMps2 : 0.0, plant.speed_mps, kControlDtS);
+      plant.step(accel_mps2, kControlDtS);
+      if (i > 200) {  // 前 4 s（4 个时间常数）是暂态，只看之后的稳态
+        worst_error_mps = std::max(worst_error_mps, std::abs(reference_mps - plant.speed_mps));
+      }
+    }
+    return worst_error_mps;
+  };
+
+  const double without_ff_mps = run(false);
+  const double with_ff_mps = run(true);
+  std::cout << "  [前馈] 斜坡稳态误差：无前馈 " << without_ff_mps << " m/s（理论 "
+            << std::abs(kRampSlopeMps2) / kProportionalGainInvS << "），有前馈 " << with_ff_mps
+            << " m/s\n";
+
+  // ① 没有前馈时，误差必须逼近理论值 斜率/K_p —— 否则这条用例证明不了机理。
+  EXPECT_NEAR(without_ff_mps, std::abs(kRampSlopeMps2) / kProportionalGainInvS, 0.1);
+  // ② 有前馈时误差被整个消掉（只剩离散化残渣）。
+  EXPECT_LT(with_ff_mps, 0.05);
 }
 
 // =============================================================================
@@ -277,7 +334,7 @@ TEST(AntiWindup, TheIntegralStopsGrowingOnceTheOutputSaturates)
   plant.vehicle_follows_setpoint = false;  // 顶着墙：实测速度恒为 0
 
   for (int i = 0; i < 500; ++i) {  // 10 s
-    plant.step(controller.update(1.0, plant.measured_mps, kControlDtS), kControlDtS);
+    plant.step(controller.update(1.0, 0.0, plant.measured_mps, kControlDtS), kControlDtS);
   }
   const double naive_integral_ms = 1.0 * 10.0;  // 无条件积分会累到 ∫1.0 dt = 10 m
   const double expected_freeze_ms = (kMaxAccelMps2 - 0.2 * 1.0) / 0.5;
@@ -304,13 +361,13 @@ TEST(AntiWindup, TheIntegralResumesOnceTheOutputLeavesSaturation)
   SpeedController controller(params);
 
   for (int i = 0; i < 500; ++i) {  // 先积到饱和并冻结
-    controller.update(1.0, 0.0, kControlDtS);
+    controller.update(1.0, 0.0, 0.0, kControlDtS);
   }
   const double frozen_ms = controller.integral_ms();
   ASSERT_GT(frozen_ms, 2.0);
 
   // 目标突然低于实测（比如进了弯道，剖面要求减速）→ 误差变号。
-  controller.update(0.0, 1.0, kControlDtS);
+  controller.update(0.0, 0.0, 1.0, kControlDtS);
   EXPECT_LT(controller.integral_ms(), frozen_ms) << "反向误差被一起冻住了，退饱和会滞后";
 }
 
@@ -337,9 +394,9 @@ TEST(AntiWindup, WithoutAntiWindupTheReleaseOvershootIsMuchWorse)
       if (i == 500) {                 // 10 s 后阻力消失
         plant.vehicle_follows_setpoint = true;
       }
-      const double accel_mps2 = use_anti_windup
-                                  ? controller.update(kTargetMps, plant.measured_mps, kControlDtS)
-                                  : naive.update(kTargetMps, plant.measured_mps, kControlDtS);
+      const double accel_mps2 =
+        use_anti_windup ? controller.update(kTargetMps, 0.0, plant.measured_mps, kControlDtS)
+                        : naive.update(kTargetMps, plant.measured_mps, kControlDtS);
       plant.step(accel_mps2, kControlDtS);
       if (i > 500) {
         peak_mps = std::max(peak_mps, plant.measured_mps);
@@ -373,7 +430,8 @@ TEST(BridgePlant, TheSetpointLeadCapOnlyBindsWhenTheVehicleCannotFollow)
     BridgeSpeedPlant plant;  // 正常跟随
     bool ever_bound = false;
     for (int i = 0; i < 500; ++i) {  // 10 s，从 0 加到巡航
-      plant.step(controller.update(kCruiseSpeedMps, plant.measured_mps, kControlDtS), kControlDtS);
+      plant.step(
+        controller.update(kCruiseSpeedMps, 0.0, plant.measured_mps, kControlDtS), kControlDtS);
       ever_bound = ever_bound || plant.lead_cap_was_binding;
     }
     EXPECT_FALSE(ever_bound) << "车能跟上时不该碰到超前上限";
@@ -387,7 +445,8 @@ TEST(BridgePlant, TheSetpointLeadCapOnlyBindsWhenTheVehicleCannotFollow)
     plant.vehicle_follows_setpoint = false;
     double bound_at_s = -1.0;
     for (int i = 0; i < 500; ++i) {
-      plant.step(controller.update(kCruiseSpeedMps, plant.measured_mps, kControlDtS), kControlDtS);
+      plant.step(
+        controller.update(kCruiseSpeedMps, 0.0, plant.measured_mps, kControlDtS), kControlDtS);
       if (plant.lead_cap_was_binding && bound_at_s < 0.0) {
         bound_at_s = (i + 1) * kControlDtS;
       }
