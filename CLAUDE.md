@@ -145,13 +145,17 @@ Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
 
-`ads_control`（P2，**建设中**）目前**只有 `lib/path_tracking`**：弧长参数化、
-逐点曲率、最近点局部搜索、横向/航向误差。Stanley（S2）、速度规划与 PID（S3）、
-`node/control_node.cpp`（S4）**都还没有**。`libads_control.so` 同样零 ROS 依赖，
-且**不依赖 `ads_map`** —— 两者是 SPEC §3.3 意义上的两个模块，只通过 ROS 话题通信。
+`ads_control`（P2，**建设中**）目前有 **`lib/path_tracking`**（弧长参数化、逐点曲率、
+最近点局部搜索、横向/航向误差）和 **`lib/stanley`**（前轴换算 + 控制律 +
+转角/转向速率双重限幅）。速度规划与 PID（S3）、`node/control_node.cpp`（S4）
+**都还没有**。`libads_control.so` 同样零 ROS 依赖，且**不依赖 `ads_map`** ——
+两者是 SPEC §3.3 意义上的两个模块，只通过 ROS 话题通信。
 推导与参数见 [docs/modules/control.md](docs/modules/control.md)，**改这个模块前先读它**：
 里面有三条「做错了不会报错，只会给出一个看起来能开的车」的结论
-（前轴换算、按弧长而非点数、**不要加曲率前馈**）。
+（前轴换算、按弧长而非点数、**不要加曲率前馈**），每一条都有专门的**闭环反例用例**
+守着（用后轴 → 外偏 1.182 m；加前馈 → 稳态 1.400 m）。
+另有一条 S2 实测出来的跨模块耦合：**转向速率限幅起作用的临界车速是 `v* = R·rate`**
+（R=8 上 = 4.0 m/s），而 `a_lat_max` 调到 2.0 时曲率限速恰好就是 4.0 —— 见 §3.7。
 
 ```bash
 # ---------- 构建（容器内） ----------
@@ -176,7 +180,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 285 tests）
+colcon test && colcon test-result --all      # 全量：lint + L1 单元测试（当前 329 tests）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
@@ -184,12 +188,13 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_map/test_lane_graph              # 车道图：18 节点 / 24 边 + 每条边的几何连续性
 ./build/ads_map/test_routing                 # Dijkstra：路径与长度 vs 穷举脚本
 ./build/ads_control/test_path_tracking       # 弧长/曲率/最近点，全部 vs 解析解（P2-S1）
+./build/ads_control/test_stanley             # Stanley + **CP-P2-A 闭环收敛判据**（P2-S2）
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
 
 # ---------- 尚不可用（还没做到那一步） ----------
-./build/ads_control/test_stanley                    # P2-S2 才有
+./build/ads_control/test_speed_profile              # P2-S3 才有
 ros2 run ads_control control_node                   # P2-S4 才有
 ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ```
