@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_planning</name>
+  <version>0.1.0</version>
+  <description>
+    运动规划：Frenet 坐标系下横纵解耦采样（Lattice）+ 代价函数排序 + 碰撞检测（SPEC §3.2）。
+
+    输入是 /route/path（ads_map 的全局路径）、/perception/obstacles 与 TF map→base_link，
+    输出是 /planning/trajectory（含几何 + 速度 + 加速度前馈，供 ads_control 跟踪）。
+
+    交付**两个**能力，不是一个：侧向留得下就绕行，留不下就在障碍物前停住并报
+    diagnostics —— SPEC §2 第 3 条原文是「安全减速**或**绕行」。
+    「留不留得下」有一个可以事先算的不等式（障碍物左缘 ≤ W/2 − w − g），
+    见 docs/modules/planning.md §6。**放障碍物之前先算它**，不要到仿真里才发现无解。
+
+    ⚠️ 本包**不依赖 ads_map 也不依赖 ads_control**。三者是 SPEC §3.3 意义上的
+    三个模块，只通过 ROS 话题通信。共用的只有 ads_common —— 那是公共库不是模块。
+
+    按 SPEC §3.3 分层：lib/ 是纯 C++17 无 ROS 依赖的算法，node/ 是 ROS 包装层
+    （node/ 在 P3-S5 才出现，现在只有 lib/）。
+    数学推导、参数含义与已知边界见 docs/modules/planning.md。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 参考线几何（弧长参数化、逐点曲率、最近点投影）与角度工具。
+       本仓库自己的纯 C++ 公共库，不是第三方依赖，且它同样禁止链接 ROS。
+
+       为什么规划器一定要用它而不是自己写一份：ReferenceLine::project() 返回的
+       lateral_error_m 就是 Frenet 的 d、s_m 就是 s —— 同一个量。自己再写一份的话，
+       两份对「弧长按实际点距累加」「角度差要过 angle_diff」的理解会漂移，
+       症状是控制器和规划器对同一个位置算出不同的横向偏移，而两边各自都自洽。 -->
+  <depend>ads_common</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <!-- L1 测试用 gtest：坐标变换与采样全部脱离 ROS 测，毫秒级。 -->
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

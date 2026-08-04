@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "ads_common/angles.hpp"
@@ -35,6 +36,7 @@
 namespace
 {
 
+using ads_common::PathPoint;
 using ads_common::PathProjection;
 using ads_common::Pose2D;
 using ads_common::ReferenceLine;
@@ -389,6 +391,95 @@ TEST(TrackedPathProjection, HintBeyondTheLastSegmentIsClampedRatherThanUndefined
   const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0}));
   const PathProjection projection = path.project({1.5, 0.0, 0.0}, 999u);
   EXPECT_LE(projection.index, 1u);
+}
+
+// ---------------------------------------------------------------------------
+//  at()：按弧长求值（P3-S1 新增，规划器的 Frenet→笛卡尔要用）
+// ---------------------------------------------------------------------------
+
+TEST(ReferenceLineAt, AgreesWithProjectionOfPointsThatLieOnTheLine)
+{
+  // 线上的点投影回来就是它自己，所以 at(projection.s_m) 必须给出同一个点。
+  // 这条把 at() 和 project() 拴在一起 —— 两者共用 interpolate()，
+  // 拆成两份实现的话，症状是同一个几何位置从两个接口拿到两个不同的朝向。
+  const ReferenceLine line(MakeLeftArc(20.0, 0.0, 0.025, 63));
+
+  for (double ratio = 0.05; ratio < 0.95; ratio += 0.11) {
+    const double s_m = ratio * line.length_m();
+    const PathPoint point = line.at(s_m);
+    const PathProjection projection = line.project({point.x_m, point.y_m, point.heading_rad});
+
+    EXPECT_NEAR(projection.s_m, s_m, 1e-9) << "s = " << s_m;
+    EXPECT_NEAR(projection.x_m, point.x_m, 1e-9) << "s = " << s_m;
+    EXPECT_NEAR(projection.y_m, point.y_m, 1e-9) << "s = " << s_m;
+    EXPECT_NEAR(projection.heading_rad, point.heading_rad, 1e-9) << "s = " << s_m;
+    EXPECT_NEAR(projection.curvature_inv_m, point.curvature_inv_m, 1e-9) << "s = " << s_m;
+    EXPECT_NEAR(projection.lateral_error_m, 0.0, 1e-9) << "s = " << s_m;
+  }
+}
+
+TEST(ReferenceLineAt, ReturnsTheRequestedArcLength)
+{
+  const ReferenceLine line(MakeStraightWithSpacings(std::vector<double>(40, 0.5)));
+  for (const double s_m : {0.0, 0.25, 7.3, 19.99}) {
+    EXPECT_NEAR(line.at(s_m).s_m, s_m, 1e-12) << "s = " << s_m;
+  }
+}
+
+TEST(ReferenceLineAt, ThrowsBeyondEitherEndInsteadOfClampingLikeProject)
+{
+  // ⚠️ **与 project() 有意不同**：project() 越界夹到端点是对的（"最近的点"确实是端点），
+  //    at() 越界抛异常也是对的（弧长 s 处根本不存在那样一个点）。
+  //    P2-S4 已经因为「投影夹到端点」误诊过一次 —— 冲过终点 4 m 与恰好停住
+  //    给出一模一样的数。所以这里让调用方显式处理，不替它做决定。
+  const ReferenceLine line(MakeStraightWithSpacings(std::vector<double>(40, 0.5)));
+
+  EXPECT_THROW(line.at(line.length_m() + 1.0), std::out_of_range);
+  EXPECT_THROW(line.at(-1.0), std::out_of_range);
+  EXPECT_THROW(line.at(std::nan("")), std::out_of_range);
+  EXPECT_THROW(line.at(std::numeric_limits<double>::infinity()), std::out_of_range);
+  EXPECT_THROW(line.at(-std::numeric_limits<double>::infinity()), std::out_of_range);
+
+  // 而 project() 在同样的越界查询下**不抛**，照样返回夹到端点的结果。
+  EXPECT_NO_THROW(line.project({100.0, 0.0, 0.0}));
+}
+
+TEST(ReferenceLineAt, ToleratesFloatingPointNoiseAtTheEndpoints)
+{
+  // 调用方常写 at(length_m())，而 length_m() 本身是浮点累加的结果，
+  // 上游再做一次乘除（比如把前视距离截断成 min(horizon, length)）就可能溢出几个 ulb。
+  // 不给容差的话，规划器每一拍在路径末端都会抛异常。
+  const ReferenceLine line(MakeStraightWithSpacings(std::vector<double>(40, 0.5)));
+  const double length_m = line.length_m();
+
+  EXPECT_NO_THROW(line.at(length_m));
+  EXPECT_NO_THROW(line.at(length_m + 1e-9));
+  EXPECT_NO_THROW(line.at(-1e-9));
+  // 但超过 kMinSpacingM（1 mm）就不再是浮点噪声，而是逻辑错误，必须抛。
+  EXPECT_THROW(line.at(length_m + 2.0 * ReferenceLine::kMinSpacingM), std::out_of_range);
+}
+
+TEST(ReferenceLineAt, InterpolatesHeadingAcrossThePiBoundaryInsteadOfFlippingIt)
+{
+  // 朝向跨 ±π 时线性插值会插到**反方向**去（例如 π−0.05 与 −π+0.05 之间
+  // 裸插得到 0，即正好掉头）。at() 与 project() 共用的 interpolate() 过 angle_diff，
+  // 所以这里必须始终在 ±π 附近。
+  //
+  // 构造：MakeLeftArc 的朝向 = φ + π/2，令 φ 扫过 π/2 即让朝向扫过 π。
+  const ReferenceLine line(MakeLeftArc(20.0, M_PI_2 - 0.3, 0.025, 25));
+
+  // ⚠️ 采样步长必须与**段长不可通约**，否则可能只采到段的端点。
+  //    初稿用「总长的 1/20」= 0.6 m 步进，而段长恰好 0.5 m，两者在 s = 6.0 处重合 ——
+  //    跨 ±π 的那一段偏偏就从 s = 6.0 开始，于是只被采到 ratio = 0 的端点，
+  //    而端点上朴素线性插值与正确插值给出**同一个值**。
+  //    故障注入（把 angle_diff 换成裸减）当时**一条用例都没红** —— 这条用例
+  //    看着在测跨 ±π，实际什么都没测。0.037 是随手取的非整除步长，只要不整除 0.5 即可。
+  for (double s_m = 0.0; s_m < line.length_m(); s_m += 0.037) {
+    const double heading_rad = line.at(s_m).heading_rad;
+    // 全程朝向都该在 π 附近（|heading| > π − 0.4），绝不该出现接近 0 的值。
+    EXPECT_GT(std::abs(heading_rad), M_PI - 0.4)
+      << "s = " << s_m << " 处朝向 " << heading_rad << " 掉到了反方向";
+  }
 }
 
 }  // namespace
