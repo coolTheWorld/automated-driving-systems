@@ -166,8 +166,11 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 SPEC §5 列出的其余包（`ads_perception`、`ads_localization`、`ads_prediction` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
-`ads_planning`（P3，**建设中**）目前只有 `lib/frenet`（Frenet ↔ 笛卡尔双向变换，
-**CP-P3-A 已达成**）。`node/planning_node.cpp` 要到 P3-S5 才有 —— 现在**起不了任何节点**。
+`ads_planning`（P3，**建设中**）目前有四个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
+**CP-P3-A 已达成**）、**`quintic`**（五次多项式，六个边界条件的闭式解）、
+**`collision`**（OBB 分离轴判交 + **精确**间距）、**`lattice`**（`d_T` × `S` 二维采样 +
+安全间距准入 + 代价排序）。`node/planning_node.cpp` 要到 P3-S5 才有 ——
+现在**起不了任何节点**。
 推导、参数与边界见 [docs/modules/planning.md](docs/modules/planning.md)，**改这个模块前先读它**。
 其中 §6 那个可行性不等式最要紧：**车道 3.5 m 装 1.8 m 的车再留 0.5 m 间距，
 障碍物左缘必须 ≤ −0.55 m 才绕得过去** —— 随手把障碍物放在车道中间是几何上无解的，
@@ -233,6 +236,9 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）
 ./build/ads_planning/test_frenet             # Frenet ↔ 笛卡尔，闭式解 + 往返一致性（**CP-P3-A**）
+./build/ads_planning/test_quintic            # 五次多项式：六个边界条件逐项复现（P3-S3）
+./build/ads_planning/test_collision          # OBB 判交 + 间距，含相切/包含/退化（P3-S3）
+./build/ads_planning/test_lattice            # 横向采样 + **§6 可行性不等式的两侧**（P3-S3）
 
 # L3-G：**不需要 GPU** 的端到端闭环（假车 + map_node + control_node），已进 CI。
 # 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。
