@@ -68,6 +68,9 @@
        只在测试时需要，所以是 test_depend —— 用 depend 会给 lib/ 引入
        一个它不该有的依赖，还会让 ads_planning ↔ ads_control 看起来像互相依赖。 -->
   <test_depend>ads_planning</test_depend>
+  <!-- L3-G 的带障碍物用例要 obstacle_truth 这个可执行文件，以及它读的
+       config/obstacles.yaml（场景的唯一来源）。只在测试时需要。 -->
+  <test_depend>gazebo_bridge</test_depend>
   <test_depend>tf2_ros</test_depend>
 
   <export>

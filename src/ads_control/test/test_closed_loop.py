@@ -35,12 +35,11 @@ L3-G（SPEC §8）：**不需要 Gazebo、不需要 GPU、能进 CI** 的端到�
 """
 
 import os
-from pathlib import Path
+import sys
 import time
 import unittest
 
 from ads_msgs.msg import VehicleCmd
-from ament_index_python.packages import get_package_share_directory
 from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import PoseStamped
 import launch
@@ -51,113 +50,20 @@ import pytest
 import rclpy
 from rclpy.node import Node as RclpyNode
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-import yaml
 
-# 自车起点：与 worlds/campus_loop.sdf 的 spawn 一致（南侧道路东行车道）。
-# 用同一个起点是有意的 —— 这样本测试和 CP-P2-B 跑的是同一条路的同一段，
-# 两者的数出现分歧时能直接对比。
-START_X_M = 30.0
-START_Y_M = -51.75
-START_YAW_RAD = 0.0
+# ⚠️ **同目录的模块必须先把这个目录加进 sys.path。** 实测过：去掉这两行，
+#    launch 测试直接 error（launch_test 按路径执行本文件，不把它所在目录入栈）。
+#    因此下面那行 import 必然在代码之后 —— E402/I100 是冲着这种写法来的，
+#    这里是**必要的例外**，所以显式 noqa 而不是去改 lint 配置
+#    （改配置会让全仓库都豁免，那就真的会有人乱放 import 了）。
+#
+#    用 sys.path 而不是 importlib 按路径加载：后者对含 @dataclass 的模块
+#    要先 sys.modules[spec.name] = module 才行（见 CLAUDE.md 陷阱表），
+#    而报错完全不提根因。能不走那条路就别走。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# 目标点：东侧道路上，绕过东南角。约 95 m，包含一个 R≈13.75 的环线弯角。
-# **刻意不选一条纯直路** —— 直路上横向误差恒为 0，投影、曲率、限速全都测不到。
-GOAL_X_M = 91.75
-GOAL_Y_M = -20.0
-
-# 假车相对墙钟的倍率。3 倍下 ~20 s 仿真 ≈ 7 s 墙钟。
-REAL_TIME_FACTOR = 3.0
-
-
-def _control_params() -> dict:
-    """
-    Collect control_node parameters from the two YAML files.
-
-    与 `stack.launch.py` 的 `control_node_params()` 同一套。
-    这里**重新读一遍**而不是 import stack.launch.py：本包不依赖 ads_bringup，
-    反过来依赖会形成环（ads_bringup 已经 exec_depend 了 ads_control）。
-    代价是这段搬运逻辑有两份 —— 但它没有算法，只是键名映射，
-    而且一旦漂移，control_node 的构造函数会指名报错（参数默认值全是 0）。
-
-    :return: 传给 control_node 的参数字典
-    """
-    share = Path(get_package_share_directory('ads_control')) / 'config'
-    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
-    control = yaml.safe_load((share / 'control_params.yaml').read_text(encoding='utf-8'))
-    lim = vehicle['limits']
-    return {
-        'geometry.wheelbase_m': vehicle['geometry']['wheelbase_m'],
-        'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
-        'limits.max_steer_rate_rad_s': lim['max_steer_rate_rad_s'],
-        'limits.max_accel_mps2': lim['max_accel_mps2'],
-        'limits.max_decel_mps2': lim['max_decel_mps2'],
-        'lateral.gain': control['lateral']['gain'],
-        'lateral.soft_speed_mps': control['lateral']['soft_speed_mps'],
-        'lateral.search_window': control['lateral']['search_window'],
-        'longitudinal.kp': control['longitudinal']['kp'],
-        'longitudinal.ki': control['longitudinal']['ki'],
-        'goal.stop_distance_m': control['goal']['stop_distance_m'],
-        'safety.max_lateral_error_m': control['safety']['max_lateral_error_m'],
-        'safety.odom_timeout_s': control['safety']['odom_timeout_s'],
-        'control_rate_hz': control['control_rate_hz'],
-        'use_sim_time': True,
-    }
-
-
-def _planning_params() -> dict:
-    """
-    Collect planning_node parameters from the two YAML files.
-
-    ⚠️ **P3-S4 起 L3-G 的链路里多了 planning_node。**
-    control_node 不再直接订阅 /route/path，而是吃 /planning/trajectory ——
-    不把规划器拉进来的话，控制器永远收不到轨迹，闭环测试会以
-    「车一直不动」的形式失败，而根因看起来像控制器坏了。
-
-    与 `stack.launch.py` 的 `planning_node_params()` 同一套，理由见 `_control_params`。
-
-    :return: 传给 planning_node 的参数字典
-    """
-    share = Path(get_package_share_directory('ads_planning')) / 'config'
-    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
-    planning = yaml.safe_load((share / 'planning_params.yaml').read_text(encoding='utf-8'))
-    geo = vehicle['geometry']
-    lim = vehicle['limits']
-    return {
-        'lateral.max_offset_m': planning['lateral']['max_offset_m'],
-        'lateral.offset_step_m': planning['lateral']['offset_step_m'],
-        'longitudinal.min_horizon_m': planning['longitudinal']['min_horizon_m'],
-        'longitudinal.max_horizon_m': planning['longitudinal']['max_horizon_m'],
-        'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],
-        'trajectory.resample_step_m': planning['trajectory']['resample_step_m'],
-        'safety.margin_m': planning['safety']['margin_m'],
-        'safety.stop_margin_m': planning['safety']['stop_margin_m'],
-        'cost.weight_offset': planning['cost']['weight_offset'],
-        'cost.weight_curvature': planning['cost']['weight_curvature'],
-        'cost.weight_clearance': planning['cost']['weight_clearance'],
-        'cost.weight_consistency': planning['cost']['weight_consistency'],
-        'vehicle.length_m': geo['length_m'],
-        'vehicle.width_m': geo['width_m'],
-        'vehicle.rear_overhang_m': geo['rear_overhang_m'],
-        'speed.cruise_speed_mps': lim['cruise_speed_mps'],
-        'speed.max_lateral_accel_mps2': planning['speed']['max_lateral_accel_mps2'],
-        'speed.max_accel_mps2': lim['max_accel_mps2'],
-        'speed.max_decel_mps2': lim['max_decel_mps2'],
-        'use_sim_time': True,
-    }
-
-
-def _vehicle_params() -> dict:
-    share = Path(get_package_share_directory('ads_control')) / 'config'
-    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
-    return {
-        'geometry.wheelbase_m': vehicle['geometry']['wheelbase_m'],
-        'limits.max_steer_angle_rad': vehicle['limits']['max_steer_angle_rad'],
-        'limits.max_speed_mps': vehicle['limits']['max_speed_mps'],
-        'initial.x_m': START_X_M,
-        'initial.y_m': START_Y_M,
-        'initial.heading_rad': START_YAW_RAD,
-        'real_time_factor': REAL_TIME_FACTOR,
-    }
+from closed_loop_common import (  # noqa: E402,I100
+    control_params, GOAL_X_M, GOAL_Y_M, planning_params, vehicle_params)
 
 
 @pytest.mark.launch_test
@@ -171,7 +77,7 @@ def generate_test_description():
         launch.actions.ExecuteProcess(
             cmd=[fake_vehicle, '--ros-args'] + [
                 arg
-                for key, value in _vehicle_params().items()
+                for key, value in vehicle_params().items()
                 for arg in ('-p', f'{key}:={value}')
             ],
             output='screen'),
@@ -193,10 +99,10 @@ def generate_test_description():
              parameters=[{'use_sim_time': True}], output='screen'),
 
         Node(package='ads_planning', executable='planning_node', name='planning_node',
-             parameters=[_planning_params()], output='screen'),
+             parameters=[planning_params()], output='screen'),
 
         Node(package='ads_control', executable='control_node', name='control_node',
-             parameters=[_control_params()], output='screen'),
+             parameters=[control_params()], output='screen'),
 
         launch_testing.actions.ReadyToTest(),
     ])

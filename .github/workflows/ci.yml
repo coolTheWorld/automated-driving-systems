@@ -172,18 +172,24 @@ jobs:
               # 它值得单独守，因为它是**唯一**能在 CI 里验节点接线（话题/QoS/TF/参数/
               # 时序）的东西 —— CP-P2-B 要 GPU 和人，L1 结构上碰不到接线。
               # /route/path 的 QoS 那个 bug 从 P1 活到 P2-S4，就是因为这一层当时不存在。
-              L3G=build/ads_control/test_results/ads_control/test_test_closed_loop.py.xunit.xml
-              if [ ! -f "${L3G}" ]; then
-                echo "✗ L3-G 闭环测试没有结果文件 —— 它没跑，而不是它通过了。"
-                echo "  期望：${L3G}"
-                exit 1
-              fi
-              L3G_COUNT=$(grep -oE "tests=\"[0-9]+\"" "${L3G}" | grep -oE "[0-9]+" | head -1 || echo 0)
-              if [ "${L3G_COUNT}" -lt 1 ]; then
-                echo "✗ L3-G 闭环测试结果文件里一个用例都没有"
-                exit 1
-              fi
-              echo "✓ L3-G 闭环（假车 + map_node + control_node）跑了 ${L3G_COUNT} 个用例"
+              #
+              # **两个** L3-G：无障碍物的（回归基线）和带障碍物的（P3 唯一能进 CI
+              # 的绕障验收）。后者尤其值得守 —— 它多依赖一个 obstacle_truth 节点
+              # 和一份 obstacles.yaml，任何一环缺了最省事的失败方式仍然是"没生成结果文件"。
+              for NAME in test_closed_loop test_closed_loop_obstacle; do
+                L3G="build/ads_control/test_results/ads_control/test_${NAME}.py.xunit.xml"
+                if [ ! -f "${L3G}" ]; then
+                  echo "✗ ${NAME} 没有结果文件 —— 它没跑，而不是它通过了。"
+                  echo "  期望：${L3G}"
+                  exit 1
+                fi
+                L3G_COUNT=$(grep -oE "tests=\"[0-9]+\"" "${L3G}" | grep -oE "[0-9]+" | head -1 || echo 0)
+                if [ "${L3G_COUNT}" -lt 1 ]; then
+                  echo "✗ ${NAME} 结果文件里一个用例都没有"
+                  exit 1
+                fi
+                echo "✓ ${NAME} 跑了 ${L3G_COUNT} 个用例"
+              done
 
               # 第五道：断言「lib/ 不许链接 ROS」的机械校验**本身**确实跑了。
               #

@@ -163,6 +163,14 @@ if(BUILD_TESTING)
     TIMEOUT 120
     ENV FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>)
 
+  # L3-G + 静态障碍物：**P3 唯一能进 CI 的绕障验收**。
+  # obstacle_truth 只从参数发布、不需要 Gazebo，所以整条链路能在 CI 里跑。
+  # 判据是 SPEC §8 场景 S04 的「侧向间距 > 0.5 m」，量的是**车体外廓** ——
+  # 拿轨迹点算的话车会一头顶上去而判据还显示"很安全"。
+  add_launch_test(test/test_closed_loop_obstacle.py
+    TIMEOUT 120
+    ENV FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——
