@@ -107,6 +107,7 @@ def _resolve_sim_source(context, *args, **kwargs):
                 'world': LaunchConfiguration('world'),
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
+                'obstacles': LaunchConfiguration('obstacles'),
             }.items(),
         ),
     ]
@@ -230,6 +231,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='是否开 RViz2'),
+        DeclareLaunchArgument(
+            'obstacles', default_value='none',
+            description=('P3 验收场景的静态障碍物：none / avoid / block。'
+                         '**默认 none** —— 那是 CP-P2-B 的回归基线，'
+                         '世界必须与 P2 时一模一样')),
 
         OpaqueFunction(function=_resolve_sim_source),
 

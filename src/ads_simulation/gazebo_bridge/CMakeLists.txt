@@ -19,6 +19,8 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(ads_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 # 传感器方向：Gazebo → ROS
 add_executable(lidar_preprocessor
@@ -39,7 +41,18 @@ ament_target_dependencies(vehicle_cmd_bridge
   nav_msgs
   ads_msgs)
 
-install(TARGETS lidar_preprocessor vehicle_cmd_bridge
+# 感知方向（**真值**）：config/obstacles.yaml → /perception/obstacles。
+# P5 接上真感知后换掉它即可，planning_node 一行不用改 ——
+# 话题名与消息类型在 P0a 就定死了，这正是提前定接口的意义。
+add_executable(obstacle_truth
+  src/obstacle_truth_node.cpp)
+ament_target_dependencies(obstacle_truth
+  rclcpp
+  ads_msgs
+  tf2
+  tf2_geometry_msgs)
+
+install(TARGETS lidar_preprocessor vehicle_cmd_bridge obstacle_truth
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY config launch
@@ -53,7 +66,12 @@ install(DIRECTORY config launch
 #
 # 装进来的是**同一个文件**（colcon --symlink-install 会建符号链接），
 # 所以并没有产生第二份参数，SPEC §4.1 的单一来源仍然成立。
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/vehicle_params.yaml
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/vehicle_params.yaml
+  # 障碍物场景定义。**真值发布器读的就是它**（由 launch 搬运成参数），
+  # 而 Gazebo 侧的模型由 scripts/gen_obstacles.py 从同一个文件生成 ——
+  # 于是「车看到的」与「车会撞上的」根本不存在第二份数据。
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/obstacles.yaml
   DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)

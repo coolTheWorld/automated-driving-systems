@@ -197,6 +197,79 @@ def vehicle_limit_params(vehicle_params: dict) -> dict:
     }
 
 
+def _obstacle_actions(context, *args, **kwargs):
+    """
+    Spawn the obstacle model and start the ground-truth publisher for a scenario.
+
+    ⚠️ **障碍物不进 worlds/campus_loop.sdf**，而是运行时注入。
+       那个世界是 CP-P2-B 的验收基线，往里加东西会让 P2 的实测数字全部作废，
+       而 CP-P3-B 的第三个场景（无障碍物回归）恰恰要求世界与 P2 时**一模一样**。
+
+    ⚠️ 真值发布器读的是 config/obstacles.yaml —— 与 Gazebo 模型**同一个源头**
+       （模型由 scripts/gen_obstacles.py 从它生成）。于是「车看到的」与
+       「车会撞上的」根本不存在第二份数据，也就不可能漂移。
+
+    :param context: launch 上下文
+    :return: 该场景对应的 launch 动作列表；obstacles:=none 时为空
+    """
+    scenario = LaunchConfiguration('obstacles').perform(context)
+    if scenario == 'none':
+        return []
+
+    config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                   / 'obstacles.yaml')
+    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+    if scenario not in config['scenarios']:
+        raise RuntimeError(
+            f'obstacles:={scenario} 在 {config_path} 里没有定义。'
+            f'可选：none、{"、".join(config["scenarios"])}')
+
+    lane = config['lane']
+    spec = config['scenarios'][scenario]
+
+    # 车道坐标 → 世界坐标。与 gen_obstacles.py 里的换算**必须一致**，
+    # 否则真值和 Gazebo 模型会差一个偏移 —— 而那正是本节要避免的漂移。
+    # 两处都只支持 heading = 0（南侧直道），生成器会显式拒绝其他值。
+    center_x, center_y, yaw, length, width, height = [], [], [], [], [], []
+    for obstacle in spec['obstacles']:
+        center_x.append(float(obstacle['along_x_m']))
+        center_y.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
+        yaw.append(float(lane['heading_rad']))
+        length.append(float(obstacle['length_m']))
+        width.append(float(obstacle['width_m']))
+        height.append(float(obstacle['height_m']))
+
+    return [
+        # 把障碍物模型 spawn 进已经在跑的 Gazebo。
+        # 用 ros_gz_sim create 而不是生成一个"带障碍物的世界"，理由见上面的第一条 ⚠️。
+        Node(
+            package='ros_gz_sim',
+            executable='create',
+            name=f'spawn_obstacles_{scenario}',
+            arguments=['-file', f'model://campus_obstacles_{scenario}',
+                       '-name', f'campus_obstacles_{scenario}'],
+            parameters=[{'use_sim_time': True}],
+            output='screen',
+        ),
+        Node(
+            package='gazebo_bridge',
+            executable='obstacle_truth',
+            name='obstacle_truth',
+            parameters=[{
+                'obstacles.center_x_m': center_x,
+                'obstacles.center_y_m': center_y,
+                'obstacles.yaw_rad': yaw,
+                'obstacles.length_m': length,
+                'obstacles.width_m': width,
+                'obstacles.height_m': height,
+                'frame_id': 'map',
+                'use_sim_time': True,
+            }],
+            output='screen',
+        ),
+    ]
+
+
 def generate_launch_description():
     bridge_share = get_package_share_directory('gazebo_bridge')
     viz_share = get_package_share_directory('ads_visualization')
@@ -242,6 +315,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='是否开 RViz2'),
+        DeclareLaunchArgument(
+            'obstacles', default_value='none',
+            description=('P3 验收场景的静态障碍物：none / avoid / block。'
+                         '**默认 none** —— 那是 CP-P2-B 的回归基线，'
+                         '世界必须与 P2 时一模一样')),
 
         # ---------------------------------------------------------------------
         # 1. Gazebo
@@ -366,4 +444,9 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('rviz')),
             output='screen',
         ),
+
+        # ---------------------------------------------------------------------
+        # 7. P3 验收场景的静态障碍物（obstacles:=avoid / block）
+        # ---------------------------------------------------------------------
+        OpaqueFunction(function=_obstacle_actions),
     ])

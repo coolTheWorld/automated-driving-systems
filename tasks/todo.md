@@ -2,7 +2,7 @@
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
 > 状态：**P0a 29/29**、**P1 28/28**、**P2 28/28**、**P0b 方案 B 已实测** —— 全部达成
-> 　　**当前阶段：P3 运动规划 —— S1 ✓、S2 ✓（CP-P3-A）、S3 ✓、S4 ✓，下一步 S5（要仿真器）**
+> 　　**当前阶段：P3 —— S1–S4 ✓，S5 进行中（5.1/5.2 ✓，剩 5.7 与 CP-P3-B 实测）**
 > 更新：2026-08-04　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：[P2 清单](#p2-控制stanley--pid当前阶段)（当前）→
@@ -13,8 +13,50 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P3 的 S1–S4 全部完成，整条 `map_node → planning_node → control_node`
-链路已在 L3-G 里端到端跑通（不需要 GPU）。下一步 S5 —— 那是需要真仿真器的部分。**
+**当前位置**：**P3 的 S1–S4 全部完成；S5 里不需要仿真器的部分（障碍物生成物 +
+真值发布器 + launch 接线 + CI）也已完成。剩下两件：5.7（L3-G 加带障碍物的用例）
+和 CP-P3-B 三场景实测（要真仿真器）。**
+
+恢复命令：
+```bash
+export COMPOSE_FILE=docker/docker-compose.local.yml && docker compose up -d
+python3 scripts/gen_obstacles.py --check          # 场景可行性 + 生成物同步
+docker compose exec dev bash -c 'cd /workspace && colcon test-result --all | tail -1'
+```
+
+### ✅ P3-S5 已完成的部分（2026-08-04）
+
+| # | 事项 | 结果 |
+|---|---|---|
+| 5.1 | `config/obstacles.yaml` + `scripts/gen_obstacles.py`（`--check` 已进 CI） | ✅ |
+| 5.2 | `gazebo_bridge/obstacle_truth` → `/perception/obstacles` | ✅ 冒烟验过（x=60, y=−52.95, STATIC, frame_id=map） |
+| — | `obstacles:=none/avoid/block` 透传到 `stack.launch.py` | ✅ |
+| — | 全量 | **584 tests, 0 failures** |
+
+**障碍物不进 `campus_loop.sdf`**，而是运行时用 `ros_gz_sim create` 注入 ——
+那个世界是 CP-P2-B 的验收基线，往里加东西会让 P2 的实测数字全部作废，
+而 CP-P3-B 的第三个场景恰恰要求世界与 P2 时**一模一样**。
+
+**只有 Gazebo 那一侧是生成物**：真值发布器直接读同一个 `obstacles.yaml`
+（由 launch 搬运成参数），所以「车看到的」与「车会撞上的」根本不存在第二份数据。
+这比计划里写的「两份生成物」更彻底。
+
+### 🔍 生成器会机械校验 §6 的可行性 —— 而且比文档里那条更严
+
+三次故障注入：把 `expect` 改错 ✅ 拒绝；把障碍物放到路面外 ✅ 拒绝；
+**把障碍物挪 0.4 m（−1.2 → −0.8）初版没拦住** —— 因为 `o_l = −0.55` 恰好
+等于阈值，连续不等式判"可绕"，但可行区间退化成**单点 d = 0.85**，
+而采样网格（k×0.2，上限 0.85）最大只到 0.80，**一个候选都落不进去**。
+
+于是判据改成按**规划器的采样网格**判。连续不等式是**必要不充分**的 ——
+这条已补进 `planning.md` §6。
+
+### 📋 S5 剩下的两件
+
+| # | 事项 | 需要 |
+|---|---|---|
+| 5.7 | L3-G 加一条带障碍物的用例（`obstacle_truth` 不需要 Gazebo，能进 CI） | 不需要仿真器 |
+| 5.5/5.6 | **CP-P3-B 三场景实测**（绕 / 停 / 无障碍物回归）+ CP-P2-B 全量回归 | **要真仿真器，要人看** |
 
 恢复命令：
 ```bash
@@ -222,7 +264,7 @@ No such file」—— 看起来像 ads_common 装坏了，根因却在 CMake 那
 | S2 | Frenet ↔ 笛卡尔双向变换【CP-P3-A】 | **✅ 达成** |
 | S3 | 横向 lattice 采样 + 碰撞检测 + 代价函数 | **✅ 完成** |
 | S4 | 速度规划迁移 + 轨迹装配 + `planning_node` + control 改吃轨迹 | **✅ 完成** |
-| S5 | 障碍物生成物 + 真值发布器 + **CP-P3-B 实测** + CP-P2-B 回归 | **← 下一步（要真仿真器）** |
+| S5 | 障碍物生成物 + 真值发布器 + **CP-P3-B 实测** + CP-P2-B 回归 | **进行中**：5.1/5.2 ✓，剩 5.7 + 实测 |
 | S6 | 文档 + CI + 收尾 | 待办 |
 
 ---

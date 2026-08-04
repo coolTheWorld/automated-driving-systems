@@ -219,6 +219,10 @@ colcon build --packages-select gazebo_bridge    # 单个包
 # ---------- 运行（已可用） ----------
 ros2 launch ads_bringup stack.launch.py                             # 全栈入口，默认 sim:=gazebo
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false      # headless
+# P3 验收场景的静态障碍物。**默认 none** —— 那是 CP-P2-B 的回归基线，
+# 世界必须与 P2 时一模一样，所以障碍物是**运行时注入**的，不进 campus_loop.sdf。
+ros2 launch ads_bringup stack.launch.py obstacles:=avoid   # 贴边锥桶，应当绕过去
+ros2 launch ads_bringup stack.launch.py obstacles:=block   # 车道中心锥桶，应当停住
 ros2 launch gazebo_bridge gazebo_sim.launch.py                      # 只起仿真侧，调链路时更快
 ros2 run ads_map map_node                                           # 只起地图节点（不需要仿真器）
 
@@ -288,6 +292,14 @@ python3 scripts/gen_vehicle_model.py --check    # 校验生成物是否与 YAML 
 #   src/ads_map/test/data/reference_samples.csv（给 C++ 做逐点对账的基准）
 python3 scripts/gen_map.py
 python3 scripts/gen_map.py --check              # 三个生成物逐字节比对
+
+# 从 YAML 重新生成 P3 验收场景的障碍物。改了 config/obstacles.yaml 必跑。
+# ⚠️ 它不只是生成：会**机械校验 planning.md §6 的可行性不等式**（按规划器的
+#    采样网格判，不只是连续不等式）并与 YAML 里的 expect 对账，对不上拒绝生成。
+#    那个不等式的余量只有零点几米，挪 0.3 m 就可能让「可绕」变成实际无解，
+#    而症状是实测时车停住、所有人去查规划器 —— 错却在场景设定。
+python3 scripts/gen_obstacles.py
+python3 scripts/gen_obstacles.py --check       # 已进 CI
 # ⚠️ 采样基准漏了重新生成的话，CP-P1-A 的对账用的是旧基准 → **虚假的通过**。
 #    所以它进了 OUTPUTS，也进了 colcon test（本地就能拦，不用等 CI）。
 

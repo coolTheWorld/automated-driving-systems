@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================
+     campus_obstacles_avoid —— P3 验收场景的静态障碍物
+
+     ⚠️ 本文件由 scripts/gen_obstacles.py 从 config/obstacles.yaml 生成，
+        请勿手改。真值发布器读的是**同一个 YAML**，所以
+        「车看到的」与「车会撞上的」不存在第二份数据。
+
+     场景：贴右边的锥桶，侧向留得下车 —— 规划器应当从左侧绕过去
+
+     有 <collision>（与 campus_road 不同）：障碍物是要真撞上的，
+     没有碰撞体的话 CP-P3-B 的「碰撞次数 = 0」这条判据就永远成立，
+     而那正是它最该抓的东西。
+     =========================================================== -->
+<sdf version="1.9">
+  <model name="campus_obstacles_avoid">
+    <static>true</static>
+    <link name="cone_right">
+      <pose>60 -52.95 0.4 0 0 0</pose>
+      <collision name="collision">
+        <geometry><box><size>0.5 0.5 0.8</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.5 0.5 0.8</size></box></geometry>
+        <material><ambient>0.9 0.35 0.05 1</ambient><diffuse>1.0 0.45 0.1 1</diffuse></material>
+      </visual>
+    </link>
+  </model>
+</sdf>
