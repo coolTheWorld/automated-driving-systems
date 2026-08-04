@@ -102,6 +102,19 @@ jobs:
             ads-dev:jazzy \
             python3 scripts/gen_map.py --check
 
+      # 障碍物场景同理，但它多守一件事：**gen_obstacles.py 会机械校验
+      # docs/modules/planning.md §6 的可行性不等式**，并与 YAML 里声明的
+      # expect 对账（还按规划器的**采样网格**判，不只是连续不等式）。
+      #
+      # 为什么值得进 CI：那个不等式的余量在本项目只有零点几米。
+      # 有人把障碍物挪 0.3 m 就可能让「可绕」场景变成实际无解，
+      # 而症状是**实测时车停住了，然后所有人去查规划器** —— 错却在场景设定。
+      - name: 校验障碍物生成物与 obstacles.yaml 同步（并复核 §6 可行性）
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy \
+            python3 scripts/gen_obstacles.py --check
+
       - name: 构建工作空间
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
