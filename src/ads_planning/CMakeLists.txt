@@ -26,7 +26,10 @@ find_package(ads_common REQUIRED)
 # **从本包第一天就在**，不是等到有人违反了再补 —— ads_control 的教训是
 # 「CMakeLists 里声称有脚本守着，而那个脚本从没被写出来」，整个 P2 只靠纪律维持。
 add_library(${PROJECT_NAME} SHARED
-  src/frenet.cpp)
+  src/frenet.cpp
+  src/quintic.cpp
+  src/collision.cpp
+  src/lattice.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -68,6 +71,19 @@ if(BUILD_TESTING)
   # 不读任何文件、不起 ROS，毫秒级。CP-P3-A 就是它。
   ament_add_gtest(test_frenet test/test_frenet.cpp)
   target_link_libraries(test_frenet ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：五次多项式。判据是「六个边界条件逐项复现」+ 已知闭式解，全部解析。
+  ament_add_gtest(test_quintic test/test_quintic.cpp)
+  target_link_libraries(test_quintic ${PROJECT_NAME})
+
+  # L1：OBB 相交与间距。含 SPEC §8 点名的三种边界情形（相切、包含、退化）。
+  ament_add_gtest(test_collision test/test_collision.cpp)
+  target_link_libraries(test_collision ${PROJECT_NAME})
+
+  # L1：横向 lattice。**含 planning.md §6 那个可行性不等式的两侧**
+  # —— 贴边障碍物可绕、车道中心障碍物几何上无解必须报不可行。
+  ament_add_gtest(test_lattice test/test_lattice.cpp)
+  target_link_libraries(test_lattice ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_planning.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
