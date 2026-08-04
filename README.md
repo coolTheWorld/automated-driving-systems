@@ -9,7 +9,10 @@
 - **[CLAUDE.md](CLAUDE.md)** —— 导航 + 实测踩坑记录。**遇到诡异现象先翻它的陷阱表**。
 - **[tasks/](tasks/)** —— `plan.md` 说明怎么拆任务，`todo.md` 是当前进度。
 
-当前阶段：**P0a 完成**（本地 Gazebo 环境打通，可键盘驾驶）。
+当前阶段：**P3 运动规划（进行中）**。已完成 P0a 本地环境、P1 地图与路由、
+P2 控制（CP-P2-B 8/8：560 m 含路口弯的路线，最大横向误差 0.080 m、终点停车误差 0.327 m）、
+P0b 方案 B（在云 GPU 上实测出 CARLA 与 Gazebo 的转向执行机构差异）。
+P3 只剩 CP-P3-B 的 Gazebo 实测 —— 绕障行为本身已有一条不需要 GPU 的闭环测试守在 CI 里。
 
 ---
 
@@ -205,29 +208,39 @@ python3 scripts/gen_vehicle_model.py --check    # CI 用这个卡住"忘了重�
 ```
 ├── SPEC.md                      # 唯一事实来源
 ├── CLAUDE.md                    # 导航 + 实测踩坑记录
-├── config/vehicle_params.yaml   # 车辆参数唯一来源（SDF/URDF 都从它生成）
+├── config/                      # **全部手写源头**，生成物一律不手改
+│   ├── vehicle_params.yaml      #   车辆参数（SDF/URDF 都从它生成）
+│   ├── campus_map.yaml          #   地图（.xodr / 路面 SDF / 对账基准 都从它生成）
+│   ├── obstacles.yaml           #   P3 验收场景的障碍物（Gazebo 模型从它生成）
+│   ├── control_params.yaml      #   控制器调参
+│   └── planning_params.yaml     #   规划器调参
 ├── docker/                      # 本地与云端共用同一个 Dockerfile
 ├── models/  worlds/             # Gazebo 模型与世界（model.sdf 是生成物）
 ├── scripts/                     # setup / verify / 单项检查
 ├── src/
 │   ├── ads_msgs/                # 消息接口（模块间契约）
-│   ├── ads_common/              # 纯算法工具，**不依赖 ROS**
+│   ├── ads_common/              # 纯算法工具，**不依赖 ROS**（角度、参考线几何、入参校验）
+│   ├── ads_map/                 # OpenDRIVE 解析 + 车道图 + 路由
+│   ├── ads_planning/            # Frenet 采样 + 碰撞检测 + 速度剖面
+│   ├── ads_control/             # 横向 Stanley + 纵向速度环 PI
 │   ├── ads_bringup/             # 全栈 launch 入口
 │   ├── ads_simulation/
-│   │   └── gazebo_bridge/       # 环境 A：Gazebo → 规范话题
+│   │   └── gazebo_bridge/       # 环境 A：Gazebo → 规范话题（含障碍物真值发布器）
 │   ├── ads_teleop/              # 键盘 / 手柄 → /vehicle_cmd
 │   └── ads_visualization/       # URDF（生成物）+ RViz 配置
 └── tasks/                       # 任务拆解与进度
 ```
 
-SPEC §5 里还列了 `ads_control`、`ads_planning`、`ads_perception` 等包，**尚未创建**。
+数据流：`ads_map → /route/path → ads_planning → /planning/trajectory → ads_control → /vehicle_cmd`。
+
+SPEC §5 里还列了 `ads_perception`、`ads_localization`、`ads_prediction` 等包，**尚未创建**。
 
 ---
 
 ## 路线图
 
-P0a 本地环境 ✅ → P0b 云端 CARLA → P1 地图与路由 → **P2 控制** → P3 规划 →
-P4 定位 → P5 感知 → P6 预测 → P7 实车。
+P0a 本地环境 ✅ → P0b 云端 CARLA（方案 B 已实测）→ P1 地图与路由 ✅ →
+P2 控制 ✅ → **P3 规划（进行中）** → P4 定位 → P5 感知 → P6 预测 → P7 实车。
 
 控制排在感知前面是有意的：先用仿真真值打通「规划→控制→车动起来」的闭环，
 之后每个模块都能立刻看到效果。先做感知的话，你会对着点云调三个月而车一步没动。
