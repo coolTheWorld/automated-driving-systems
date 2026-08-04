@@ -829,7 +829,7 @@ Windows 宿主为 **AMD Radeon 780M**（RDNA3 核显，UMA 共享内存，无 CU
 | **P0b** | B | Vast.ai 选机 + Vulkan 验证 → 装 CARLA 0.9.16 → 验证 `--ros2` 与 Jazzy 互通 → 写 PythonAPI sidecar → SSH/noVNC → **建立一致性测试** | 云端 RViz2 看到 CARLA 点云；两环境轨迹偏差 < 0.5 m |
 | **P1** | A | `ads_common` + `ads_map`：坐标变换、OpenDRIVE 解析、路由 | RViz 中显示车道图和 A→B 全局路径 |
 | **P2** ✅ | A | `ads_control`：Stanley + 速度剖面 + 速度环 PI（**已完成** 2026-08-03） | 车辆沿预设路径自动行驶：**560 m 含路口弯的路线，最大横向误差 0.080 m、终点停车误差 0.327 m**（CP-P2-B 8/8） |
-| **P3** | A | `ads_planning` 运动规划：Frenet 采样 | 遇静态障碍物自动绕行 |
+| **P3** ✅ | A | `ads_planning` 运动规划：Frenet 采样（**已完成** 2026-08-04） | 遇静态障碍物自动绕行**或停住**：贴边锥桶侧向间距 **0.532 m**（判据 > 0.5）、车道中心锥桶几何无解时停住且报不可行、无障碍物回归 CP-P2-B **8/8**（CP-P3-B 3 场景） |
 | **P4** | A | `ads_localization`：ESKF + NDT | 关闭真值定位，用传感器自主定位行驶 |
 | **P5** | A→B | `ads_perception`：点云检测 + 跟踪 | RViz 中显示动态障碍物框和轨迹 |
 | **P6** | A | `ads_prediction`：轨迹预测 | 显示他车未来 3 s 预测轨迹 |

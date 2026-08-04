@@ -147,6 +147,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **横向加速度超标 ≠ 横向跟得不好** | 修好转向执行机构后横向误差降了 12.7 倍，**最大横向加速度一个数都没变**（2.113） | `a_lat = v²·κ` 里有**两个**因子，横向误差不影响 κ，**只有速度会**。实测峰值处横向误差只有 −0.027 m，而车速比剖面高 +0.85 m/s；按剖面速度过那个弯 `a_lat` 恰好是 1.5002 = 限值。**看到横向加速度超标就去调横向增益，方向从一开始就是错的** |
 | **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `reference_line.hpp`（P3-S1 前叫 `ads_control/path_tracking.hpp`）早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
 | **纯 P 速度环跟不上剖面的斜坡** | 车总是"入弯偏快、终点冲过头"，而稳态巡航时速度跟得很准 | 「纯 P 对常值目标无稳态误差」只对**常值**成立。速度剖面在入弯前和终点前是**斜坡**，一阶系统跟踪斜坡的稳态误差 = 斜率/`K_p` = 3.0/1.0 = **3.0 m/s**。解法是加速度前馈 `a = v·dv/ds + K_p·(v_ref − v)`，**不是调大 K_p** |
+| **判据的适用范围没圈准** | 判据报 FAIL，而**系统其实是对的**；两者在现场长得一模一样 | CP-P3-B 一次跑里踩了两回：① 实测脚本直接拿 `/odom` 的位姿当 map 系用 —— 真实栈里 `map→odom` 是自车 spawn 位姿（本项目 (30,−51.75)），于是轨迹从 (0,0) 起、"车离障碍物 52 m"，看着像车根本没经过障碍物；② 「不越车道边线」用 `y − 车道中心y` 算，而验收路线绕过环线弯角，出了直道那个式子毫无意义，算出 −122 m 和 −3 m 这种荒谬值。**修法都是把范围读回唯一来源**（位姿走 TF；直道范围读 `obstacles.yaml` 的 `valid_from_x_m`/`valid_to_x_m`），不要自己发明过滤条件 |
 | **拿 SAT 的最大间隙当"保守估计"去做判据** | 判据**假失败**，而系统其实是对的 | 分离轴的最大间隙只是真实距离的**下界**：顶点对顶点的位形下最近点连线不是任何一条边的法向。P3-S5 实测：车刚越过障碍物时真实间距 0.656 m，SAT 下界报 0.457 m，**低估 0.199 m**，判据（0.5）随之转红。「保守估计不会造成假通过」是对的，但**它会造成假失败**，而假失败同样让人去查一个不存在的问题。要精确就遍历所有（顶点, 边）对 —— C++ 侧 `distance_m()` 早就是这么做的，`test_collision.cpp` 里还有一条专门的用例说明这件事，结果我转头在 Python 测试里用了下界 |
 | **测试的采样步长与被测结构的周期可通约** | 用例**全绿，但什么都没测** —— 故障注入进去也不红 | P3-S2 实测：验「朝向跨 ±π 不能裸插值」的用例按「总长的 1/20」= 0.6 m 步进，而参考线段长恰好 0.5 m，两者在 s=6.0 重合，**而跨 ±π 的那一段偏偏就从 6.0 开始** → 只采到 ratio=0 的端点，端点上朴素插值与正确插值给出**同一个值**。改成与段长不整除的步长（0.037）后注入立刻红。**凡是「沿某个离散结构扫一遍」的用例，步长都不能与它的周期整除** |
 | 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
@@ -262,10 +263,17 @@ colcon test --packages-select ads_control --ctest-args -R test_closed_loop
 # 「假车 + map_node + obstacle_truth + planning_node + control_node」链路能在 CI 里跑。
 # 判据是 SPEC §8 S04 的「侧向间距 > 0.5 m」，量的是**车体外廓**（不是轨迹点）。
 
-# ---------- 闭环实测（P2-S4，需要真仿真器，进不了 CI）----------
+# ---------- 闭环实测（需要真仿真器，进不了 CI）----------
 # 先起 headless 全栈，再跑记录脚本；判据来自 plan.md 的 CP-P2-B 表，脚本里不重新发明
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false
 python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/run.csv
+# CP-P3-B 的两个障碍物场景（判据见 plan.md「P3-5 检查点」）。
+# ⚠️ 两个脚本都要跑：record_control_run 验**跟踪质量**（CP-P2-B 那 8 条），
+#    record_obstacle_run 验**避障行为**。绕对了但把跟踪弄坏了，同样不算通过。
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=avoid
+python3 scripts/record_obstacle_run.py --scenario avoid --out /tmp/p3_avoid.csv
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=block
+python3 scripts/record_obstacle_run.py --scenario block --out /tmp/p3_block.csv
 # 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
 python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
 
