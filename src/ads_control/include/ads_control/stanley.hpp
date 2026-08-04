@@ -55,7 +55,7 @@
 //     钉住这条边界，它同时也是交给 S3 的约束（a_lat_max 调到 2.0 就顶在临界值上）。
 // =============================================================================
 
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
 namespace ads_control
 {
@@ -76,7 +76,7 @@ namespace ads_control
 /// @note 轴距为 0 会让前轴 = 后轴，也就是**静默退化成那个经典错误**。
 ///       所以这里宁可抛异常：`wheelbase_m` 传错（比如读配置读到了默认值 0）
 ///       的后果太隐蔽，不值得为省一次比较而放过。
-Pose2D front_axle_pose(const Pose2D & rear_axle_pose, double wheelbase_m);
+ads_common::Pose2D front_axle_pose(const ads_common::Pose2D & rear_axle_pose, double wheelbase_m);
 
 /// @brief Stanley 控制器的全部参数。
 ///

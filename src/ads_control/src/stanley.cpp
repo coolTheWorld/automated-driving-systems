@@ -24,6 +24,14 @@
 namespace ads_control
 {
 
+// 参考线几何在 P3-S1 下沉到了 ads_common —— 那里有两个消费者：
+// 控制侧把投影结果当横向/航向误差，规划侧把同一个结果当 Frenet 的 (s, d)。
+//
+// 只引入用到的这几个类型，**不是 using namespace**：后者会把 ads_common 的
+// 全部符号（angle_diff 等）一并拉进本命名空间，日后本包若添了同名函数，
+// 重载决议会**静默**改变而不报错。
+using ads_common::Pose2D;
+
 namespace
 {
 

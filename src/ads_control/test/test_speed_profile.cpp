@@ -34,23 +34,23 @@
 #include <iostream>
 #include <vector>
 
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
+#include "ads_common/testing/path_fixtures.hpp"
 #include "ads_control/speed_profile.hpp"
-#include "path_fixtures.hpp"
 
 namespace
 {
 
-using ads_control::PathPoint;
-using ads_control::Pose2D;
+using ads_common::PathPoint;
+using ads_common::Pose2D;
+using ads_common::ReferenceLine;
+using ads_common_test::AppendStraight;
+using ads_common_test::MakeLeftArc;
+using ads_common_test::MakeRightArc;
+using ads_common_test::MakeStraightAlongX;
+using ads_common_test::MakeStraightThenLeftArc;
 using ads_control::SpeedProfile;
 using ads_control::SpeedProfileParams;
-using ads_control::TrackedPath;
-using ads_control_test::AppendStraight;
-using ads_control_test::MakeLeftArc;
-using ads_control_test::MakeRightArc;
-using ads_control_test::MakeStraightAlongX;
-using ads_control_test::MakeStraightThenLeftArc;
 
 // config/vehicle_params.yaml 与 control_params.yaml 的**手抄副本**（同 test_stanley.cpp
 // 的说明：L1 不读 YAML，改了 YAML 要回来改这里，真正的防线在 S4 的一致性断言）。
@@ -97,7 +97,7 @@ std::vector<Pose2D> MakeMixedPath(double spacing_m)
 
 TEST(SpeedProfileParamsCheck, RejectNonPositiveOrNonFiniteValues)
 {
-  const TrackedPath path(MakeStraightAlongX(20.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(20.0, 0.0, 0.5));
   const std::vector<double> bad_values{0.0, -1.0, std::nan(""), HUGE_VAL};
   for (const double bad : bad_values) {
     SpeedProfileParams p = DefaultParams();
@@ -130,7 +130,7 @@ TEST(CurvatureLimit, MatchesTheClosedFormOnEachRadiusOnTheMap)
   // R=13.75（环线四角外侧）：√(1.5×13.75) = 4.5415 m/s，仍低于巡航值。
   //
   // ⚠️ **判据不能卡到 1e-9**，而偏差的来源是可以精确写出来的：
-  //    弧长按**弦长**累加（TrackedPath 的做法），弦比弧短一个因子 (1 − Δφ²/24)，
+  //    弧长按**弦长**累加（ReferenceLine 的做法），弦比弧短一个因子 (1 − Δφ²/24)，
   //    于是中心差分算出的曲率**偏大**同一个因子：κ̂ = (1/R)(1 + Δφ²/24)，Δφ = h/R。
   //    限速 ∝ 1/√κ，所以偏**小** (1 − Δφ²/48)：
   //      R=8,     h=0.5 → Δφ=0.0625  → 偏小 2.82e-4 m/s
@@ -150,7 +150,7 @@ TEST(CurvatureLimit, MatchesTheClosedFormOnEachRadiusOnTheMap)
     {kTurnRadiusM, 3.4641016151377544}, {kCornerOuterRadiusM, 4.541475531146237}};
 
   for (const Case & c : cases) {
-    const TrackedPath path(MakeLeftArc(c.radius_m, 0.0, 0.0, 0.0, 40.0 / c.radius_m, 0.5, false));
+    const ReferenceLine path(MakeLeftArc(c.radius_m, 0.0, 0.0, 0.0, 40.0 / c.radius_m, 0.5, false));
     const SpeedProfile profile(path, DefaultParams());
     const double measured_mps = profile.speeds_mps()[20];
 
@@ -170,8 +170,8 @@ TEST(CurvatureLimit, RightTurnsAreLimitedIdenticallyToLeftTurns)
   // 这条用例是故障注入时补上的：在此之前**所有**测试路径都是左转，
   // 而漏掉 std::abs 的实现会在右转（κ < 0）上算出 √(负数) = NaN ——
   // 全左转的用例里一条都不红，而地图上左右转各占一半。
-  const TrackedPath left(MakeLeftArc(kTurnRadiusM, 0.0, 0.0, 0.0, 40.0 / 8.0, 0.5, false));
-  const TrackedPath right(MakeRightArc(kTurnRadiusM, 0.0, 0.0, 0.0, 40.0 / 8.0, 0.5, false));
+  const ReferenceLine left(MakeLeftArc(kTurnRadiusM, 0.0, 0.0, 0.0, 40.0 / 8.0, 0.5, false));
+  const ReferenceLine right(MakeRightArc(kTurnRadiusM, 0.0, 0.0, 0.0, 40.0 / 8.0, 0.5, false));
   const SpeedProfile left_profile(left, DefaultParams());
   const SpeedProfile right_profile(right, DefaultParams());
 
@@ -193,7 +193,7 @@ TEST(CurvatureLimit, AGentleEnoughCurveIsCappedByCruiseNotByTheLateralLimit)
 {
   // R=100 → √150 = 12.2 m/s，远高于巡航 5.556 → 应当取巡航值。
   // 没有这条 min 的话，缓弯上剖面会给出一个超过 ODD 上限的速度。
-  const TrackedPath path(MakeLeftArc(100.0, 0.0, 0.0, 0.0, 40.0 / 100.0, 0.5, false));
+  const ReferenceLine path(MakeLeftArc(100.0, 0.0, 0.0, 0.0, 40.0 / 100.0, 0.5, false));
   const SpeedProfile profile(path, DefaultParams());
   EXPECT_NEAR(profile.speeds_mps()[20], kCruiseSpeedMps, 1e-9);
 }
@@ -203,7 +203,7 @@ TEST(CurvatureLimit, AStraightPathIsNotSlowedByFloatingPointCurvatureNoise)
   // 直路上曲率是朝向中心差分的**浮点噪声**（1e-17 量级），不是严格的 0。
   // 不设"当直线"阈值的话 √(a_lat/|κ|) 会算出 1e8 m/s ——
   // 虽然随后被 min(v_cruise, ·) 吃掉，但中间那个巨大的数是个隐患。
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
   for (std::size_t i = 0; i < 50; ++i) {  // 末尾留给制动区
     EXPECT_NEAR(profile.speeds_mps()[i], kCruiseSpeedMps, 1e-9) << "第 " << i << " 点";
@@ -214,7 +214,7 @@ TEST(CurvatureLimit, LateralAccelerationNeverExceedsTheLimitAnywhere)
 {
   // **物理不变量**，不依赖具体路径形状：处处 v²·|κ| ≤ a_lat_max。
   // 上面那几条查的是"某一点等于闭式解"，这一条查的是"没有任何一点超"。
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
 
   double worst_mps2 = 0.0;
@@ -236,7 +236,7 @@ TEST(Scans, TheProfileEndsAtExactlyZero)
 {
   // 不是"接近 0"，是**恰好 0**。留一点余速的话车会以那个速度滑过终点，
   // 而下游没有任何一层会因此报错。
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
   EXPECT_EQ(profile.speeds_mps().back(), 0.0);
 }
@@ -245,7 +245,7 @@ TEST(Scans, BrakingToTheGoalFollowsTheClosedForm)
 {
   // 终点前的减速段应当严格是 v(s) = √(2·a_dec·(L − s))。
   // 5.556 → 0 按 −3.0 需要 5.145 m —— 也就是最后约 10 个路径点。
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
 
   const double braking_distance_m = DistanceForSpeedChangeM(kCruiseSpeedMps, 0.0, kMaxDecelMps2);
@@ -271,7 +271,7 @@ TEST(Scans, BrakingForACurveStartsBeforeTheCurveNotInsideIt)
   // **没说"什么时候开始减速"**。少了它，车会开到弯道入口才发现要减速，
   // 而那时已经晚了 3.14 m —— 症状是过弯时横向加速度超标，
   // 但剖面本身看着完全正常（每一点都满足曲率限速）。
-  const TrackedPath path(MakeStraightThenLeftArc(30.0, kTurnRadiusM, M_PI_2, 0.5));
+  const ReferenceLine path(MakeStraightThenLeftArc(30.0, kTurnRadiusM, M_PI_2, 0.5));
   const SpeedProfile profile(path, DefaultParams());
 
   // ⚠️ 参考点是**第一个曲率已经满值的点**，不是几何上的直弯衔接处（s = 30 m）。
@@ -320,7 +320,7 @@ TEST(Scans, BrakingForACurveStartsBeforeTheCurveNotInsideIt)
 TEST(Scans, TheDecelerationConstraintHoldsEverywhere)
 {
   // **物理不变量**：处处 v[i]² ≤ v[i+1]² + 2·a_dec·Δs，即"从这一点减得到下一点"。
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
   const std::vector<PathPoint> & points = path.points();
 
@@ -345,7 +345,7 @@ TEST(Scans, AcceleratingOutOfACurveTakesTheClosedFormDistance)
   // 表现为"出弯后速度一直低于剖面"，而人会去查 PID。
   std::vector<Pose2D> poses = MakeLeftArc(kTurnRadiusM, 0.0, 0.0, 0.0, M_PI_2, 0.5, false);
   AppendStraight(&poses, 40.0, 0.5);
-  const TrackedPath path(poses);
+  const ReferenceLine path(poses);
   const SpeedProfile profile(path, DefaultParams());
 
   EXPECT_NEAR(
@@ -393,7 +393,7 @@ TEST(Scans, AcceleratingOutOfACurveTakesTheClosedFormDistance)
 TEST(Scans, TheAccelerationConstraintHoldsEverywhere)
 {
   // **物理不变量**：处处 v[i+1]² ≤ v[i]² + 2·a_acc·Δs，即"从上一点加得上来"。
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
   const std::vector<PathPoint> & points = path.points();
 
@@ -417,7 +417,7 @@ TEST(Scans, ScanOrderDoesNotMatter)
   //    这条用例把结论钉住，**并且是一条给未来的告警**：这个论证依赖"只下调"。
   //    将来若加入「这一点至少要跑多快」这类**下界**约束（比如为了不挡后车），
   //    论证立刻失效，那时就真的要讲顺序甚至迭代到收敛 —— 而这条用例会先红。
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
   const std::vector<PathPoint> & points = path.points();
   const std::size_t count = points.size();
@@ -461,7 +461,7 @@ TEST(Feedforward, MatchesTheDecelerationLimitOnTheTerminalRamp)
   //
   // 它存在的理由：纯 P 跟踪斜坡的稳态误差 = 斜率/K_p = 3.0/1.0 = 3.0 m/s。
   // S4 首测就是这么冲过终点 4.26 m 的。
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
   const double braking_distance_m = DistanceForSpeedChangeM(kCruiseSpeedMps, 0.0, kMaxDecelMps2);
 
@@ -491,14 +491,14 @@ TEST(Feedforward, IsZeroOnCruiseAndPositiveWhenAcceleratingOutOfACurve)
 {
   // 巡航段速度恒定 → d(v²)/ds = 0 → 前馈为 0。给一个常值目标却发非零前馈，
   // 会让车持续加/减速而稳态误差永远消不掉。
-  const TrackedPath straight(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine straight(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile straight_profile(straight, DefaultParams());
   EXPECT_NEAR(straight_profile.target_accel_at(20, 0.0), 0.0, 1e-12);
 
   // 出弯加速段：前馈应当**恰好**等于 +a_acc（前向扫描卡住的那些段上是闭式解）。
   std::vector<Pose2D> poses = MakeLeftArc(kTurnRadiusM, 0.0, 0.0, 0.0, M_PI_2, 0.5, false);
   AppendStraight(&poses, 40.0, 0.5);
-  const TrackedPath path(poses);
+  const ReferenceLine path(poses);
   const SpeedProfile profile(path, DefaultParams());
 
   const double curve_exit_s_m = kTurnRadiusM * M_PI_2;
@@ -513,7 +513,7 @@ TEST(Feedforward, IsZeroOnCruiseAndPositiveWhenAcceleratingOutOfACurve)
 
 TEST(Feedforward, RejectsAnIndexBeyondTheProfile)
 {
-  const TrackedPath path(MakeStraightAlongX(20.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(20.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
   const std::size_t last_segment = profile.speeds_mps().size() - 2;
   EXPECT_NO_THROW(profile.target_accel_at(last_segment, 1.0));
@@ -526,7 +526,7 @@ TEST(Feedforward, RejectsAnIndexBeyondTheProfile)
 
 TEST(Lookup, InterpolatesInSpeedSquaredNotInSpeed)
 {
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
 
   // 挑一段速度确实在变的（制动区里），否则插值对不对看不出来。
@@ -548,7 +548,7 @@ TEST(Lookup, RejectsAnIndexBeyondTheProfile)
 {
   // 索引对不上 = 剖面还是上一条路径的。抛异常而不是夹取，
   // 否则这个错误表现为"车速莫名其妙"而不是一条指名道姓的报错。
-  const TrackedPath path(MakeStraightAlongX(20.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(20.0, 0.0, 0.5));
   const SpeedProfile profile(path, DefaultParams());
   const std::size_t last_segment = profile.speeds_mps().size() - 2;
 
@@ -559,11 +559,11 @@ TEST(Lookup, RejectsAnIndexBeyondTheProfile)
 
 TEST(Lookup, TheProjectionOverloadAgreesWithTheIndexOverload)
 {
-  const TrackedPath path(MakeMixedPath(0.5));
+  const ReferenceLine path(MakeMixedPath(0.5));
   const SpeedProfile profile(path, DefaultParams());
 
   // 拿一个真实的投影结果去查 —— 这正是 S4 的控制回调会做的事。
-  const ads_control::PathProjection projection = path.project({12.3, 0.4, 0.0});
+  const ads_common::PathProjection projection = path.project({12.3, 0.4, 0.0});
   EXPECT_NEAR(
     profile.speed_at(projection), profile.speed_at(projection.index, projection.ratio), 1e-15);
 }

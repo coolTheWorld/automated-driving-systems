@@ -215,7 +215,7 @@ def summarize(rows: list[dict]) -> dict:
     #
     # ⚠️ **不能用 path_remaining_m 合成。** 车冲过终点之后投影被夹到末点，
     #    那个量恒为 0 —— "冲过去 20 m"和"恰好停在终点"长得一模一样。
-    #    这是 path_tracking 头文件里明确交给 S4 的陷阱，初稿正好踩了它。
+    #    这是参考线头文件（今 ads_common/reference_line.hpp）明确交给 S4 的陷阱，初稿正好踩了它。
     last = rows[-1]
     out['goal_position_error_m'] = last['goal_distance_m']
     out['goal_residual_speed_mps'] = abs(last['measured_speed_mps'])

@@ -41,9 +41,9 @@
 #include <cmath>
 
 #include "ads_common/angles.hpp"
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
-namespace ads_control_test
+namespace ads_common_test
 {
 
 /// @brief 运动学自行车模型的一辆车。状态量全部公开 —— 这是夹具，不是接口。
@@ -96,13 +96,13 @@ struct KinematicBicycle
   }
 
   /// @brief 后轴中心位姿（= `base_link`）。这是定位/里程计会给出的东西。
-  ads_control::Pose2D rear_axle_pose() const { return {x_m, y_m, heading_rad}; }
+  ads_common::Pose2D rear_axle_pose() const { return {x_m, y_m, heading_rad}; }
 
   /// @brief 前轴中心位姿 —— **Stanley 要的就是它**，见 control.md §3.2。
   ///
   /// 这里刻意不复用产品代码的 `ads_control::front_axle_pose()`：
   /// 用被测函数去构造被测函数的期望值，等于什么都没验。
-  ads_control::Pose2D front_axle_pose() const
+  ads_common::Pose2D front_axle_pose() const
   {
     return {
       x_m + wheelbase_m * std::cos(heading_rad), y_m + wheelbase_m * std::sin(heading_rad),
@@ -110,6 +110,6 @@ struct KinematicBicycle
   }
 };
 
-}  // namespace ads_control_test
+}  // namespace ads_common_test
 
 #endif  // KINEMATIC_BICYCLE_HPP_

@@ -145,7 +145,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **插件的转向响应有约 0.24 s 的地板** | 把 `steer_response_time_s` 从 0.050 调到 0.020（增益 20→50），实测只从 0.294 s 到 0.255 s | 关节速度环自身的滞后，P 增益动不了它。所以**那个参数不等于实测响应时间**，要知道实际多快只能跑脚本量。取 0.050 是因为它拿到了可改进量的绝大部分而增益还只有 20 —— 再往上是在跟地板较劲，代价是大误差时向关节下发上百 rad/s 的速度指令 |
 | **仿真钟停走时控制器"冻住"而不是降级** | 杀掉 `parameter_bridge` 想测里程计超时的降级路径，结果**什么日志都没有** | 那个进程同时也是 `/clock` 的来源。`use_sim_time=true` 下 `now()` 不再前进 → `dt = 0` → 控制回调直接 return，"里程计过期"永远判不出来；bridge 的看门狗同样用仿真钟，也冻住 → **车保持最后一条指令**。真车上墙钟不会停，所以这是仿真特有的。要补得用**墙钟做健康检查**（那不算算法时序，不违反 SPEC §5） |
 | **横向加速度超标 ≠ 横向跟得不好** | 修好转向执行机构后横向误差降了 12.7 倍，**最大横向加速度一个数都没变**（2.113） | `a_lat = v²·κ` 里有**两个**因子，横向误差不影响 κ，**只有速度会**。实测峰值处横向误差只有 −0.027 m，而车速比剖面高 +0.85 m/s；按剖面速度过那个弯 `a_lat` 恰好是 1.5002 = 限值。**看到横向加速度超标就去调横向增益，方向从一开始就是错的** |
-| **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `path_tracking.hpp` 早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
+| **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `reference_line.hpp`（P3-S1 前叫 `ads_control/path_tracking.hpp`）早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
 | **纯 P 速度环跟不上剖面的斜坡** | 车总是"入弯偏快、终点冲过头"，而稳态巡航时速度跟得很准 | 「纯 P 对常值目标无稳态误差」只对**常值**成立。速度剖面在入弯前和终点前是**斜坡**，一阶系统跟踪斜坡的稳态误差 = 斜率/`K_p` = 3.0/1.0 = **3.0 m/s**。解法是加速度前馈 `a = v·dv/ds + K_p·(v_ref − v)`，**不是调大 K_p** |
 | 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
 
@@ -165,13 +165,20 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 SPEC §5 列出的其余包（`ads_planning`、`ads_perception`、`ads_localization` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
+`ads_common` 是**唯一允许被多个模块共用的包**，目前两样东西：`angles`（角度归一化/差）
+和 **`reference_line`**（折线的弧长参数化、逐点曲率、最近点投影；P3-S1 从
+`ads_control/path_tracking` 下沉而来）。
+放这儿的判据不是「感觉通用」，而是**有没有第二个消费者、且它有逻辑**：
+控制侧把投影当横向/航向误差，规划侧把同一个投影当 Frenet 的 (s, d)。
+反例是 `Pose2D` —— 它在 `ads_map` 和 `ads_common` 里**有意各留一份**，
+因为它没有逻辑，不存在「改出分歧」的可能。**没有逻辑的类型可以复制，有逻辑的必须共用。**
+
 `ads_map` 已有完整两层：`lib/`（OpenDRIVE 解析 + 几何求值 + 车道级有向图 +
 Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1-S4）。
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
 
-`ads_control`（P2，**建设中**）目前有四个 lib：**`path_tracking`**（弧长参数化、
-逐点曲率、最近点局部搜索、横向/航向误差）、**`stanley`**（前轴换算 + 控制律 +
+`ads_control`（P2 已完成）目前有三个 lib：**`stanley`**（前轴换算 + 控制律 +
 转角/转向速率双重限幅）、**`speed_profile`**（曲率限速 + 前后向扫描）、
 **`speed_controller`**（速度环 PI + 条件积分抗饱和）。
 `node/control_node.cpp`（S4）已跑通闭环，**CP-P2-B 8/8 达标**（2026-08-03，两遍复现）。`libads_control.so` 同样零 ROS 依赖，且**不依赖 `ads_map`** ——
@@ -213,7 +220,7 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_map/test_opendrive_parser        # 解析 + **CP-P1-A 双实现逐点对账**
 ./build/ads_map/test_lane_graph              # 车道图：18 节点 / 24 边 + 每条边的几何连续性
 ./build/ads_map/test_routing                 # Dijkstra：路径与长度 vs 穷举脚本
-./build/ads_control/test_path_tracking       # 弧长/曲率/最近点，全部 vs 解析解（P2-S1）
+./build/ads_common/test_reference_line       # 弧长/曲率/最近点，全部 vs 解析解（P2-S1 写，P3-S1 下沉至此）
 ./build/ads_control/test_stanley             # Stanley + **CP-P2-A 闭环收敛判据**（P2-S2）
 ./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）

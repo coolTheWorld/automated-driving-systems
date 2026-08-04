@@ -32,7 +32,6 @@ find_package(ads_common REQUIRED)
 #    恰恰是纪律靠不住。教训不是"要仔细"，是**凡是声称"有脚本守着"的地方，
 #    都得能被 grep 证伪**。
 add_library(${PROJECT_NAME} SHARED
-  src/path_tracking.cpp
   src/stanley.cpp
   src/speed_profile.cpp
   src/speed_controller.cpp)
@@ -41,9 +40,22 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
-# PRIVATE：ads_common 只出现在 .cpp 里，公开头文件不含它的任何类型。
-# 下游链接 ads_control 时不该被迫知道我们用谁算角度差。
-target_link_libraries(${PROJECT_NAME} PRIVATE ads_common::ads_common)
+# PUBLIC 而不是 PRIVATE —— **P3-S1 之后这条变了，别照抄旧注释**。
+# 参考线几何下沉到 ads_common 后，本包的公开头文件里出现了
+# `#include "ads_common/reference_line.hpp"`，签名里也出现了
+# ads_common::ReferenceLine / PathProjection / Pose2D（speed_profile.hpp、stanley.hpp）。
+#
+# PUBLIC 传递的是**两样东西**，缺任何一样下游都编不过或链不上：
+#   ① ads_common 的 include 路径 —— 没有它，下游 #include ads_control/stanley.hpp
+#      会在**嵌套的**那一行报 "file not found"，报错位置指向 ads_common 的头，
+#      看起来像 ads_common 装坏了，而根因在这一行；
+#   ② libads_common.so —— 下游一旦调用 ReferenceLine 的成员就要它。
+#
+# 顺带一提：本包**自己**的 .cpp 现在不引用 ads_common 的任何**符号**
+# （用 angle_diff 的是已搬走的 path_tracking.cpp），所以 libads_control.so 的
+# DT_NEEDED 里看不到 libads_common.so。**那是正常的，不是没链上** ——
+# 依赖此刻纯粹是头文件层面的，PUBLIC 仍然必需。
+target_link_libraries(${PROJECT_NAME} PUBLIC ads_common::ads_common)
 
 install(DIRECTORY include/
   DESTINATION include)
@@ -117,18 +129,13 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
 
-  # L1：路径预处理（弧长、曲率、最近点投影、横向/航向误差）。
-  # 全部与解析解比对，不读任何文件、不起 ROS，毫秒级。
-  ament_add_gtest(test_path_tracking test/test_path_tracking.cpp)
-  target_link_libraries(test_path_tracking ${PROJECT_NAME} ads_common::ads_common)
-
   # L1：横向 Stanley + CP-P2-A 的闭环收敛判据。
   # 闭环用的运动学自行车模型在 test/kinematic_bicycle.hpp —— **测试夹具，非产品代码**，
   # 所以它不进 add_library。P2-S5 若把它包成 ROS 假车节点，那时才搬家。
   ament_add_gtest(test_stanley test/test_stanley.cpp)
-  # PRIVATE 的 ads_common 不会传递过来，而测试自己要用 normalize_angle，所以显式链接。
   target_link_libraries(test_stanley ${PROJECT_NAME} ads_common::ads_common)
-  # 夹具头文件与被测头文件不在同一目录，给测试单独加 test/ 到搜索路径。
+  # kinematic_bicycle.hpp 仍在本包 test/ 下（它是控制专有的被控对象模型）；
+  # path_fixtures.hpp 已随参考线搬进 ads_common 的 include/，无需再加路径。
   target_include_directories(test_stanley PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
 
   # L1：速度剖面（曲率限速 + 前后向扫描）。纯几何，判据全是闭式解。

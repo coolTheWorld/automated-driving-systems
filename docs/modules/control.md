@@ -475,7 +475,7 @@ v* = R · max_steer_rate_rad_s
 ### 3.8 S2 实测汇总（CP-P2-A，2026-08-02）
 
 全部跑在 `test_stanley.cpp` 的纯 C++ 闭环上（控制器 + 运动学自行车模型 +
-真实的 `TrackedPath`），27 个用例、**7 ms**、不需要 ROS/Gazebo。
+真实的 `ads_common::ReferenceLine`），27 个用例、**7 ms**、不需要 ROS/Gazebo。
 
 | 场景 | 判据 | 解析值 | S1.1 Python | **S2 C++ 实测** |
 |---|---|---|---|---|
@@ -930,9 +930,9 @@ SPEC §12 要求「每个参数在文档中给出物理含义和推荐范围」�
 
 | 常量 | 位置 | 值 | 理由 |
 |---|---|---|---|
-| `TrackedPath::kMinSpacingM` | `path_tracking.hpp` | 1e-3 m | 相邻点距的退化判据。1 mm 远小于任何有意义的采样步长（0.5 m），又远大于浮点噪声。**小于它是抛异常不是跳过**：静默跳过会把上游的采样 bug 永久掩盖 |
-| `TrackedPath::kDefaultSearchWindow` | `path_tracking.hpp` | 30 点 | 局部搜索半窗口的默认值。实际由 `lateral.search_window` 覆盖 |
-| `kMinSegmentLengthSquaredM2` | `path_tracking.cpp` | `kMinSpacingM²` | 投影里的除零保护。与上面同源 —— 构造时已拒掉更短的段，这里只是"不该发生但发生了也不能崩" |
+| `ReferenceLine::kMinSpacingM` | `ads_common/reference_line.hpp` | 1e-3 m | 相邻点距的退化判据。1 mm 远小于任何有意义的采样步长（0.5 m），又远大于浮点噪声。**小于它是抛异常不是跳过**：静默跳过会把上游的采样 bug 永久掩盖 |
+| `ReferenceLine::kDefaultSearchWindow` | `ads_common/reference_line.hpp` | 30 点 | 局部搜索半窗口的默认值。实际由 `lateral.search_window` 覆盖 |
+| `kMinSegmentLengthSquaredM2` | `ads_common/src/reference_line.cpp` | `kMinSpacingM²` | 投影里的除零保护。与上面同源 —— 构造时已拒掉更短的段，这里只是"不该发生但发生了也不能崩" |
 | `kStraightCurvatureInvM` | `speed_profile.cpp` | 1e-6 1/m | 曲率小于它就当直线。**不是虚的数值保护**：曲率来自朝向的中心差分，直路上它是浮点噪声级的非零值（1e-17），不设阈值时 `√(a_lat/κ)` 会算出 1e8 m/s |
 | `kDebugElevationM` | `control_node.cpp` | 0.15 m | RViz 调试标记的抬高量。车道图在 0.05、路径在 0.10，再往上一层避免深度冲突。纯显示量 |
 

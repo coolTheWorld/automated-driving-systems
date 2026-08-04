@@ -30,14 +30,14 @@
 #include <vector>
 
 #include "ads_common/angles.hpp"
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
 namespace
 {
 
-using ads_control::PathProjection;
-using ads_control::Pose2D;
-using ads_control::TrackedPath;
+using ads_common::PathProjection;
+using ads_common::Pose2D;
+using ads_common::ReferenceLine;
 
 /// 逆时针（左转）圆弧，圆心在原点，半径 radius_m。
 /// 参数角 φ 从 start_rad 起、步进 step_rad、共 count 个点。
@@ -108,8 +108,8 @@ TEST(TrackedPathConstruction, RejectsPathsWithFewerThanTwoPoints)
 {
   // 少于两个点连切线都定义不出来。返回一个"空路径"让下游判空，
   // 等于把错误往下游推一层，而下游的表现是「车不动，没有任何日志」。
-  EXPECT_THROW(TrackedPath(std::vector<Pose2D>{}), std::invalid_argument);
-  EXPECT_THROW(TrackedPath(std::vector<Pose2D>{{0.0, 0.0, 0.0}}), std::invalid_argument);
+  EXPECT_THROW(ReferenceLine(std::vector<Pose2D>{}), std::invalid_argument);
+  EXPECT_THROW(ReferenceLine(std::vector<Pose2D>{{0.0, 0.0, 0.0}}), std::invalid_argument);
 }
 
 TEST(TrackedPathConstruction, RejectsCoincidentPoints)
@@ -117,7 +117,7 @@ TEST(TrackedPathConstruction, RejectsCoincidentPoints)
   // P1 真出过这个 bug：ceil(span/step) 让路径最后两个点重合，RViz 里完全看不出来。
   // 静默跳过重合点的话，那个上游 bug 会被永久掩盖。
   const std::vector<Pose2D> poses{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
-  EXPECT_THROW(TrackedPath{poses}, std::invalid_argument);
+  EXPECT_THROW(ReferenceLine{poses}, std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ TEST(TrackedPathConstruction, RejectsCoincidentPoints)
 TEST(TrackedPathArcLength, AccumulatesActualSpacingNotASampleStep)
 {
   // 故意不等距。用「序号 × 步长」的实现在这里必红，而在等距路径上不会。
-  const TrackedPath path(MakeStraightWithSpacings({0.5, 1.25, 0.25, 2.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({0.5, 1.25, 0.25, 2.0}));
 
   ASSERT_EQ(path.points().size(), 5u);
   EXPECT_DOUBLE_EQ(path.points()[0].s_m, 0.00);
@@ -149,7 +149,7 @@ TEST(TrackedPathArcLength, MatchesTheRealSpacingOnACurveNotTheSamplingStep)
   constexpr double kActualSpacingM = 0.5729;  // 实际点距
   const double step_rad = kActualSpacingM / kLaneRadiusM;
 
-  const TrackedPath path(MakeLeftArc(kLaneRadiusM, 0.0, step_rad, 20));
+  const ReferenceLine path(MakeLeftArc(kLaneRadiusM, 0.0, step_rad, 20));
 
   // 弦长（实现算的）略小于弧长（解析值），相对差 (Δφ/2)²/6 ≈ 1.5e-4。
   const double chord_m = 2.0 * kLaneRadiusM * std::sin(step_rad / 2.0);
@@ -173,7 +173,7 @@ TEST(TrackedPathCurvature, MatchesAnalyticCircleAndIsPositiveForALeftTurn)
   constexpr double kExpectedCurvature = 1.0 / kRadiusM;
   const double step_rad = 0.5729 / kRadiusM;
 
-  const TrackedPath path(MakeLeftArc(kRadiusM, 0.3, step_rad, 20));
+  const ReferenceLine path(MakeLeftArc(kRadiusM, 0.3, step_rad, 20));
 
   // 内点用中心差分。误差只来自「弧长用弦长近似」，相对量 (Δφ/2)²/6 ≈ 2.1e-4。
   for (std::size_t i = 1; i + 1 < path.points().size(); ++i) {
@@ -198,13 +198,13 @@ TEST(TrackedPathCurvature, IsNegativeForARightTurn)
   for (auto it = poses.rbegin(); it != poses.rend(); ++it) {
     reversed.push_back({it->x_m, it->y_m, ads_common::normalize_angle(it->heading_rad + M_PI)});
   }
-  const TrackedPath path(reversed);
+  const ReferenceLine path(reversed);
   EXPECT_NEAR(path.points()[5].curvature_inv_m, -1.0 / 8.0, 1e-4);
 }
 
 TEST(TrackedPathCurvature, IsZeroOnAStraightPath)
 {
-  const TrackedPath path(MakeStraightWithSpacings({0.5, 0.5, 0.5, 0.5}));
+  const ReferenceLine path(MakeStraightWithSpacings({0.5, 0.5, 0.5, 0.5}));
   for (const auto & point : path.points()) {
     EXPECT_NEAR(point.curvature_inv_m, 0.0, 1e-12);
   }
@@ -222,7 +222,7 @@ TEST(TrackedPathCurvature, SurvivesTheHeadingWrapAtPi)
   const double step_rad = 1.0 / kRadiusM;  // 点距 1 m
 
   // φ = π/2 时切向恰为 π。让 φ 扫过 π/2 两侧，保证朝向真的翻过 ±π。
-  const TrackedPath path(MakeLeftArc(kRadiusM, M_PI_2 - 10.0 * step_rad, step_rad, 21));
+  const ReferenceLine path(MakeLeftArc(kRadiusM, M_PI_2 - 10.0 * step_rad, step_rad, 21));
 
   // 先确认这条路径确实跨过了 ±π —— 否则这个用例什么都没测到，
   // 而它会安静地绿着。**测试自己也要被测**。
@@ -250,7 +250,7 @@ TEST(TrackedPathProjection, LateralErrorIsPositiveOnTheLeftOfThePath)
 {
   // 路径沿 +x，左侧就是 +y。符号写反的话 Stanley 变成正反馈，车立刻冲出去 ——
   // 所以这不是一个"静默"的错误，但它是整条控制律的地基，值得单独钉住。
-  const TrackedPath path(MakeStraightWithSpacings({1.0, 1.0, 1.0, 1.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0, 1.0, 1.0}));
 
   const PathProjection left = path.project({2.0, +1.5, 0.0});
   EXPECT_NEAR(left.lateral_error_m, +1.5, 1e-12);
@@ -261,7 +261,7 @@ TEST(TrackedPathProjection, LateralErrorIsPositiveOnTheLeftOfThePath)
 
 TEST(TrackedPathProjection, HeadingErrorIsPositiveWhenThePathTurnsLeftOfTheVehicle)
 {
-  const TrackedPath path(MakeStraightWithSpacings({1.0, 1.0, 1.0, 1.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0, 1.0, 1.0}));
 
   // 车头偏右 30°（θ = −30°），路径朝 0° → 路径在车头左侧 → ψ = +30°。
   const PathProjection projection = path.project({2.0, 0.0, -M_PI / 6.0});
@@ -272,7 +272,7 @@ TEST(TrackedPathProjection, InterpolatesInsideTheSegmentRatherThanSnappingToAVer
 {
   // 采样点间距 0.57 m，取最近**采样点**会带来最多 0.29 m 的量化误差 ——
   // 那正是 CP-P2-B 横向误差判据（0.30 m）的量级，会把判据吃光。
-  const TrackedPath path(MakeStraightWithSpacings({1.0, 1.0, 1.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0, 1.0}));
 
   // 查询点在 x = 1.5，恰好落在两个采样点正中间。
   const PathProjection projection = path.project({1.5, 0.4, 0.0});
@@ -285,7 +285,7 @@ TEST(TrackedPathProjection, InterpolatesInsideTheSegmentRatherThanSnappingToAVer
 
 TEST(TrackedPathProjection, ClampsBeyondBothEnds)
 {
-  const TrackedPath path(MakeStraightWithSpacings({1.0, 1.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0}));
 
   const PathProjection before = path.project({-5.0, 0.0, 0.0});
   EXPECT_EQ(before.index, 0u);
@@ -322,16 +322,16 @@ TEST(TrackedPathConstruction, RejectsNonFiniteValues)
   const double inf_v = std::numeric_limits<double>::infinity();
 
   EXPECT_THROW(
-    TrackedPath(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {nan_v, 0.0, 0.0}}), std::invalid_argument);
+    ReferenceLine(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {nan_v, 0.0, 0.0}}), std::invalid_argument);
   EXPECT_THROW(
-    TrackedPath(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {1.0, nan_v, 0.0}}), std::invalid_argument);
+    ReferenceLine(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {1.0, nan_v, 0.0}}), std::invalid_argument);
   // 朝向是 NaN 时点距完全正常，**只有单独判朝向才能抓住**。
   EXPECT_THROW(
-    TrackedPath(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {1.0, 0.0, nan_v}}), std::invalid_argument);
+    ReferenceLine(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {1.0, 0.0, nan_v}}), std::invalid_argument);
   // ±inf 同样要拦。本项目的 gpu_lidar 无回波射线返回的就是 ±inf 而不是 NaN
   // （CLAUDE.md 陷阱表），所以"只判 NaN"是不够的。
   EXPECT_THROW(
-    TrackedPath(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {inf_v, 0.0, 0.0}}), std::invalid_argument);
+    ReferenceLine(std::vector<Pose2D>{{0.0, 0.0, 0.0}, {inf_v, 0.0, 0.0}}), std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +342,7 @@ TEST(TrackedPathProjection, LocalSearchAgreesWithGlobalWhenThereIsNoAmbiguity)
 {
   // 没有歧义时两者必须完全一致 —— 否则局部搜索就成了另一套语义，
   // 而不是同一个查询的加速版本。
-  const TrackedPath path(MakeLeftArc(8.0, 0.0, 0.5729 / 8.0, 40));
+  const ReferenceLine path(MakeLeftArc(8.0, 0.0, 0.5729 / 8.0, 40));
 
   for (std::size_t i = 1; i + 1 < path.points().size(); ++i) {
     const Pose2D query{path.points()[i].x_m + 0.3, path.points()[i].y_m, 0.0};
@@ -364,7 +364,7 @@ TEST(TrackedPathProjection, LocalSearchStaysOnTheCurrentLegOfAHairpin)
   // 于是航向误差瞬间变成 180°、转角打死。
   //
   // 环线上刚驶出路口时就是这个情形，不是构造出来的边界情况。
-  const TrackedPath path(MakeHairpin());
+  const ReferenceLine path(MakeHairpin());
 
   const Pose2D query{10.0, 1.2, 0.0};
 
@@ -386,7 +386,7 @@ TEST(TrackedPathProjection, HintBeyondTheLastSegmentIsClampedRatherThanUndefined
 {
   // 路径换掉之后上一拍的索引可能已经越界。夹住而不是崩，
   // 因为「路径更新」和「控制回调」是两个不同频率的事件，这一定会发生。
-  const TrackedPath path(MakeStraightWithSpacings({1.0, 1.0}));
+  const ReferenceLine path(MakeStraightWithSpacings({1.0, 1.0}));
   const PathProjection projection = path.project({1.5, 0.0, 0.0}, 999u);
   EXPECT_LE(projection.index, 1u);
 }

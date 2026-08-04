@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,20 +23,21 @@
 
 #include "ads_common/angles.hpp"
 
-namespace ads_control
+namespace ads_common
 {
 
 namespace
 {
 
 /// 线段退化判据，单位 m²（比较的是长度平方，省一次开方）。
-/// 与 TrackedPath::kMinSpacingM 同源：构造时已经拒掉了更短的段，
+/// 与 ReferenceLine::kMinSpacingM 同源：构造时已经拒掉了更短的段，
 /// 这里只是投影计算里的除零保护，属于「不该发生但发生了也不能崩」。
-constexpr double kMinSegmentLengthSquaredM2 = TrackedPath::kMinSpacingM * TrackedPath::kMinSpacingM;
+constexpr double kMinSegmentLengthSquaredM2 =
+  ReferenceLine::kMinSpacingM * ReferenceLine::kMinSpacingM;
 
 }  // namespace
 
-TrackedPath::TrackedPath(std::vector<Pose2D> poses)
+ReferenceLine::ReferenceLine(std::vector<Pose2D> poses)
 {
   // ---------------------------------------------------------------------------
   //  校验
@@ -46,7 +47,7 @@ TrackedPath::TrackedPath(std::vector<Pose2D> poses)
   // 而下游最可能的表现是「车不动，没有任何日志」。
   if (poses.size() < 2) {
     throw std::invalid_argument(
-      "TrackedPath 至少需要 2 个点，收到 " + std::to_string(poses.size()) +
+      "ReferenceLine 至少需要 2 个点，收到 " + std::to_string(poses.size()) +
       " 个。上游路径是空的还是只发了起点？");
   }
 
@@ -120,7 +121,7 @@ TrackedPath::TrackedPath(std::vector<Pose2D> poses)
   }
 }
 
-PathProjection TrackedPath::project(
+PathProjection ReferenceLine::project(
   const Pose2D & query, std::optional<std::size_t> hint, std::size_t window) const
 {
   const std::size_t segment_count = points_.size() - 1;
@@ -215,4 +216,4 @@ PathProjection TrackedPath::project(
   return result;
 }
 
-}  // namespace ads_control
+}  // namespace ads_common
