@@ -5,17 +5,17 @@
 > 　　**当前阶段：P3 —— S1–S4 ✓，S5 进行中（5.1/5.2/5.7 ✓，只剩 CP-P3-B 实测）**
 > 更新：2026-08-04　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
-> 本文件按阶段分段：[P2 清单](#p2-控制stanley--pid当前阶段)（当前）→
-> [P1 清单](#p1-地图与路由已完成)（已完成）→
-> [P0a 清单](#s1容器--gpu--gui检查点-cp1go--no-go)（已完成，保留作记录）
+> 本文件按阶段分段：**P3 的进度全部记在下面的「🔖 下次从这里继续」里**
+> （P3 没有单独的清单小节 —— 它的任务详拆在 [plan.md](./plan.md) 第四部分）；
+> 再往下是 [P2 清单](#p2-s1数学推导文档--包骨架--路径预处理纯-c无-ros)、
+> [P1 清单](#p1-s1地图生成器--园区地图纯-python)、P0a 清单，**均已完成，保留作记录**。
 
 ---
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P3 的 S1–S4 全部完成；S5 里不需要仿真器的部分（障碍物生成物 +
-真值发布器 + launch 接线 + CI）也已完成。剩下两件：5.7（L3-G 加带障碍物的用例）
-和 CP-P3-B 三场景实测（要真仿真器）。**
+**当前位置**：**P3 的 S1–S5 里所有不需要仿真器的部分全部完成，全量 591 tests / 0 failures，
+已推送（`35f8350`）。只剩最后一件：CP-P3-B 的 Gazebo 三场景实测 + CP-P2-B 全量回归。**
 
 恢复命令：
 ```bash
@@ -24,6 +24,66 @@ python3 scripts/gen_obstacles.py --check          # 场景可行性 + 生成物�
 docker compose exec dev bash -c 'cd /workspace && colcon test-result --all | tail -1'
 ```
 
+---
+
+## ⚠️ 动手跑 CP-P3-B 之前，有一个决策没定
+
+**`safety.margin_m` 是「规划」约束，而 SPEC §8 S04 的 0.5 m 是对「实际车」的判据** ——
+两者之间隔着执行误差，**而现在配置里它们取的是同一个数（0.5）**。
+也就是说执行后的间距**没有任何设计余量**。
+
+L3-G 带障碍物用例的实测（假车、运动学模型）：
+
+| 量 | 值 |
+|---|---|
+| 规划器选中的横向偏移 `d_T` | 0.600 m |
+| 按它规划的间距 | 0.650 m |
+| **实测最小间距**（车体外廓 → 障碍物外廓） | **0.523 m** |
+| 高出判据的余量 | **0.023 m** ← 碰巧，不是设计 |
+
+**真 Gazebo 有轮胎侧偏，执行误差与假车不是一个量级**，CP-P3-B 的场景一很可能就卡在这条判据上。
+
+两条路（**等用户拍板**）：
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **A（推荐）** | 先按现状跑 CP-P3-B，拿真数据再定余量 | 可能第一次就红 —— 但"差多少"本身就是该记的实测值 |
+| B | 先把 `margin` 加到 0.65~0.8 再跑 | §6 的阈值跟着紧。`avoid` 场景 `o_l` 余量只有 0.4 m，加到 0.8 时可行的采样候选只剩 `d_T = 0.8` **一个**，场景变得很脆 |
+
+推荐 A 的理由：拿假车的执行误差去定余量是想当然，而 §6 那条不等式的余量本来就薄，
+**在没有真数据之前收紧它是拿 ODD 换一个没被验证过的安心**。
+
+---
+
+## 📋 CP-P3-B 待办（判据表见 plan.md「P3-5 检查点」）
+
+```bash
+# 场景一「绕」：贴边锥桶，应当从左侧绕过去
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=avoid
+# 场景二「停」：车道中心锥桶，几何上无解，应当停住并报 diagnostics
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=block
+# 场景三「回归」：无障碍物，世界与 CP-P2-B **逐字节相同**，8 条判据一条不能掉
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false
+python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/run.csv
+```
+
+⚠️ **别把两个目标点搞混**（我差点搞混）：
+
+| 用途 | 目标点 | 路线 |
+|---|---|---|
+| **CP-P2-B / CP-P3-B 实测** | `(91.75, +20.0)` | 绕环线大半圈，**560 m**，含路口弯 |
+| L3-G 闭环测试 | `(91.75, −20.0)` | 短路线，**约 95 m** |
+
+两个都是对的，`record_control_run.py` 的默认值就是前者。
+但把 −20 填进实测脚本，跑出来的数**和 CP-P2-B 的历史数据没有可比性**，
+而它看起来完全正常（车照样开完、照样停住）。
+
+⚠️ 跑之前先确认没有残留仿真进程（`ps -eo pgid,args | grep "gz sim"`），
+按**进程组**收尾（`kill -INT -- -<PGID>`），跑完 `rm -f core.*`。
+D3D12 设备丢失是**瞬态**的，连挂两次也仍然是瞬态 —— 别挂两次就去改 compose。
+
+---
+
 ### ✅ P3-S5 已完成的部分（2026-08-04）
 
 | # | 事项 | 结果 |
@@ -31,7 +91,7 @@ docker compose exec dev bash -c 'cd /workspace && colcon test-result --all | tai
 | 5.1 | `config/obstacles.yaml` + `scripts/gen_obstacles.py`（`--check` 已进 CI） | ✅ |
 | 5.2 | `gazebo_bridge/obstacle_truth` → `/perception/obstacles` | ✅ 冒烟验过（x=60, y=−52.95, STATIC, frame_id=map） |
 | — | `obstacles:=none/avoid/block` 透传到 `stack.launch.py` | ✅ |
-| — | 全量 | **584 tests, 0 failures** |
+| — | 全量（当时） | 584 tests, 0 failures |
 
 **障碍物不进 `campus_loop.sdf`**，而是运行时用 `ros_gz_sim create` 注入 ——
 那个世界是 CP-P2-B 的验收基线，往里加东西会让 P2 的实测数字全部作废，
