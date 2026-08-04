@@ -19,7 +19,7 @@
 //    ① 静态：前轴换算、控制律逐点手算、限幅。不动车。
 //    ② 夹具自检：运动学自行车模型本身对不对（定转角 → 半径 L/tan δ 的圆）。
 //       **夹具没验过就拿去验控制器，等于用一把没校准的尺子量东西。**
-//    ③ 闭环：控制器 + 夹具 + 真实的 TrackedPath 跑起来，看误差怎么收敛。
+//    ③ 闭环：控制器 + 夹具 + 真实的 ReferenceLine 跑起来，看误差怎么收敛。
 //
 //  ⚠️ 判据的期望值来自 P2-S1.1 的**独立数值仿真**（Python 前向欧拉闭环），
 //     与 docs/modules/control.md 的几何闭式解是两套方法。这与 P1 的做法一致：
@@ -40,26 +40,26 @@
 #include <vector>
 
 #include "ads_common/angles.hpp"
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
+#include "ads_common/testing/path_fixtures.hpp"
 #include "ads_control/stanley.hpp"
 #include "kinematic_bicycle.hpp"
-#include "path_fixtures.hpp"
 
 namespace
 {
 
-using ads_control::PathProjection;
-using ads_control::Pose2D;
+using ads_common::PathProjection;
+using ads_common::Pose2D;
+using ads_common::ReferenceLine;
+using ads_common_test::KinematicBicycle;
 using ads_control::StanleyController;
 using ads_control::StanleyParams;
-using ads_control::TrackedPath;
-using ads_control_test::KinematicBicycle;
 // 路径构造器搬到了 path_fixtures.hpp —— test_speed_profile 也要用同一批形状，
 // 各写一份的话两边对"什么叫 R=8 的弯"就可能悄悄产生分歧。
-using ads_control_test::MakeCircleLaps;
-using ads_control_test::MakeLeftArc;
-using ads_control_test::MakeStraightAlongX;
-using ads_control_test::MakeStraightThenLeftArc;
+using ads_common_test::MakeCircleLaps;
+using ads_common_test::MakeLeftArc;
+using ads_common_test::MakeStraightAlongX;
+using ads_common_test::MakeStraightThenLeftArc;
 
 // -----------------------------------------------------------------------------
 //  常量
@@ -130,7 +130,7 @@ struct LoopOptions
 ///
 /// 每拍的顺序与真实节点一致：取位姿 → **换算到前轴** → 投影 → 控制律 → 限幅 → 驱动车辆。
 std::vector<LoopSample> RunClosedLoop(
-  const TrackedPath & path, KinematicBicycle vehicle, const StanleyParams & params,
+  const ReferenceLine & path, KinematicBicycle vehicle, const StanleyParams & params,
   const LoopOptions & options)
 {
   StanleyController controller(params);
@@ -575,7 +575,7 @@ TEST(ClosedLoop, ConvergesFromOneMetreLateralOffset)
   // 场景 1：直线路径，初始 |e| = 1.0 m，v = 5.556 m/s（巡航）。
   // 判据：5 s 内收到 |e| < 0.05 m，超调 < 5%。
   // 理论 ln(20)/k_e = 3.00 s；S1.1 的 Python 闭环给 3.42 s、超调 0.00%。
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;
@@ -600,7 +600,7 @@ TEST(ClosedLoop, ConvergesFromAThirtyDegreeHeadingError)
 {
   // 场景 2：直线路径，初始 ψ = 30°、e = 0（**前轴**在路径上），v = 5.556。
   // 判据：5 s 内 |e| < 0.05 m。S1.1 给 2.64 s、峰值 0.986 m。
-  const TrackedPath path(MakeStraightAlongX(60.0, 0.0, 0.5));
+  const ReferenceLine path(MakeStraightAlongX(60.0, 0.0, 0.5));
 
   constexpr double kHeadingRad = 30.0 * M_PI / 180.0;
   KinematicBicycle vehicle;
@@ -636,7 +636,7 @@ TEST(ClosedLoop, TracksAConstantCurvatureArcWithoutSteadyStateError)
   //
   // 路径用 0.1 m 采样：让折线本身的误差（矢高 0.16 mm）远小于要测的量，
   // 这样测出来的就是**控制律**的残差而不是采样的残差。真实采样另有一条用例。
-  const TrackedPath path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
+  const ReferenceLine path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;
@@ -670,7 +670,7 @@ TEST(ClosedLoop, TheSteadyStateResidualIsProportionalToTheTimeStep)
   //
   // 这个区分是有实际后果的：想把它压小要**提高控制频率**，调增益动不了它。
   // 没有这条用例的话，下一个人会花一天去调 k_e。
-  const TrackedPath path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
+  const ReferenceLine path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
 
   const std::vector<double> steps_s{0.04, 0.02, 0.01};
   std::vector<double> residuals_m;
@@ -713,7 +713,7 @@ TEST(ClosedLoop, EnteringACurveFromAStraightHasASmallTransient)
   //    不经过任何一阶环节。S1.1 的 Python 闭环给 0.0166 m。
   //    但那次仿真**没有转向速率限幅**，而真控制器有（0.5 rad/s，
   //    从 0 打到入弯所需的 0.344 rad 要 0.69 s）—— 差值就是这条用例要测出来的东西。
-  const TrackedPath path(MakeStraightThenLeftArc(10.0, kTurnRadiusM, M_PI, 0.1));
+  const ReferenceLine path(MakeStraightThenLeftArc(10.0, kTurnRadiusM, M_PI, 0.1));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;
@@ -754,7 +754,7 @@ TEST(ClosedLoop, TheSteeringRateLimitOnlyBindsAboveRadiusTimesRateLimit)
   // 巡航速度下横向误差里混着更大的离散化残差（a_lat = 3.86 m/s²），
   // 拿它反推限幅有没有起作用会被那一项淹没（实测过：0.0426 vs 0.0466 m，
   // 差 9%，且**方向与直觉相反**，根本不能作为判据）。
-  const TrackedPath path(MakeStraightThenLeftArc(10.0, kTurnRadiusM, 1.5 * M_PI, 0.1));
+  const ReferenceLine path(MakeStraightThenLeftArc(10.0, kTurnRadiusM, 1.5 * M_PI, 0.1));
 
   const double binding_speed_mps = kTurnRadiusM * kMaxSteerRateRadS;
   EXPECT_LT(ArcSpeedMps(), binding_speed_mps) << "曲率限速后的车速应当低于临界车速";
@@ -815,8 +815,8 @@ TEST(ClosedLoop, RealisticPathSamplingBarelyChangesTheSteadyState)
   //
   // 折线内接于圆，矢高 R(1−cos(Δφ/2)) = 3.9 mm，所以预期是"稍微变大一点"。
   // 如果哪天这个差值突然变大，八成是投影退化成了"取最近采样点"。
-  const TrackedPath fine_path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
-  const TrackedPath coarse_path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.5));
+  const ReferenceLine fine_path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.1));
+  const ReferenceLine coarse_path(MakeCircleLaps(kTurnRadiusM, 3.0, 0.5));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;
@@ -858,7 +858,7 @@ TEST(ClosedLoop, UsingTheRearAxleDegradesTrackingBadly)
   //     arctan(k_e·|e|/(k_soft+v)) = arctan(L/R_rear)，R_rear ≈ R + |e|
   //     ⟹ |e| ≈ (k_soft+v)·L/(k_e·(R+|e|)) ≈ 3.9641×2.7/9.17 ≈ 1.17 m
   // 且符号为**负** = 路径右侧 = 弯道**外**侧 —— 正是文档里说的"持续外偏"。
-  const TrackedPath path(MakeCircleLaps(kTurnRadiusM, 4.0, 0.1));
+  const ReferenceLine path(MakeCircleLaps(kTurnRadiusM, 4.0, 0.1));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;
@@ -902,7 +902,7 @@ TEST(ClosedLoop, CurvatureFeedforwardBreaksTheSteadyState)
   // 这条用例存在的意义不是"测前馈"，而是**证明上面那条定曲率用例有鉴别力**：
   // 该改动在直路上毫无影响、所有直线用例全绿、代码审查也挡不住
   // （那行代码看起来完全正确）。挡住它的只有一条定曲率稳态用例。
-  const TrackedPath path(MakeCircleLaps(kTurnRadiusM, 5.0, 0.1));
+  const ReferenceLine path(MakeCircleLaps(kTurnRadiusM, 5.0, 0.1));
 
   KinematicBicycle vehicle;
   vehicle.wheelbase_m = kWheelbaseM;

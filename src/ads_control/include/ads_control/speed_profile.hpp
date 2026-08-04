@@ -40,7 +40,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
 namespace ads_control
 {
@@ -84,7 +84,7 @@ struct SpeedProfileParams
 
 /// @brief 一条路径对应的速度剖面。**不可变**，构造时一次算完。
 ///
-/// @note 构造时**复制**了路径的弧长数组，之后不再持有 `TrackedPath` 的引用。
+/// @note 构造时**复制**了路径的弧长数组，之后不再持有 `ReferenceLine` 的引用。
 ///       多存 n 个 double 换掉一个悬垂引用的可能 —— 而"路径对象先于剖面析构"
 ///       在 S4 换路径时是完全可能发生的（新剖面算好了，旧路径先被换掉）。
 class SpeedProfile
@@ -95,25 +95,25 @@ public:
   /// @param path   已预处理的路径（提供逐点弧长与曲率）。
   /// @param params 见 SpeedProfileParams。
   /// @throw std::invalid_argument 任一参数非有限或非正。
-  SpeedProfile(const TrackedPath & path, const SpeedProfileParams & params);
+  SpeedProfile(const ads_common::ReferenceLine & path, const SpeedProfileParams & params);
 
   /// @brief 按最近点投影查剖面速度，**O(1)**。控制回调里用这个。
   ///
-  /// @param projection `TrackedPath::project()` 的返回值。
+  /// @param projection `ReferenceLine::project()` 的返回值。
   /// @return 期望速度，m/s。
   /// @throw std::out_of_range 投影索引超出本剖面的范围（说明剖面与路径对不上了）。
   ///
   /// @note **索引对不上时抛异常而不是夹取。** 夹取的话，
   ///       "剖面还是上一条路径的"这种错误会表现为"车速莫名其妙"，
   ///       而不是一条指名道姓的报错。S4 换路径时必须同时换剖面。
-  double speed_at(const PathProjection & projection) const;
+  double speed_at(const ads_common::PathProjection & projection) const;
 
   /// @brief 同上，直接给线段索引与段内比例。
   double speed_at(std::size_t index, double ratio) const;
 
   /// @brief 剖面**自身要求的加速度** `a_ref = ½·d(v²)/ds`，单位 m/s²。给速度环做前馈。
   ///
-  /// @param projection `TrackedPath::project()` 的返回值。
+  /// @param projection `ReferenceLine::project()` 的返回值。
   /// @return 期望加速度，m/s²。负 = 剖面要求减速；巡航段为 0。
   /// @throw std::out_of_range 同 `speed_at`。
   ///
@@ -131,7 +131,7 @@ public:
   ///       那时 `ds/dt = v_ref`，于是它化简成 `½·d(v²)/ds` —— 一个只依赖剖面的量。
   ///       车偏离剖面带来的那一份差额是**反馈该管的**，塞进前馈只会让两者
   ///       职责混淆，而且在 `v_ref → 0`（终点）时还要处理除零。
-  double target_accel_at(const PathProjection & projection) const;
+  double target_accel_at(const ads_common::PathProjection & projection) const;
 
   /// @brief 同上，直接给线段索引与段内比例。
   ///
@@ -147,7 +147,7 @@ public:
 
 private:
   std::vector<double> speeds_mps_;
-  /// 路径逐点弧长的副本。见类注释：不留 TrackedPath 的引用。
+  /// 路径逐点弧长的副本。见类注释：不留 ReferenceLine 的引用。
   std::vector<double> arc_lengths_m_;
 };
 

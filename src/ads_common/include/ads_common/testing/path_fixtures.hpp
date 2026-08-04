@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef PATH_FIXTURES_HPP_
-#define PATH_FIXTURES_HPP_
+#ifndef ADS_COMMON__TESTING__PATH_FIXTURES_HPP_
+#define ADS_COMMON__TESTING__PATH_FIXTURES_HPP_
 
 // =============================================================================
 //  测试用的路径构造器 —— 直线与圆弧
@@ -33,17 +33,17 @@
 #include <vector>
 
 #include "ads_common/angles.hpp"
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 
-namespace ads_control_test
+namespace ads_common_test
 {
 
 /// 沿 +x 的直线，从 (0, y_m) 起，长 length_m，间距约 spacing_m。
-inline std::vector<ads_control::Pose2D> MakeStraightAlongX(
+inline std::vector<ads_common::Pose2D> MakeStraightAlongX(
   double length_m, double y_m, double spacing_m)
 {
   const int segments = std::max(1, static_cast<int>(std::lround(length_m / spacing_m)));
-  std::vector<ads_control::Pose2D> poses;
+  std::vector<ads_common::Pose2D> poses;
   poses.reserve(static_cast<std::size_t>(segments) + 1);
   for (int i = 0; i <= segments; ++i) {
     poses.push_back({length_m * i / segments, y_m, 0.0});
@@ -56,12 +56,12 @@ inline std::vector<ads_control::Pose2D> MakeStraightAlongX(
 ///
 /// @param skip_first 拼接到前一段后面时置 true，跳过与前一段末点重合的首点 ——
 ///                   TrackedPath 对重合点是**抛异常**而不是静默跳过。
-inline std::vector<ads_control::Pose2D> MakeLeftArc(
+inline std::vector<ads_common::Pose2D> MakeLeftArc(
   double radius_m, double center_x_m, double center_y_m, double start_rad, double sweep_rad,
   double spacing_m, bool skip_first)
 {
   const int segments = std::max(1, static_cast<int>(std::lround(radius_m * sweep_rad / spacing_m)));
-  std::vector<ads_control::Pose2D> poses;
+  std::vector<ads_common::Pose2D> poses;
   for (int i = skip_first ? 1 : 0; i <= segments; ++i) {
     const double phi_rad = start_rad + sweep_rad * i / segments;
     poses.push_back(
@@ -78,12 +78,12 @@ inline std::vector<ads_control::Pose2D> MakeLeftArc(
 /// ⚠️ 单独提供一个右转构造器，是因为「所有测试路径都是左转」是个真实的覆盖漏洞：
 ///    曲率取负号的分支（比如漏了 std::abs）在全左转的用例里**一条都不红**，
 ///    而地图上左右转各占一半。
-inline std::vector<ads_control::Pose2D> MakeRightArc(
+inline std::vector<ads_common::Pose2D> MakeRightArc(
   double radius_m, double center_x_m, double center_y_m, double start_rad, double sweep_rad,
   double spacing_m, bool skip_first)
 {
   const int segments = std::max(1, static_cast<int>(std::lround(radius_m * sweep_rad / spacing_m)));
-  std::vector<ads_control::Pose2D> poses;
+  std::vector<ads_common::Pose2D> poses;
   for (int i = skip_first ? 1 : 0; i <= segments; ++i) {
     const double phi_rad = start_rad - sweep_rad * i / segments;
     poses.push_back(
@@ -95,7 +95,7 @@ inline std::vector<ads_control::Pose2D> MakeRightArc(
 
 /// 多圈圆，圆心在原点，起点 (R, 0) 朝 +y。
 /// 闭环用例要跑十几秒，一圈才 50 m，不给足圈数车会开出路径末端。
-inline std::vector<ads_control::Pose2D> MakeCircleLaps(
+inline std::vector<ads_common::Pose2D> MakeCircleLaps(
   double radius_m, double laps, double spacing_m)
 {
   return MakeLeftArc(radius_m, 0.0, 0.0, 0.0, 2.0 * M_PI * laps, spacing_m, false);
@@ -103,9 +103,9 @@ inline std::vector<ads_control::Pose2D> MakeCircleLaps(
 
 /// 从已有路径的末点沿其切向接一段直线。用来拼「弯道 → 直路」。
 inline void AppendStraight(
-  std::vector<ads_control::Pose2D> * poses, double length_m, double spacing_m)
+  std::vector<ads_common::Pose2D> * poses, double length_m, double spacing_m)
 {
-  const ads_control::Pose2D tail = poses->back();
+  const ads_common::Pose2D tail = poses->back();
   const int segments = std::max(1, static_cast<int>(std::lround(length_m / spacing_m)));
   for (int i = 1; i <= segments; ++i) {
     const double advance_m = length_m * i / segments;
@@ -116,17 +116,17 @@ inline void AppendStraight(
 }
 
 /// 直路 → 左转弯：曲率在一点之内从 0 跳到 1/R，是控制器能遇到的**最硬**的输入。
-inline std::vector<ads_control::Pose2D> MakeStraightThenLeftArc(
+inline std::vector<ads_common::Pose2D> MakeStraightThenLeftArc(
   double straight_length_m, double radius_m, double sweep_rad, double spacing_m)
 {
-  std::vector<ads_control::Pose2D> poses = MakeStraightAlongX(straight_length_m, 0.0, spacing_m);
+  std::vector<ads_common::Pose2D> poses = MakeStraightAlongX(straight_length_m, 0.0, spacing_m);
   // 圆心在直路末端的正左方（左转），起始参数角 −π/2 对应切向 0（= 直路方向）。
-  const std::vector<ads_control::Pose2D> arc =
+  const std::vector<ads_common::Pose2D> arc =
     MakeLeftArc(radius_m, straight_length_m, radius_m, -M_PI_2, sweep_rad, spacing_m, true);
   poses.insert(poses.end(), arc.begin(), arc.end());
   return poses;
 }
 
-}  // namespace ads_control_test
+}  // namespace ads_common_test
 
-#endif  // PATH_FIXTURES_HPP_
+#endif  // ADS_COMMON__TESTING__PATH_FIXTURES_HPP_

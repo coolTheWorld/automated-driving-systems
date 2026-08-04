@@ -1,10 +1,9 @@
 # 任务清单
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
-> 状态：**P0a 完成 29/29**、**P1 完成 28/28**（CP-P1-A / CP-P1-B 达成）　|
-> **当前阶段：P2 控制 28/28 ✓ 完成**（CP-P2-A 与 CP-P2-B 均已达成）
-> 　　**唯一未决**：5.5 的 P0b/CARLA 方案待用户拍板（材料见 P2-S5 那节）
-> 更新：2026-08-02　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
+> 状态：**P0a 29/29**、**P1 28/28**、**P2 28/28**、**P0b 方案 B 已实测** —— 全部达成
+> 　　**当前阶段：P3 运动规划（Frenet 采样）—— S1 已完成，S2 起待拍板一个决策**
+> 更新：2026-08-04　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：[P2 清单](#p2-控制stanley--pid当前阶段)（当前）→
 > [P1 清单](#p1-地图与路由已完成)（已完成）→
@@ -14,10 +13,73 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P2 完成 28/28；P0b 方案 B 已完成实测（2026-08-03，云机 RTX 5070 Ti）。
-结论：`k_e = 1.0` 可以搬到 CARLA，无阻塞项，可以进 P3。**
+**当前位置**：**P3 已拆解（plan.md 第四部分）；S1「参考线几何下沉」已完成并全量回归通过。
+S2 之前卡在一个需要用户拍板的决策上 —— 见下面「⚠️ 待拍板」。**
 
-### 🚩 P0b-B 已完成（2026-08-03，云机 RTX 5070 Ti）——**结论：`k_e = 1.0` 可以搬过去**
+### ✅ P3-S1 完成（2026-08-04）—— 参考线几何从 `ads_control` 下沉到 `ads_common`
+
+**为什么必须搬**：`ads_planning` 要用弧长参数化/曲率/最近点投影，但它
+**不能依赖 `ads_control`**（方向反了）；而这层有实打实的逻辑，复制两份必然漂移。
+
+**改名对照**（旧名在文档和历史记录里还会出现，看到就是指这个）：
+
+| 旧 | 新 |
+|---|---|
+| `ads_control/path_tracking.hpp` | `ads_common/reference_line.hpp` |
+| `ads_control::TrackedPath` | `ads_common::ReferenceLine` |
+| `ads_control/test/path_fixtures.hpp` | `ads_common/include/ads_common/testing/path_fixtures.hpp` |
+| `build/ads_control/test_path_tracking` | `build/ads_common/test_reference_line` |
+
+**出口判据（机械的，不需要判断）**：`colcon test-result --all` = **414 tests, 0 failures**
+—— 与搬家前**逐字相同**。gtest 用例 134 个也一个不少（`test_path_tracking` 16 →
+`test_reference_line` 16）。
+
+> **中间出现过一次 426**，别被它吓到：ament 的 lint xunit 在**失败**时按
+> 「每处错误一个 testcase」计、通过时按「每个文件一个」计，所以计数会随失败数虚高。
+> 四个文件从 ads_control 挪到 ads_common，两边 lint 项各 ∓4，净变化恰好为 0 ——
+> **414 → 414 是结构上保证的，不是巧合。**
+
+**顺手改准的一条**：`ads_control/CMakeLists.txt` 里 ads_common 从 `PRIVATE` 改 `PUBLIC`，
+旧注释「ads_common 只出现在 .cpp 里」已不成立。实测验证过：只给 ads_control 的
+include 路径时，报错指向 **`stanley.hpp:58` 里嵌套的那一行**「ads_common/reference_line.hpp:
+No such file」—— 看起来像 ads_common 装坏了，根因却在 CMake 那一行。
+另注：`libads_control.so` 的 DT_NEEDED 里**看不到** libads_common.so，
+那是正常的（本包 .cpp 现在不引用它的任何符号），依赖此刻纯粹在头文件层面。
+
+### ⚠️ 待拍板：速度规划要不要从 `ads_control` 移到 `ads_planning`
+
+**这是 P3 唯一需要用户决定的事**（CLAUDE.md：改变模块划分属「先问后做」）。
+S1/S2/S3 不受它影响，**S4/S5 完全取决于它**。详细论证见 plan.md「P3-1 决策一」，摘要：
+
+- **移**：符合 SPEC §3.2 框图；绕障和减速是同一个决定的两半，不移的话
+  「绕不过去就停」这个能力**根本无处安放**。代价是 `speed_profile` + 19 个用例搬家，
+  且 **CP-P2-B 必须重跑**。
+- **不移**：`/planning/trajectory` 只能带几何，绕障时无法表达「这里要慢」。
+
+（`speed_controller` 的 PI 无论如何都留在 `ads_control` —— 分界线是**算目标是规划、跟目标是控制**。）
+
+---
+
+### 📌 P3 拆解要点（详见 plan.md 第四部分）
+
+**规划阶段就拦下的一个坑**：车道 3.5 m、车宽 1.8 m、SPEC §8 S04 要求侧向间距 > 0.5 m，
+于是**左侧绕行可行的充要条件是障碍物左缘 `o_l ≤ W/2 − w − g` = −0.55 m**。
+换句话说**随手放个箱子在车道中间，在不压车道线的前提下几何上无解**。
+所以 P3 交付**两个**能力（SPEC §2 第 3 条原文就是「安全减速**或**绕行」）：
+可行则绕、不可行则停 + 报 diagnostics。验收也因此是两个场景 + 一个无障碍物回归场景。
+
+| 切片 | 内容 | 状态 |
+|---|---|---|
+| S1 | 参考线几何下沉 + 包骨架 + 推导文档 | **代码部分 ✅**（1.1 文档、1.4 包骨架未做） |
+| S2 | Frenet ↔ 笛卡尔双向变换【CP-P3-A】 | 待办 |
+| S3 | 横向 lattice 采样 + 碰撞检测 + 代价函数 | 待办 |
+| S4 | 速度规划迁移 + 障碍物触发减速 | **取决于待拍板决策** |
+| S5 | `planning_node` + 真值障碍物 + control 改造【CP-P3-B】 | 同上 |
+| S6 | 文档 + CI + 收尾 | 待办 |
+
+---
+
+### 🚩 历史：P0b-B（2026-08-03，云机 RTX 5070 Ti）——**结论：`k_e = 1.0` 可以搬过去**
 
 | # | 事项 | 结果 |
 |---|---|---|
@@ -102,7 +164,7 @@ CP-P2-B 分两步走到达标，每步只改**一个**东西，各对应一个�
 （CP-P2-A 已于 2026-08-02 达成。）
 计划见 [plan.md 第三部分](./plan.md#第三部分p2-控制stanley--pid)。
 
-S1 产出：`lib/path_tracking`（16 用例）。S2 产出：`lib/stanley` + `test/kinematic_bicycle.hpp`
+S1 产出：`lib/path_tracking`（16 用例；**P3-S1 已下沉为 `ads_common::ReferenceLine`**）。S2 产出：`lib/stanley` + `test/kinematic_bicycle.hpp`
 夹具 + `test_stanley`（27 用例，**CP-P2-A 四条判据全过且一条未放宽**）。
 S3 产出：`lib/speed_profile`（曲率限速 + 前后向扫描）、`lib/speed_controller`
 （速度环 PI + 条件积分抗饱和）、`test/path_fixtures.hpp`（路径构造器，两个测试共用）、
@@ -121,7 +183,7 @@ S3 产出：`lib/speed_profile`（曲率限速 + 前后向扫描）、`lib/speed
 3. **负车速要打限流告警。** `raw_steering_rad` 对负速是夹到 0（数值保护，
    不是倒车支持），这一层安静地把倒车当静止 —— 告警只能由节点打。
 4. **换路径时必须同时换剖面并重置 hint。** `SpeedProfile::speed_at` 索引越界会抛异常
-   （有意的，不夹取）；`TrackedPath::project` 的 hint 不重置会在新路径上乱跳。
+   （有意的，不夹取）；`ReferenceLine::project` 的 hint 不重置会在新路径上乱跳。
 
 **S3 交给 S4 的两条实测约束**：
 
@@ -171,7 +233,7 @@ docker compose exec dev bash -c '
   ./build/ads_map/test_opendrive_parser    # 13 个用例，含 CP-P1-A 对账
   ./build/ads_map/test_lane_graph          # 17 个用例，含每条边的几何连续性
   ./build/ads_map/test_routing             # 10 个用例，含「对向车道必须绕行」
-  ./build/ads_control/test_path_tracking   # 16 个用例，弧长/曲率/最近点（P2-S1）
+  ./build/ads_common/test_reference_line   # 16 个用例，弧长/曲率/最近点（P2-S1 写，P3-S1 下沉）
   ./build/ads_control/test_stanley         # 27 个用例，含 CP-P2-A 四条判据（P2-S2）
   ./build/ads_control/test_speed_profile   # 16 个用例，曲率限速 + 前后向扫描（P2-S3）
   ./build/ads_control/test_speed_controller'  # 12 个用例，速度环 + 抗饱和（P2-S3）
@@ -886,7 +948,7 @@ S3 的设计漏了它，S4 的闭环把它暴露出来。
 **① 我的终点误差指标把冲过终点算成了完美停车。** 初版用
 `hypot(path_remaining_m, lateral_error_m)`，而 `path_remaining_m` 在冲过终点后
 **被夹到 0** —— "冲过去 4.25 m"和"恰好停住"给出一模一样的数（0.054 m）。
-**这正是 `path_tracking.hpp` 明确交给 S4 的那个陷阱，我照样踩了。**
+**这正是 `path_tracking.hpp`（今 `ads_common/reference_line.hpp`）明确交给 S4 的那个陷阱，我照样踩了。**
 已在节点里另算 `goal_distance_m` = 前轴到路径末点的直线距离。
 
 **② 稳态速度误差的口径错了三次才对。** 依次踩到：

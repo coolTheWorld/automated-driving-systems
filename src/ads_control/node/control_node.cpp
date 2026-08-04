@@ -54,7 +54,7 @@
 #include <tf2_ros/transform_listener.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "ads_control/path_tracking.hpp"
+#include "ads_common/reference_line.hpp"
 #include "ads_control/speed_controller.hpp"
 #include "ads_control/speed_profile.hpp"
 #include "ads_control/stanley.hpp"
@@ -62,6 +62,17 @@
 
 namespace ads_control
 {
+
+// 参考线几何在 P3-S1 下沉到了 ads_common —— 那里有两个消费者：
+// 控制侧把投影结果当横向/航向误差，规划侧把同一个结果当 Frenet 的 (s, d)。
+//
+// 只引入用到的这几个类型，**不是 using namespace**：后者会把 ads_common 的
+// 全部符号（angle_diff 等）一并拉进本命名空间，日后本包若添了同名函数，
+// 重载决议会**静默**改变而不报错。
+using ads_common::PathPoint;
+using ads_common::PathProjection;
+using ads_common::Pose2D;
+using ads_common::ReferenceLine;
 
 namespace
 {
@@ -253,7 +264,7 @@ private:
     }
 
     try {
-      auto path = std::make_unique<TrackedPath>(std::move(poses));
+      auto path = std::make_unique<ReferenceLine>(std::move(poses));
       auto profile = std::make_unique<SpeedProfile>(*path, profile_params_);
       path_ = std::move(path);
       profile_ = std::move(profile);
@@ -590,7 +601,7 @@ private:
   // ---- 算法（全部来自 lib/，本文件不含任何控制逻辑）----
   std::unique_ptr<StanleyController> stanley_;
   std::unique_ptr<SpeedController> speed_controller_;
-  std::unique_ptr<TrackedPath> path_;
+  std::unique_ptr<ReferenceLine> path_;
   std::unique_ptr<SpeedProfile> profile_;
   std::optional<std::size_t> hint_;
 

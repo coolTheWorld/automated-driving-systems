@@ -26,6 +26,16 @@
 namespace ads_control
 {
 
+// 参考线几何在 P3-S1 下沉到了 ads_common —— 那里有两个消费者：
+// 控制侧把投影结果当横向/航向误差，规划侧把同一个结果当 Frenet 的 (s, d)。
+//
+// 只引入用到的这几个类型，**不是 using namespace**：后者会把 ads_common 的
+// 全部符号（angle_diff 等）一并拉进本命名空间，日后本包若添了同名函数，
+// 重载决议会**静默**改变而不报错。
+using ads_common::PathPoint;
+using ads_common::PathProjection;
+using ads_common::ReferenceLine;
+
 namespace
 {
 
@@ -44,7 +54,7 @@ constexpr double kStraightCurvatureInvM = 1e-6;
 
 }  // namespace
 
-SpeedProfile::SpeedProfile(const TrackedPath & path, const SpeedProfileParams & params)
+SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams & params)
 {
   RequireFinitePositive(params.cruise_speed_mps, kSpeedProfileParams, "cruise_speed_mps");
   RequireFinitePositive(
@@ -136,7 +146,7 @@ double SpeedProfile::target_accel_at(std::size_t index, double ratio) const
       std::to_string(speeds_mps_.size()) + " 点）。换路径时必须同时换剖面。");
   }
   const double delta_s_m = arc_lengths_m_[index + 1] - arc_lengths_m_[index];
-  // 构造时已拒掉所有过短的段（TrackedPath::kMinSpacingM），这里只是除零兜底。
+  // 构造时已拒掉所有过短的段（ReferenceLine::kMinSpacingM），这里只是除零兜底。
   if (delta_s_m <= 0.0) {
     return 0.0;
   }

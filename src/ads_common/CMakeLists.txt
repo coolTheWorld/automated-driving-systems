@@ -23,7 +23,13 @@ find_package(ament_cmake REQUIRED)
 # find_package 里也刻意没有 rclcpp —— 靠构建系统把这条约束钉死，
 # 比写在文档里管用：谁想加 ROS 依赖，必须先改这个文件，改的时候就会看到这段。
 add_library(${PROJECT_NAME} SHARED
-  src/angles.cpp)
+  src/angles.cpp
+  # 参考线几何（P3-S1 从 ads_control 下沉）。放这儿的判据不是"通用"这种感觉，
+  # 而是**有没有第二个消费者，且它有逻辑**：ads_control 拿投影当横向误差、
+  # ads_planning 拿同一个投影当 Frenet 的 (s, d)，而弧长累加/曲率差分/局部搜索
+  # 都是会"改出分歧"的逻辑。没有逻辑的 POD（Pose2D vs ads_map::Pose2D）反而
+  # 有意保持两份 —— 见 reference_line.hpp 里 Pose2D 的 note。
+  src/reference_line.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -60,6 +66,12 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_angles test/test_angles.cpp)
   target_link_libraries(test_angles ${PROJECT_NAME})
+
+  # L1：参考线（弧长、曲率、最近点投影、横向/航向误差）。
+  # 全部与解析解比对，不读任何文件、不起 ROS，毫秒级。
+  # 随 src/reference_line.cpp 一同从 ads_control 搬来，**用例一个没删**。
+  ament_add_gtest(test_reference_line test/test_reference_line.cpp)
+  target_link_libraries(test_reference_line ${PROJECT_NAME})
 endif()
 
 ament_package()

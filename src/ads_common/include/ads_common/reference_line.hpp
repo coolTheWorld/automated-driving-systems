@@ -12,14 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ADS_CONTROL__PATH_TRACKING_HPP_
-#define ADS_CONTROL__PATH_TRACKING_HPP_
+#ifndef ADS_COMMON__REFERENCE_LINE_HPP_
+#define ADS_COMMON__REFERENCE_LINE_HPP_
 
 // =============================================================================
-//  路径预处理 —— 纯 C++17，**不依赖 ROS**
+//  参考线 —— 折线的弧长参数化、逐点曲率、最近点投影。纯 C++17，**不依赖 ROS**
 //
-//  控制律要的是「我离路径多远、车头偏了多少、这里弯多急、还剩多长」。
-//  而 /route/path 只给一串位姿。这一层负责把前者从后者算出来。
+//  一串位姿（/route/path）只告诉你「路在哪」。上层真正要的是
+//  「我离它多远、车头偏了多少、这里弯多急、还剩多长」。这一层负责把后者算出来。
+//
+//  **两个消费者，所以它在 ads_common 而不在某一个模块里**（P3-S1 下沉，
+//  在此之前它叫 ads_control::TrackedPath）：
+//
+//    - ads_control：投影结果就是 Stanley 的横向/航向误差
+//    - ads_planning：同一个投影结果就是 Frenet 的 (s, d)，
+//                    lateral_error_m 即 d，heading_error_rad 用来推 d′
+//
+//  规划包**不能**反过来依赖控制包（方向反了），而这一层有实打实的逻辑
+//  （弧长累加、曲率差分、局部搜索），复制两份必然漂移 ——
+//  这与 Pose2D 那种「没有逻辑的 POD 复制两份无所谓」是两回事，见下面的 note。
 //
 //  完整推导见 docs/modules/control.md §2。这里只重复三条**做错了不会报错**的：
 //
@@ -45,17 +56,19 @@
 #include <optional>
 #include <vector>
 
-namespace ads_control
+namespace ads_common
 {
 
 /// @brief 平面位姿。坐标系为地图系（ENU：x 东、y 北、z 上），与 ROS 的 `map` 一致。
 ///
-/// @note 本包**有意**不复用 `ads_map::Pose2D`。两者是 SPEC §3.3 意义上的两个
-///       模块，只通过 ROS 话题通信 —— 让控制器编译期依赖地图包，等于把
-///       「换一个路径来源」（P3 的规划器、P4 之后的重规划）的成本提高到改依赖树。
+/// @note 与 `ads_map::Pose2D` **有意保持为两份**。地图和控制/规划是 SPEC §3.3
+///       意义上的不同模块，只通过 ROS 话题通信 —— 让下游编译期依赖地图包，
+///       等于把「换一个路径来源」的成本提高到改依赖树。
 ///       代价是这个三字段 POD 有两份，这是有意接受的重复：**它没有逻辑，
-///       不存在"改出分歧"的可能**，与 `ads_common::angle_diff` 那种必须共用的
-///       情况不同。
+///       不存在"改出分歧"的可能**。
+///
+///       分界线就在这里：**没有逻辑的类型可以复制，有逻辑的必须共用。**
+///       所以 Pose2D 复制两份、而 `ReferenceLine` 和 `angle_diff` 下沉到本包。
 struct Pose2D
 {
   double x_m{0.0};
@@ -112,12 +125,12 @@ struct PathProjection
   double heading_error_rad{0.0};
 };
 
-/// @brief 一条经过预处理的可跟踪路径。
+/// @brief 一条经过预处理的参考线。
 ///
 /// 构造时一次性算出全部点的累计弧长与曲率，之后只做查询。
 /// **不可变**：路径变了就换一个对象，不提供原地更新 —— 原地更新会让
 /// 「上一拍的索引」这类缓存状态跨越两条不同的路径，那是一个很难查的错。
-class TrackedPath
+class ReferenceLine
 {
 public:
   /// @brief 从位姿序列构建。
@@ -133,7 +146,7 @@ public:
   /// @note **非有限值单独判**，因为 NaN 参与任何比较都返回 false，
   ///       点距检查对它恒为假、会原样放行。而且要拦 **±inf 不只是 NaN**。
   ///       本仓库已吃过两次同源的亏，见 CLAUDE.md 陷阱表「用比较去拦非有限值」。
-  explicit TrackedPath(std::vector<Pose2D> poses);
+  explicit ReferenceLine(std::vector<Pose2D> poses);
 
   /// @brief 全部路径点（含预处理结果）。
   const std::vector<PathPoint> & points() const noexcept { return points_; }
@@ -177,9 +190,10 @@ public:
 
   /// 局部搜索的默认半窗口，单位点数。
   ///
-  /// 0.5729 m/点 × 30 ≈ 17 m。依据：一拍（20 ms）最多走 8.333 × 0.02 = 0.17 m，
+  /// 0.5729 m/点 × 30 ≈ 17 m。依据：控制一拍（20 ms）最多走 8.333 × 0.02 = 0.17 m，
   /// 也就是不到半个点 —— 30 个点的窗口留了两个数量级的余量，
   /// 足够吸收调度抖动和短暂的 TF 延迟。
+  /// 规划一拍（100 ms）走 0.83 m ≈ 1.5 个点，同样远在窗口内。
   /// 调小 → 车速高或某一拍卡顿时可能"追不上"路径；
   /// 调大 → 退化成全局搜索，重新引入跨段跳变。
   static constexpr std::size_t kDefaultSearchWindow = 30;
@@ -188,6 +202,6 @@ private:
   std::vector<PathPoint> points_;
 };
 
-}  // namespace ads_control
+}  // namespace ads_common
 
-#endif  // ADS_CONTROL__PATH_TRACKING_HPP_
+#endif  // ADS_COMMON__REFERENCE_LINE_HPP_
