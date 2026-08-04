@@ -6,6 +6,7 @@
 | **不做什么** | 不建 `carla_bridge`、不接 ROS 话题、不建完整云端环境 —— 那些是方案 A |
 | **决定于** | 2026-08-03，用户在 P2-S5 的三方案里选了 B |
 | **产出** | 一个数字 + 一个判断：现在这组 `k_e = 1.0` 在 CARLA 上还成不成立 |
+| **已执行** | **2026-08-03 完成**（Vast.ai RTX 5070 Ti，CARLA 0.9.16）。结论见 §8 |
 
 ---
 
@@ -48,7 +49,7 @@ P2 把「行为漂移」从抽象风险变成了一个具体倍数。Gazebo 的�
 
 ### 2.1 **先验 Vulkan，再拉 CARLA**（plan.md §6 第 1 步）
 
-这个顺序是硬性的：CARLA 镜像约 20 GB，Vulkan 不通的话拉下来也是白拉。
+这个顺序是硬性的：压缩包 7.8 GB、解包后约 20 GB，Vulkan 不通的话拉下来也是白拉。
 
 ```bash
 vulkaninfo --summary | head -20
@@ -70,7 +71,7 @@ vk = ctypes.CDLL('libvulkan.so.1')
 
 ```bash
 # 官方预编译包（约 20 GB）
-wget https://tiny.carla.org/carla-0-9-16-linux -O CARLA_0.9.16.tar.gz
+wget https://carla-releases.b-cdn.net/Linux/CARLA_0.9.16.tar.gz   # 压缩包 7.8 GB，解包后约 20 GB
 tar xzf CARLA_0.9.16.tar.gz && cd CARLA_0.9.16
 
 # PythonAPI（官方提供 3.10/3.11/3.12 wheel —— 这正是 SPEC §9 D3 换到
@@ -81,7 +82,13 @@ pip install PythonAPI/carla/dist/carla-0.9.16-cp312-*.whl
 ### 2.3 起 CARLA（无头、低画质 —— 我们只量物理，不看画面）
 
 ```bash
-./CarlaUE4.sh -RenderOffScreen -quality-level=Low -carla-rpc-port=2000
+# ⚠️ **UE4 拒绝以 root 运行**（"Refusing to run with the root privileges."）。
+#    Vast.ai 默认就是 root，所以必须建个普通用户：
+useradd -m carla && chmod o+x /root && chown -R carla:carla /root/carla
+su - carla -c 'cd /root/carla && unset DISPLAY && setsid nohup \
+  ./CarlaUE4.sh -RenderOffScreen -quality-level=Low -carla-rpc-port=2000 \
+  > /root/carla/carla.log 2>&1 < /dev/null &'
+# 起来要约 40 s。判据：ss -lnt | grep :2000 在监听
 ```
 
 ### 2.4 跑对齐与测量
@@ -149,3 +156,52 @@ python3 scripts/carla_align_vehicle.py --host 127.0.0.1 --step-rad 0.30 --speed-
 —— 那是最容易错、又最不该在计费机器上调试的部分。
 **连接、spawn、同步模式、`get_physics_control()` 的字段名**（CARLA 0.9.15+ 改过
 若干 wheel 字段）只能上机验。**第一次上机请留出排错时间，别按"跑一条命令就完"计划。**
+
+
+---
+
+## 8. 实测结果（2026-08-03）
+
+机器：Vast.ai，**RTX 5070 Ti 16 GB**，驱动 580.105.08，**Vulkan 1.4.312
+`PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`**（对照：本机只有 `llvmpipe` / `CPU`）。
+CARLA 0.9.16，Python 3.10 wheel。
+
+蓝图 `vehicle.citroen.c3`，工况：阶跃 0.30 rad、恒速 ~3 m/s、同步模式 0.02 s。
+
+| 量 | Gazebo | CARLA | 判断 |
+|---|---|---|---|
+| 63% 上升时间 τ | 0.294 s | **0.140 s** | **安全方向** |
+| 被控对象比控制器快几倍（1/k_e = 1.0 s） | 3.4× | **7.1×** | 裕度只多不少 |
+| 稳态达成率 | 100.7% | **86.3%** | **真正的差异** |
+| 轴距 | 2.700 | **2.684**（−0.6%） | 换蓝图后基本对齐 |
+
+### 结论
+
+**① `k_e = 1.0` 可以直接搬。** 而这**推翻了本手册初版和脚本初版的判据** ——
+它们用**对称**阈值（0.5–2.0 算同量级），把 0.48× 判成"增益不能搬"。那是错的：
+震荡是被控对象**比控制器慢**引起的，执行机构**更快**是安全方向。判据已改成方向敏感。
+
+**② 真正的差异在稳态：100.7% → 86.3%，差 14.4 个百分点。**
+Gazebo 的 `AckermannSteering` 没有轮胎，运动学关系是恒等式；CARLA 有侧偏刚度，
+所以转不足。**本质差异，不是参数，对不齐。** 后果是吃转角权限：
+达到同样横摆角速度要多打 16% 转角，R=8 弯上稳态转角从占限值 57% 变成约 **66%**。
+横向误差本身由 Stanley 的横向项补掉，但余量变小 —— **P3 之后要盯，不是现在要改**。
+
+**③ 蓝图必须换成 `vehicle.citroen.c3`。** `tesla.model3` 轴距 3.005 m（**+11.3%**），
+c3 是 2.684 m（−0.6%），量了全部 33 款四轮车里最接近的。轴距
+`apply_physics_control` 改不了，只能换蓝图，而它直接进 Stanley 的前轴换算。
+
+### 上机才暴露的 3 个 bug（全部"不报错、只给假数"）
+
+| bug | 症状 | 修法 |
+|---|---|---|
+| `physics.wheels` 返回**副本**，逐个改无效；而 `physics.mass` 这种标量**有效** | "改了一半"：质量对了、最大转角还是蓝图默认 **70°**。于是 `steer=0.5` 实际是 35° 而非 0.30 rad，算出达成率 **154%** | 构造新 list 整体赋值，**并回读确认** |
+| 默认 `[70, 70, 0, 0]`，后轮不转向 | 给四个轮子都设值 → **四轮转向**，动力学完全不同 | 只动"本来就能转向"的轮子，不按下标假设 |
+| hold 段 6 s 太长 | 转弯半径 9.7 m，6 s 转过 124° → 冲出路面撞停。撞停后测到的"稳态"是碰撞产物，达成率算出 **361%** | hold 缩到 2 s（τ=0.14 s，已是 14 个时间常数）+ **撞击守卫** |
+
+> 三个都是同一个模式：**不抛异常，只给出一个看起来能用的数**。
+> 抓住它们的不是报错，是**"这个数在物理上说不通"** —— 154% 和 361% 的达成率，
+> 而运动学模型里车不可能转得比预测更急（侧偏只会让它转**不足**）。
+>
+> **教训：开环测量必须有一个"物理上不可能"的判据**，否则假数看不出来。
+> 这条比那三个 bug 本身更值钱。

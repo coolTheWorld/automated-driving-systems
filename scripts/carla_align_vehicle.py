@@ -150,7 +150,8 @@ def measure(args, targets: dict) -> int:
     vehicle = None
     try:
         blueprint = world.get_blueprint_library().find(args.blueprint)
-        spawn = world.get_map().get_spawn_points()[0]
+        spawn_points = world.get_map().get_spawn_points()
+        spawn = spawn_points[args.spawn_index % len(spawn_points)]
         vehicle = world.spawn_actor(blueprint, spawn)
         world.tick()
 
@@ -176,20 +177,50 @@ def measure(args, targets: dict) -> int:
             print('     这个偏差会独立于转向响应再贡献一份行为漂移。换个蓝图试试。')
 
         # ---- 能改的都改 ----
+        #
+        # ⚠️ **两个都是实测踩出来的坑，而且都不报错。**
+        #
+        # 坑一：`physics.wheels` 返回的是**副本**。写成
+        #     for wheel in physics.wheels: wheel.max_steer_angle = X
+        # 完全无效 —— 读回来还是原值。而 `physics.mass = X` 这种标量属性
+        # 却是生效的，于是"改了一半"：质量对了、转角没对。
+        # 实测：蓝图默认 70°，上面那种写法之后读回来仍是 70°。
+        # 必须**构造新 list 再整体赋值**。
+        #
+        # 坑二：默认是 `[70, 70, 0, 0]` —— **后轮 max_steer_angle 是 0**。
+        # 给四个轮子都设成 34.377 会让它变成**四轮转向**，动力学完全不同，
+        # 而且同样不报错。所以只改**本来就能转向的那些轮子**（>0 的），
+        # 不按下标假设哪两个是前轮。
         physics.mass = targets['mass_kg']
         physics.center_of_mass = carla.Vector3D(0.0, 0.0, targets['com_height_m'])
+        new_wheels = []
         for wheel in physics.wheels:
-            wheel.max_steer_angle = targets['max_steer_angle_deg']
+            if wheel.max_steer_angle > 0.0:
+                wheel.max_steer_angle = targets['max_steer_angle_deg']
             wheel.radius = targets['wheel_radius_cm']
-        physics.wheels = physics.wheels  # CARLA 要求整体回写才生效
+            new_wheels.append(wheel)
+        physics.wheels = new_wheels
         vehicle.apply_physics_control(physics)
         world.tick()
-        print(f'\n=== 已对齐：质量 {targets["mass_kg"]} kg、'
-              f'最大转角 {targets["max_steer_angle_deg"]:.3f}°、'
-              f'轮半径 {targets["wheel_radius_cm"]:.1f} cm ===')
+
+        # **读回来确认**，不假设写进去了。上面那两个坑都是"写了没生效且不报错"，
+        # 唯一的防线就是回读 —— 而这正是 154% 达成率那次没做、于是量了个
+        # 完全不同工况的教训。
+        verify = vehicle.get_physics_control()
+        steer_limits = [round(w.max_steer_angle, 3) for w in verify.wheels]
+        print(f'\n=== 已对齐（**回读确认**）===')
+        print(f'  质量 {verify.mass:.1f} kg（目标 {targets["mass_kg"]:.1f}）')
+        print(f'  各轮最大转角 {steer_limits} 度（目标 {targets["max_steer_angle_deg"]:.3f}，后轮应为 0）')
+        steering_wheels = [x for x in steer_limits if x > 0.0]
+        if not steering_wheels or abs(steering_wheels[0] - targets['max_steer_angle_deg']) > 1e-3:
+            print('  ✗ **最大转角没写进去** —— 下面的达成率会是假的，中止。')
+            return 2
+        actual_max_steer_rad = math.radians(steering_wheels[0])
 
         # ---- 加速到目标速度，转角保持 0 ----
-        steer_norm = args.step_rad / targets['max_steer_angle_rad']
+        # 用**回读到的**最大转角换算，不是用目标值 —— 万一没写进去，
+        # 上面已经中止了；写进去了两者相等。这样归一化永远对得上实际。
+        steer_norm = args.step_rad / actual_max_steer_rad
         trace = []
         settle_ticks = int(args.settle_s / args.step_s)
         hold_ticks = int(args.hold_s / args.step_s)
@@ -211,8 +242,17 @@ def measure(args, targets: dict) -> int:
                 # get_angular_velocity() 是**度/秒、世界系**。转成 rad/s。
                 yaw_rate = math.radians(vehicle.get_angular_velocity().z)
                 trace.append(((i - settle_ticks) * args.step_s, speed_mps, yaw_rate))
+                # 撞击守卫：转弯中车速掉一半 = 撞上东西了。此后的横摆角速度
+                # 是碰撞的产物，不是转向响应 —— **必须中止而不是照样出数**，
+                # 否则会得到一个看着像结果的假数（实测：v=0.06 时算出 361% 达成率）。
+                if speed_mps < 0.5 * args.speed_mps:
+                    print(f'\n✗ 保持段第 {(i - settle_ticks) * args.step_s:.2f} s 车速掉到 '
+                          f'{speed_mps:.2f} m/s（目标 {args.speed_mps}）—— 多半撞上东西了。')
+                    print('  转弯半径 = 轴距/tan(阶跃角)，保持越久转过的弧越长。')
+                    print('  对策：缩短 --hold-s，或换一个周围空旷的 spawn 点。')
+                    return 3
 
-        report(trace, args, targets)
+        report(trace, args, targets, measured_wheelbase_m)
         return 0
     finally:
         if vehicle is not None:
@@ -220,7 +260,7 @@ def measure(args, targets: dict) -> int:
         world.apply_settings(original)
 
 
-def report(trace, args, targets) -> None:
+def report(trace, args, targets, measured_wheelbase_m) -> None:
     """Print the same numbers, in the same shape, as probe_steering_response.py."""
     if len(trace) < 50:
         print('✗ 样本不足', file=sys.stderr)
@@ -228,6 +268,10 @@ def report(trace, args, targets) -> None:
     tail = trace[-int(len(trace) * 0.2):]
     speed = sum(s for _, s, _ in tail) / len(tail)
     yaw_final = sum(w for _, _, w in tail) / len(tail)
+    # **两个期望值都算，因为它们回答两个不同的问题**：
+    #   用 CARLA 自己的轴距 → 这辆车像不像**它自己**的运动学模型（隔离轮胎效应）
+    #   用我们的目标轴距     → 这辆车像不像**我们的**车（这才是行为漂移）
+    expected_own = speed * math.tan(args.step_rad) / measured_wheelbase_m
     expected = speed * math.tan(args.step_rad) / targets['wheelbase_m']
 
     def rise(fraction):
@@ -238,8 +282,13 @@ def report(trace, args, targets) -> None:
 
     tau = rise(0.632)
     print(f'\n=== CARLA 转向阶跃响应（δ: 0 → {args.step_rad} rad，v ≈ {speed:.2f} m/s）===')
-    print(f'  稳态横摆角速度 {yaw_final:.4f} rad/s，运动学期望 {expected:.4f}'
-          f'  → **达成率 {yaw_final / expected * 100:.1f}%**')
+    print(f'  稳态横摆角速度 {yaw_final:.4f} rad/s')
+    print(f'  vs 按 **CARLA 自己的轴距** {measured_wheelbase_m:.3f} m 算：期望 {expected_own:.4f}'
+          f'  → 达成率 **{yaw_final / expected_own * 100:.1f}%**'
+          f'   ← 低于 100% 是轮胎侧偏造成的不足转向，正常')
+    print(f'  vs 按 **我们的目标轴距** {targets["wheelbase_m"]:.3f} m 算：期望 {expected:.4f}'
+          f'  → 达成率 {yaw_final / expected * 100:.1f}%'
+          f'   ← 这一项混了轴距差，看它容易误判')
     print(f'  **63% 上升时间 τ = {tau:.3f} s**，90% = {rise(0.9):.3f} s')
     print()
     print('=== 与 Gazebo 侧对比（这就是方案 B 要的那个数）===')
@@ -250,19 +299,44 @@ def report(trace, args, targets) -> None:
         ratio = tau / targets['gazebo_tau_s']
         print(f'  **比值 {ratio:.2f}×**')
         print()
-        if 0.5 <= ratio <= 2.0:
-            print('  → 同一量级。现在这组 k_e = 1.0 在 CARLA 上大概率仍然成立，')
-            print('     P0b 的紧迫性可以正式下调（有依据，不是侥幸）。')
+        # ⚠️ **方向是有意义的，不能用对称阈值。** 初版这里写的是
+        #    「0.5–2.0 算同一量级，否则不同量级」—— 那是错的判据：
+        #    震荡是被控对象**比控制器慢**引起的（P2-S4 实测：τ=1.198 s 对上
+        #    1/k_e=1.0 s，弯道误差 0.801 m；τ 降到 0.294 s 就变 0.0633 m）。
+        #    执行机构**更快**是安全方向，再快也不会因此震荡。
+        controller_tau_s = 1.0  # 1/k_e，k_e = 1.0（control_params.yaml）
+        margin = controller_tau_s / tau if tau > 0 else float('inf')
+        gazebo_margin = controller_tau_s / targets['gazebo_tau_s']
+        print(f'  被控对象比控制器快多少倍（1/k_e = {controller_tau_s:.1f} s）：')
+        print(f'    Gazebo {gazebo_margin:.1f}×   CARLA {margin:.1f}×')
+        if ratio <= 1.0:
+            print('  → **CARLA 更快 = 安全方向。** 相位裕度只多不少，`k_e = 1.0` 不会因此震荡。')
+        elif margin >= 2.0:
+            print('  → CARLA 更慢，但仍比控制器快 2 倍以上，裕度够。')
         else:
-            print('  → **不同量级。** P2 实测过：τ 变 4 倍，横向误差变 12.7 倍。')
-            print('     现在这组增益不能直接搬过去，而且症状会是"车能开完但弯道误差大"——')
-            print('     那种情况下人的第一反应是调 k_e，**方向是错的**。')
+            print('  → ⚠️ **CARLA 比控制器慢或接近** —— 这才是震荡配方，`k_e` 必须下调。')
+
+        print()
+        print('=== 真正的差异在稳态，不在 τ ===')
+        slip = yaw_final / expected_own
+        gazebo_slip = targets['gazebo_steady_ratio']
+        print(f'  达成率  Gazebo {gazebo_slip * 100:.1f}%   CARLA {slip * 100:.1f}%'
+              f'   → 差 {(slip - gazebo_slip) * 100:+.1f} 个百分点')
+        print('  Gazebo 的 AckermannSteering **没有轮胎**，运动学关系是恒等式；')
+        print('  CARLA 有侧偏刚度，所以转不足。**这是两个环境的本质差异，不是参数。**')
+        shortfall = 1.0 / slip if slip > 0 else float('inf')
+        print(f'  后果是**吃转角权限**：要达到同样的横摆角速度，转角要多打 {(shortfall - 1) * 100:.0f}%。')
+        print(f'  地图上最急的 R=8 弯，Gazebo 侧稳态转角占限值 57%，'
+              f'CARLA 侧约 {57 * shortfall:.0f}%。')
+        print('  横向误差本身由反馈补掉（Stanley 的横向项就是干这个的），')
+        print('  但余量变小了 —— 这是 P3 之后要盯的，不是现在要改的。')
         print()
         print('  ⚠️ 比较时记得：Gazebo 侧的数经过 gazebo_bridge 一层，本脚本没有。')
         print('     差异显著时，先排除 bridge 那一层的贡献再下结论。')
 
 
 def main() -> int:
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true',
                         help='只验参数映射与单位换算，不连 CARLA')
@@ -273,7 +347,14 @@ def main() -> int:
     parser.add_argument('--speed-mps', type=float, default=4.0, help='测量时保持的车速')
     parser.add_argument('--step-s', type=float, default=0.02, help='固定仿真步长')
     parser.add_argument('--settle-s', type=float, default=8.0)
-    parser.add_argument('--hold-s', type=float, default=6.0)
+    parser.add_argument('--spawn-index', type=int, default=0,
+                        help='换一个 spawn 点（周围要空旷，转弯时别撞墙）')
+    # ⚠️ hold 段**故意很短**。τ 只有 0.1–0.3 s 量级，2 s 就是十几个时间常数，
+    #    早就到稳态了。而每多保持 1 s，车就多转一段弧 —— 3.5 m/s、转弯半径
+    #    9.7 m 时 6 s 会转过 124°，**冲出路面撞上东西**，之后测到的
+    #    "稳态横摆角速度"是撞停之后的值，完全无效（实测踩过：v 掉到 0.06 m/s，
+    #    达成率算出 361%）。短 hold 是省风险，不是省时间。
+    parser.add_argument('--hold-s', type=float, default=2.0)
     args = parser.parse_args()
 
     targets = load_targets()

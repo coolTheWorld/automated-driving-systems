@@ -233,13 +233,16 @@ python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
 # ---------- P0b 方案 B：CARLA 最小对齐验证（需要云 GPU，本机跑不了）----------
 # 上机手册见 docs/p0b_minimal_alignment.md。**本机只有软件 Vulkan**，见环境陷阱表。
 python3 scripts/carla_align_vehicle.py --dry-run        # 验单位换算，不需要 CARLA
-python3 scripts/carla_align_vehicle.py --host 127.0.0.1 # 需要 CARLA 0.9.16
+python3 scripts/carla_align_vehicle.py --host 127.0.0.1 --blueprint vehicle.citroen.c3
+# ⚠️ 蓝图用 **citroen.c3**（轴距 2.684，差 0.6%），不要用 tesla.model3（3.005，差 11.3%）——
+#    轴距 apply_physics_control 改不了，只能换蓝图，而它直接进 Stanley 的前轴换算。
+# 2026-08-03 实测：CARLA τ=0.140 s vs Gazebo 0.294 s（更快 = 安全方向），
+#    稳态达成率 86.3% vs 100.7%（轮胎侧偏，本质差异）→ k_e=1.0 可以搬。
 
 # ⚠️ 判定成败**必须**看 colcon test-result，不能只看 colcon test 的退出码 ——
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
 
 # ---------- 尚不可用（还没做到那一步） ----------
-ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
 ```
 
