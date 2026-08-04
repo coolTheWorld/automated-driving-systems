@@ -56,8 +56,8 @@
 
 #include "ads_common/reference_line.hpp"
 #include "ads_control/speed_controller.hpp"
-#include "ads_control/speed_profile.hpp"
 #include "ads_control/stanley.hpp"
+#include "ads_msgs/msg/trajectory.hpp"
 #include "ads_msgs/msg/vehicle_cmd.hpp"
 
 namespace ads_control
@@ -153,7 +153,6 @@ public:
     const double max_steer_angle_rad = declare_parameter<double>("limits.max_steer_angle_rad", 0.0);
     const double max_steer_rate_rad_s =
       declare_parameter<double>("limits.max_steer_rate_rad_s", 0.0);
-    const double cruise_speed_mps = declare_parameter<double>("limits.cruise_speed_mps", 0.0);
     const double max_accel_mps2 = declare_parameter<double>("limits.max_accel_mps2", 0.0);
     const double max_decel_mps2 = declare_parameter<double>("limits.max_decel_mps2", 0.0);
 
@@ -166,8 +165,6 @@ public:
     // 纯 P 对常值目标就没有稳态误差。只有实测出稳态误差、且说得出它来自哪个
     // 物理量时才往上加。这也是唯一一个"默认 0 是合法配置"的参数。
     const double longitudinal_ki = declare_parameter<double>("longitudinal.ki", 0.0);
-    const double max_lateral_accel_mps2 =
-      declare_parameter<double>("profile.max_lateral_accel_mps2", 0.0);
 
     control_rate_hz_ = declare_parameter<double>("control_rate_hz", 50.0);
     goal_stop_distance_m_ = declare_parameter<double>("goal.stop_distance_m", 0.5);
@@ -196,8 +193,6 @@ public:
       StanleyParams{lateral_gain_inv_s, soft_speed_mps, max_steer_angle_rad, max_steer_rate_rad_s});
     speed_controller_ = std::make_unique<SpeedController>(
       SpeedControllerParams{longitudinal_kp, longitudinal_ki, max_accel_mps2, max_decel_mps2});
-    profile_params_ =
-      SpeedProfileParams{cruise_speed_mps, max_lateral_accel_mps2, max_accel_mps2, max_decel_mps2};
     max_decel_mps2_ = max_decel_mps2;
 
     // -------------------------------------------------------------------------
@@ -206,14 +201,16 @@ public:
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
-    // ⚠️ **必须与 map_node 的发布端 QoS 匹配，且必须是 transient_local。**
-    //    /route/path 只在收到 /goal_pose 时发一次。本节点晚于那一刻启动
-    //    （或中途重启）时，volatile 订阅会**永远收不到**已经发布的那条路径 ——
-    //    症状是车停着不动、topic echo 空，而 map_node 日志写着"路径已发布：N 个点"。
-    //    P1 阶段唯一的订阅者是 RViz，人总是先起 RViz 再点目标点，所以从没露过马脚。
-    path_sub_ = create_subscription<nav_msgs::msg::Path>(
-      "/route/path", rclcpp::QoS(1).reliable().transient_local(),
-      [this](nav_msgs::msg::Path::SharedPtr msg) { on_path(std::move(msg)); });
+    // ⚠️ **P3-S4 起改吃 /planning/trajectory，不再直接订阅 /route/path。**
+    //    规划器插到了中间：它把全局路径 + 障碍物变成一条**带速度**的轨迹。
+    //    本节点因此也**不再自己算速度剖面** —— 算目标是规划，跟目标才是控制。
+    //
+    //    QoS 与 /route/path 不同：轨迹是**周期性**的（10 Hz），深度 1 的 volatile
+    //    就够。用 transient_local 反而会让新订阅者先收到一条**过期**轨迹，
+    //    而过期轨迹的几何是相对旧位置的。
+    trajectory_sub_ = create_subscription<ads_msgs::msg::Trajectory>(
+      "/planning/trajectory", rclcpp::QoS(1),
+      [this](ads_msgs::msg::Trajectory::SharedPtr msg) { on_trajectory(std::move(msg)); });
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "/odom", rclcpp::QoS(10),
       [this](nav_msgs::msg::Odometry::SharedPtr msg) { on_odom(std::move(msg)); });
@@ -243,54 +240,107 @@ private:
   //  回调
   // ---------------------------------------------------------------------------
 
-  void on_path(nav_msgs::msg::Path::SharedPtr msg)
+  void on_trajectory(ads_msgs::msg::Trajectory::SharedPtr msg)
   {
-    // map_node 在路由失败时会发一条**空 Path** 来清掉 RViz 里的旧路径
-    // （map_node.cpp:331）。那不是错误，是"现在没有目标"，所以按 INFO 处理。
-    if (msg->poses.size() < 2) {
+    // 规划器在"路走完了"或"还没收到路径"时会发**空轨迹**（或干脆不发）。
+    // 那不是错误，是"现在没有目标"，所以按 INFO 处理并转入减速停车。
+    if (msg->points.size() < 2) {
       path_.reset();
-      profile_.reset();
+      speeds_mps_.clear();
+      accels_mps2_.clear();
       hint_.reset();
       RCLCPP_INFO(
-        get_logger(), "收到 %zu 个点的路径（上游清空或路由失败），转入减速停车", msg->poses.size());
+        get_logger(), "收到 %zu 个点的轨迹（上游没有目标或已走完），转入减速停车",
+        msg->points.size());
       return;
     }
 
     std::vector<Pose2D> poses;
-    poses.reserve(msg->poses.size());
-    for (const auto & stamped : msg->poses) {
-      poses.push_back(
-        {stamped.pose.position.x, stamped.pose.position.y, tf2::getYaw(stamped.pose.orientation)});
+    poses.reserve(msg->points.size());
+    std::vector<double> speeds;
+    std::vector<double> accels;
+    speeds.reserve(msg->points.size());
+    accels.reserve(msg->points.size());
+    for (const auto & point : msg->points) {
+      poses.push_back({point.x_m, point.y_m, point.heading_rad});
+      speeds.push_back(point.speed_mps);
+      accels.push_back(point.accel_mps2);
     }
 
     try {
+      // 仍然建一条 ReferenceLine —— 但**只用它做投影**（最近点、横向/航向误差），
+      // 不再拿它算速度。曲率也以消息里的为准：
+      // 消息注释写明了「由生产方给出，下游不要重算」，
+      // 而这里重建出来的三点差分曲率在绕障段与规划器的解析曲率差得不小。
       auto path = std::make_unique<ReferenceLine>(std::move(poses));
-      auto profile = std::make_unique<SpeedProfile>(*path, profile_params_);
       path_ = std::move(path);
-      profile_ = std::move(profile);
+      speeds_mps_ = std::move(speeds);
+      accels_mps2_ = std::move(accels);
     } catch (const std::invalid_argument & e) {
-      // **丢掉旧路径而不是继续用它。** 新路径来了说明目标变了，
-      // 沿着旧路径继续开是"看起来在正常工作"的错误行为 —— 宁可刹停。
+      // **丢掉旧轨迹而不是继续用它。** 新轨迹来了说明情况变了，
+      // 沿着旧轨迹继续开是"看起来在正常工作"的错误行为 —— 宁可刹停。
       path_.reset();
-      profile_.reset();
+      speeds_mps_.clear();
+      accels_mps2_.clear();
       hint_.reset();
-      RCLCPP_ERROR(get_logger(), "路径不可用，已丢弃并转入减速停车：%s", e.what());
+      RCLCPP_ERROR(get_logger(), "轨迹不可用，已丢弃并转入减速停车：%s", e.what());
       return;
     }
 
-    // 换了路径 = 换了一套弧长与设定值序列：
-    //   * 最近点提示必须清掉，否则会拿旧路径的索引去新路径上查（越界或乱跳）。
-    //   * 速度环的积分必须清掉，否则上一条路径末端攒下的积分会带进新路径。
-    //   * 转角**不清**：车轮此刻物理上就在那个角度上，清成 0 反而是撒谎，
-    //     而且会让转向速率限幅从一个错误的起点开始。
-    hint_.reset();
-    speed_controller_->reset();
-    goal_announced_ = false;
+    // ⚠️ **10 Hz 的轨迹每一拍都是"新"的，但不能每一拍都清状态。**
+    //    P2 时 /route/path 只在换目标时来一次，所以那里清 hint 和积分是对的。
+    //    现在轨迹周期性刷新，若照抄那套：
+    //      * hint 每拍清空 → 退化成全局最近点搜索 → 环线上跨段跳变（转角打死）；
+    //      * 积分每拍清零 → 速度环的 I 项永远攒不起来，等于只有 P。
+    //    所以只在**几何真的换了一条路**时才重置。判据用轨迹起点是否跳变：
+    //    正常刷新时新轨迹起点就在自车附近（离上一条起点不到一个规划周期的距离）。
+    const double start_jump_m = last_trajectory_start_valid_
+                                  ? std::hypot(
+                                      path_->points().front().x_m - last_trajectory_start_x_m_,
+                                      path_->points().front().y_m - last_trajectory_start_y_m_)
+                                  : std::numeric_limits<double>::infinity();
+    if (start_jump_m > trajectory_jump_threshold_m_) {
+      hint_.reset();
+      speed_controller_->reset();
+      goal_announced_ = false;
+      RCLCPP_INFO(
+        get_logger(), "轨迹起点跳变 %.2f m（阈值 %.2f），重置最近点提示与速度环积分", start_jump_m,
+        trajectory_jump_threshold_m_);
+    }
+    last_trajectory_start_x_m_ = path_->points().front().x_m;
+    last_trajectory_start_y_m_ = path_->points().front().y_m;
+    last_trajectory_start_valid_ = true;
 
-    RCLCPP_INFO(
-      get_logger(), "收到新路径：%zu 个点，%.2f m，剖面首点 %.3f m/s，末点 %.3f m/s",
-      path_->points().size(), path_->length_m(), profile_->speeds_mps().front(),
-      profile_->speeds_mps().back());
+    if (msg->status == ads_msgs::msg::Trajectory::STATUS_STOPPING && !stopping_announced_) {
+      // **只在状态翻转时打一次**，否则 10 Hz 会把日志刷满。
+      RCLCPP_WARN(get_logger(), "规划器报告前方绕不过去，按停车轨迹执行");
+      stopping_announced_ = true;
+    } else if (msg->status != ads_msgs::msg::Trajectory::STATUS_STOPPING) {
+      stopping_announced_ = false;
+    }
+  }
+
+  /// @brief 按投影在轨迹上插值目标速度。
+  ///
+  /// ⚠️ **速度按 v² 线性插值，不是 v 线性。** 剖面是分段恒加速度的，
+  ///    `v² = v₀² + 2a·Δs` 才是段内的精确关系。按 v 线性插值在减速段会偏高，
+  ///    症状是终点前"总是差一点点才停住"。这条是消息契约的一部分
+  ///    （见 ads_msgs/TrajectoryPoint.msg 的 accel_mps2 注释）。
+  double speed_at(const PathProjection & projection) const
+  {
+    const std::size_t index = std::min(projection.index, speeds_mps_.size() - 2);
+    const double lo_squared = speeds_mps_[index] * speeds_mps_[index];
+    const double hi_squared = speeds_mps_[index + 1] * speeds_mps_[index + 1];
+    const double ratio = std::clamp(projection.ratio, 0.0, 1.0);
+    return std::sqrt(std::max(0.0, lo_squared + ratio * (hi_squared - lo_squared)));
+  }
+
+  /// @brief 按投影在轨迹上取目标加速度。
+  ///
+  /// ⚠️ **段内恒定，所以直接取段起点的值，不插值。** 见消息契约。
+  double accel_at(const PathProjection & projection) const
+  {
+    return accels_mps2_[std::min(projection.index, accels_mps2_.size() - 2)];
   }
 
   void on_odom(nav_msgs::msg::Odometry::SharedPtr msg)
@@ -325,7 +375,7 @@ private:
     }
 
     // ---- 逐环检查，每一环单独报 ----
-    if (!path_ || !profile_) {
+    if (!path_ || speeds_mps_.size() < 2) {
       degrade(ControlState::kNoPath, dt_s, "没有可用路径（还没点目标点，或上游路由失败）");
       return;
     }
@@ -410,8 +460,8 @@ private:
     double target_speed_mps = 0.0;
     double feedforward_accel_mps2 = -max_decel_mps2_;
     if (!goal_reached) {
-      target_speed_mps = profile_->speed_at(projection);
-      feedforward_accel_mps2 = profile_->target_accel_at(projection);
+      target_speed_mps = speed_at(projection);
+      feedforward_accel_mps2 = accel_at(projection);
     }
 
     const double steer_rad = stanley_->update(
@@ -596,13 +646,26 @@ private:
   std::size_t search_window_{30};
   std::string map_frame_;
   std::string base_frame_;
-  SpeedProfileParams profile_params_{0.0, 0.0, 0.0, 0.0};
 
   // ---- 算法（全部来自 lib/，本文件不含任何控制逻辑）----
   std::unique_ptr<StanleyController> stanley_;
   std::unique_ptr<SpeedController> speed_controller_;
   std::unique_ptr<ReferenceLine> path_;
-  std::unique_ptr<SpeedProfile> profile_;
+  /// 轨迹自带的逐点目标速度与加速度。**不再由本节点计算** ——
+  /// 算目标是规划，跟目标才是控制（P3-S4 的模块划分决定）。
+  std::vector<double> speeds_mps_;
+  std::vector<double> accels_mps2_;
+
+  /// 判定"换了一条新路"的轨迹起点跳变阈值，m。
+  /// 取 2.0：正常 10 Hz 刷新时起点位移 = 车速 × 0.1 s ≤ 0.83 m，两倍余量；
+  /// 而换目标/重路由时起点通常跳几十米。调小 → 正常刷新被误判成换路，
+  /// 速度环积分每拍清零（退化成纯 P）；调大 → 真换路时没重置，
+  /// 最近点提示会拿旧索引去新轨迹上查。
+  double trajectory_jump_threshold_m_{2.0};
+  double last_trajectory_start_x_m_{0.0};
+  double last_trajectory_start_y_m_{0.0};
+  bool last_trajectory_start_valid_{false};
+  bool stopping_announced_{false};
   std::optional<std::size_t> hint_;
 
   // ---- 运行状态 ----
@@ -615,7 +678,7 @@ private:
   // ---- 接口 ----
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
-  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
+  rclcpp::Subscription<ads_msgs::msg::Trajectory>::SharedPtr trajectory_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<ads_msgs::msg::VehicleCmd>::SharedPtr cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr debug_pub_;

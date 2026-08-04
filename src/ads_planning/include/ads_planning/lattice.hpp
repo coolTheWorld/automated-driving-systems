@@ -194,6 +194,35 @@ struct LatticeResult
   std::size_t blocked_count{0};
 };
 
+/// @brief 把一个**后轴中心**位姿换成车体外廓矩形（几何中心）。
+///
+/// 两者相差 `length/2 − rear_overhang`，本项目 = 2.2 − 0.85 = **1.35 m**。
+///
+/// @note 公开它是因为停车轨迹也要用同一套换算。**这个推导绝不能有两份** ——
+///       漏掉或写错的症状是碰撞检查整体沿车头方向偏 1.35 m，
+///       而轨迹、代价、日志全部正常：车会从障碍物"侧面擦过去"却报告安全。
+Rectangle vehicle_body_at(const CartesianState & rear_axle_pose, const LatticeParams & params);
+
+/// @brief 按给定的目标横向偏移生成一条候选的几何，**不做任何碰撞检查**。
+///
+/// @param line             参考线。
+/// @param start            自车当前 Frenet 状态。
+/// @param target_offset_m  终点横向偏移 `d_T`。
+/// @param maneuver_span_m  完成机动的纵向长度 `S`，必须为正。
+/// @param evaluation_span_m 输出轨迹的总长度，必须 ≥ 一个采样步长。
+/// @param resample_step_m  输出点距。
+/// @return 后轴中心的期望位姿序列（含解析曲率）。
+/// @throw std::domain_error 途中出现尖点（`σ = 1 − dκ ≤ 0`）。
+/// @throw std::out_of_range `evaluation_span_m` 超出参考线剩余长度。
+///
+/// @note 公开它是给**停车轨迹**用的：那时所有候选都已被淘汰，
+///       但车仍然需要一条几何来沿着减速。若把这段逻辑在 trajectory.cpp 里
+///       复制一份，两处对「`s > S` 之后保持 `d ≡ d_T`」这类约定的理解迟早分家 ——
+///       而症状只在"绕不过去"的路径上出现，日常跑车完全正常。
+std::vector<CartesianState> build_lateral_geometry(
+  const ads_common::ReferenceLine & line, const FrenetState & start, double target_offset_m,
+  double maneuver_span_m, double evaluation_span_m, double resample_step_m);
+
 /// @brief 采样一组横向候选，筛掉不安全的，按代价选最优的一条。
 ///
 /// @param line       参考线（`/route/path`）。

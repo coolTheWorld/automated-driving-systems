@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ads_control/speed_profile.hpp"
+#include "ads_planning/speed_profile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,9 +21,9 @@
 #include <string>
 #include <vector>
 
-#include "numeric_checks.hpp"
+#include "ads_common/numeric_checks.hpp"
 
-namespace ads_control
+namespace ads_planning
 {
 
 // 参考线几何在 P3-S1 下沉到了 ads_common —— 那里有两个消费者：
@@ -39,7 +39,8 @@ using ads_common::ReferenceLine;
 namespace
 {
 
-using internal::RequireFinitePositive;
+using ads_common::RequireFiniteNonNegative;
+using ads_common::RequireFinitePositive;
 
 constexpr char kSpeedProfileParams[] = "SpeedProfileParams";
 
@@ -54,22 +55,28 @@ constexpr double kStraightCurvatureInvM = 1e-6;
 
 }  // namespace
 
-SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams & params)
+SpeedProfile::SpeedProfile(
+  const std::vector<double> & arc_lengths_m, const std::vector<double> & curvatures_inv_m,
+  const SpeedProfileParams & params)
 {
   RequireFinitePositive(params.cruise_speed_mps, kSpeedProfileParams, "cruise_speed_mps");
   RequireFinitePositive(
     params.max_lateral_accel_mps2, kSpeedProfileParams, "max_lateral_accel_mps2");
   RequireFinitePositive(params.max_accel_mps2, kSpeedProfileParams, "max_accel_mps2");
   RequireFinitePositive(params.max_decel_mps2, kSpeedProfileParams, "max_decel_mps2");
+  // 非负而不是正：0 是**合法且是默认值**（末点停住）。
+  RequireFiniteNonNegative(params.terminal_speed_mps, kSpeedProfileParams, "terminal_speed_mps");
 
-  const std::vector<PathPoint> & points = path.points();
-  const std::size_t count = points.size();
-
-  arc_lengths_m_.resize(count);
-  speeds_mps_.resize(count);
-  for (std::size_t i = 0; i < count; ++i) {
-    arc_lengths_m_[i] = points[i].s_m;
+  if (arc_lengths_m.size() != curvatures_inv_m.size()) {
+    throw std::invalid_argument("SpeedProfile: 弧长与曲率数组长度不同");
   }
+  if (arc_lengths_m.size() < 2) {
+    throw std::invalid_argument("SpeedProfile: 至少需要 2 个点");
+  }
+
+  const std::size_t count = arc_lengths_m.size();
+  arc_lengths_m_ = arc_lengths_m;
+  speeds_mps_.resize(count);
 
   // ---------------------------------------------------------------------------
   //  ① 曲率限速：a_lat = v²·|κ| ≤ a_lat_max
@@ -77,7 +84,7 @@ SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams 
   // 这不是"精细化"。本地图上定速 20 km/h 过 R=8 的路口转弯车道，
   // 横向加速度是 3.86 m/s² —— **紧急变道的量级**，园区接驳车上站着的人扶不住。
   for (std::size_t i = 0; i < count; ++i) {
-    const double curvature_inv_m = std::abs(points[i].curvature_inv_m);
+    const double curvature_inv_m = std::abs(curvatures_inv_m[i]);
     if (curvature_inv_m < kStraightCurvatureInvM) {
       speeds_mps_[i] = params.cruise_speed_mps;
     } else {
@@ -93,7 +100,9 @@ SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams 
   //
   // 终点必须是 0。**先归零再扫描** —— 反过来的话后向扫描会从一个非零的
   // 终点速度往回传，剖面看着完全正常，只是车不会在终点停下来。
-  speeds_mps_.back() = 0.0;
+  // 取 min 而不是直接赋值：末点若落在急弯上，曲率限速可能比 terminal 还低，
+  // 直接赋值会**放宽**那一点的限速，而放宽限速这件事不该在"设终点"这一步发生。
+  speeds_mps_.back() = std::min(speeds_mps_.back(), params.terminal_speed_mps);
   for (std::size_t i = count - 1; i-- > 0;) {
     const double delta_s_m = arc_lengths_m_[i + 1] - arc_lengths_m_[i];
     const double reachable_mps =
@@ -125,6 +134,31 @@ SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams 
       std::sqrt(speeds_mps_[i - 1] * speeds_mps_[i - 1] + 2.0 * params.max_accel_mps2 * delta_s_m);
     speeds_mps_[i] = std::min(speeds_mps_[i], reachable_mps);
   }
+}
+
+SpeedProfile::SpeedProfile(const ReferenceLine & path, const SpeedProfileParams & params)
+: SpeedProfile(
+    [&path] {
+      std::vector<double> arc_lengths_m;
+      arc_lengths_m.reserve(path.points().size());
+      for (const PathPoint & point : path.points()) {
+        arc_lengths_m.push_back(point.s_m);
+      }
+      return arc_lengths_m;
+    }(),
+    [&path] {
+      std::vector<double> curvatures_inv_m;
+      curvatures_inv_m.reserve(path.points().size());
+      for (const PathPoint & point : path.points()) {
+        curvatures_inv_m.push_back(point.curvature_inv_m);
+      }
+      return curvatures_inv_m;
+    }(),
+    params)
+{
+  // 委托构造：全部校验与算法都在数组版里，这里只负责取数。
+  // 写成委托而不是复制一遍循环，是为了让两条入口**永远**走同一套逻辑 ——
+  // 复制的那一份迟早会漏掉某次修改。
 }
 
 double SpeedProfile::speed_at(const PathProjection & projection) const
@@ -183,4 +217,4 @@ double SpeedProfile::speed_at(std::size_t index, double ratio) const
   return std::sqrt(lo_squared + clamped_ratio * (hi_squared - lo_squared));
 }
 
-}  // namespace ads_control
+}  // namespace ads_planning

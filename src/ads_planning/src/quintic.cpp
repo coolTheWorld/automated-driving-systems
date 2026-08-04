@@ -18,19 +18,22 @@
 #include <stdexcept>
 #include <string>
 
+#include "ads_common/numeric_checks.hpp"
+
 namespace ads_planning
 {
 
 namespace
 {
 
+// 校验工具在 ads_common —— **不要在这里再写一份**。
+// 它的存在理由（NaN 参与任何比较都返回 false，所以 `span_m > 0` 对它恒为假、
+// 会原样放行）见 ads_common/numeric_checks.hpp 的文件头。
+constexpr char kQuintic[] = "QuinticPolynomial";
+
 void require_finite(double value, const char * name)
 {
-  // 单独判 isfinite 而不是靠后面的比较：NaN 参与任何比较都返回 false，
-  // 于是 `span_m > 0` 这类检查对它恒为假、会原样放行。而且要拦 ±inf 不只是 NaN。
-  if (!std::isfinite(value)) {
-    throw std::invalid_argument(std::string("QuinticPolynomial: ") + name + " 不是有限值");
-  }
+  ads_common::RequireFinite(value, kQuintic, name);
 }
 
 }  // namespace
@@ -45,12 +48,8 @@ QuinticPolynomial::QuinticPolynomial(
   require_finite(end_value, "end_value");
   require_finite(end_first_derivative, "end_first_derivative");
   require_finite(end_second_derivative, "end_second_derivative");
-  require_finite(span_m, "span_m");
 
-  if (span_m <= 0.0) {
-    throw std::invalid_argument(
-      "QuinticPolynomial: span_m = " + std::to_string(span_m) + "，必须为正数");
-  }
+  ads_common::RequireFinitePositive(span_m, kQuintic, "span_m");
 
   // ---------------------------------------------------------------------------
   //  前三个系数：把 x = 0 代进 d、d′、d″ 直接读出来

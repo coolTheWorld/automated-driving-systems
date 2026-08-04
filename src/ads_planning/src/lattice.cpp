@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "ads_common/numeric_checks.hpp"
 #include "ads_planning/quintic.hpp"
 
 namespace ads_planning
@@ -29,31 +30,23 @@ namespace ads_planning
 namespace
 {
 
+// 校验工具在 ads_common —— **不要在这里再写一份**。
+// 三个薄封装只是为了省掉每处都写 kPlanLateral 这个上下文串。
+constexpr char kPlanLateral[] = "plan_lateral";
+
 void require_finite(double value, const char * name)
 {
-  // 单独判 isfinite：NaN 参与任何比较都返回 false，靠下面的 `> 0` 拦不住它，
-  // 而且要拦 ±inf 不只是 NaN。见 CLAUDE.md 陷阱表。
-  if (!std::isfinite(value)) {
-    throw std::invalid_argument(std::string("plan_lateral: ") + name + " 不是有限值");
-  }
+  ads_common::RequireFinite(value, kPlanLateral, name);
 }
 
 void require_positive(double value, const char * name)
 {
-  require_finite(value, name);
-  if (value <= 0.0) {
-    throw std::invalid_argument(
-      std::string("plan_lateral: ") + name + " = " + std::to_string(value) + "，必须为正数");
-  }
+  ads_common::RequireFinitePositive(value, kPlanLateral, name);
 }
 
 void require_non_negative(double value, const char * name)
 {
-  require_finite(value, name);
-  if (value < 0.0) {
-    throw std::invalid_argument(
-      std::string("plan_lateral: ") + name + " = " + std::to_string(value) + "，不允许为负");
-  }
+  ads_common::RequireFiniteNonNegative(value, kPlanLateral, name);
 }
 
 /// @brief 入口处一次性校验全部参数与障碍物。
@@ -99,26 +92,6 @@ void validate(const LatticeParams & params, const std::vector<Rectangle> & obsta
   }
 }
 
-/// @brief 把一个后轴位姿换成车体外廓矩形。
-///
-/// 轨迹点是**后轴中心**（`base_link`，Autoware 惯例），而碰撞检查要的是几何中心。
-/// 两者相差 `length/2 − rear_overhang`，本项目 = 2.2 − 0.85 = 1.35 m。
-/// 漏掉这一步的症状：碰撞检查整体沿车头方向偏 1.35 m，
-/// 而轨迹、代价、日志全部正常 —— 车会从障碍物"侧面擦过去"却报告安全。
-Rectangle body_at(const CartesianState & rear_axle_pose, const LatticeParams & params)
-{
-  const double rear_axle_to_center_m = 0.5 * params.vehicle_length_m - params.rear_overhang_m;
-  Rectangle body;
-  body.center_x_m =
-    rear_axle_pose.x_m + rear_axle_to_center_m * std::cos(rear_axle_pose.heading_rad);
-  body.center_y_m =
-    rear_axle_pose.y_m + rear_axle_to_center_m * std::sin(rear_axle_pose.heading_rad);
-  body.heading_rad = rear_axle_pose.heading_rad;
-  body.length_m = params.vehicle_length_m;
-  body.width_m = params.vehicle_width_m;
-  return body;
-}
-
 /// @brief 生成候选的终点横向偏移集合，**保证含 0 且左右对称**。
 ///
 /// 用 `k·step`（k 取整数）而不是从 −max 累加到 +max：后者在浮点上未必落到 0，
@@ -160,6 +133,64 @@ std::vector<double> sample_horizons(const LatticeParams & params, double availab
 
 }  // namespace
 
+Rectangle vehicle_body_at(const CartesianState & rear_axle_pose, const LatticeParams & params)
+{
+  // 轨迹点是**后轴中心**（`base_link`，Autoware 惯例），而碰撞检查要的是几何中心。
+  // 两者相差 length/2 − rear_overhang，本项目 = 2.2 − 0.85 = 1.35 m。
+  // 漏掉这一步的症状：碰撞检查整体沿车头方向偏 1.35 m，
+  // 而轨迹、代价、日志全部正常 —— 车会从障碍物"侧面擦过去"却报告安全。
+  const double rear_axle_to_center_m = 0.5 * params.vehicle_length_m - params.rear_overhang_m;
+  Rectangle body;
+  body.center_x_m =
+    rear_axle_pose.x_m + rear_axle_to_center_m * std::cos(rear_axle_pose.heading_rad);
+  body.center_y_m =
+    rear_axle_pose.y_m + rear_axle_to_center_m * std::sin(rear_axle_pose.heading_rad);
+  body.heading_rad = rear_axle_pose.heading_rad;
+  body.length_m = params.vehicle_length_m;
+  body.width_m = params.vehicle_width_m;
+  return body;
+}
+
+std::vector<CartesianState> build_lateral_geometry(
+  const ads_common::ReferenceLine & line, const FrenetState & start, double target_offset_m,
+  double maneuver_span_m, double evaluation_span_m, double resample_step_m)
+{
+  // 终点一阶二阶导取 0：绕完要回到与车道中心线平行、曲率一致（planning.md §4.1）。
+  const QuinticPolynomial lateral(
+    start.d_m, start.d_prime, start.d_double_prime, target_offset_m, 0.0, 0.0, maneuver_span_m);
+
+  // 等分而不是 ceil(span/step)：`span/step` 恰好是整数时，浮点上它可能是
+  // 80.00000000000001，ceil 会多算一步，末点被夹到端点后**最后两个点重合**，
+  // 下游按弧长参数化时除以零。P1 踩过一次，RViz 里完全看不出来。
+  const auto segment_count =
+    std::max(1, static_cast<int>(std::llround(evaluation_span_m / resample_step_m)));
+
+  std::vector<CartesianState> points;
+  points.reserve(static_cast<std::size_t>(segment_count) + 1);
+
+  for (int i = 0; i <= segment_count; ++i) {
+    const double along_m = evaluation_span_m * i / segment_count;
+
+    FrenetState state;
+    state.s_m = start.s_m + along_m;
+    if (along_m <= maneuver_span_m) {
+      state.d_m = lateral.value_at(along_m);
+      state.d_prime = lateral.first_derivative_at(along_m);
+      state.d_double_prime = lateral.second_derivative_at(along_m);
+    } else {
+      // 机动做完之后**保持**那个偏移，不要继续外推五次式 ——
+      // 五次式在区间外发散得很快（1.5·S 处已偏出米级），
+      // 而"变道完成后沿新位置直行"才是物理上该发生的事。
+      state.d_m = target_offset_m;
+      state.d_prime = 0.0;
+      state.d_double_prime = 0.0;
+    }
+
+    points.push_back(to_cartesian(line, state));
+  }
+  return points;
+}
+
 LatticeResult plan_lateral(
   const ads_common::ReferenceLine & line, const FrenetState & start,
   const std::vector<Rectangle> & obstacles, const LatticeParams & params,
@@ -189,12 +220,6 @@ LatticeResult plan_lateral(
     return result;
   }
 
-  // 等分而不是 ceil(span/step)：`span/step` 恰好是整数时，浮点上它可能是
-  // 80.00000000000001，ceil 会多算一步，末点被夹到端点后**最后两个点重合**，
-  // 下游按弧长参数化时除以零。P1 踩过一次，RViz 里完全看不出来。
-  const auto segment_count =
-    std::max(1, static_cast<int>(std::llround(evaluation_span_m / params.resample_step_m)));
-
   const std::vector<double> offsets = sample_offsets(params);
   const std::vector<double> horizons = sample_horizons(params, evaluation_span_m);
   result.candidate_count = offsets.size() * horizons.size();
@@ -204,62 +229,32 @@ LatticeResult plan_lateral(
 
   for (const double target_offset_m : offsets) {
     for (const double maneuver_span_m : horizons) {
-      // 终点一阶二阶导取 0：绕完要回到与车道中心线平行、曲率一致（planning.md §4.1）。
-      const QuinticPolynomial lateral(
-        start.d_m, start.d_prime, start.d_double_prime, target_offset_m, 0.0, 0.0, maneuver_span_m);
-
       Candidate candidate;
       candidate.target_offset_m = target_offset_m;
       candidate.maneuver_span_m = maneuver_span_m;
-      candidate.points.reserve(static_cast<std::size_t>(segment_count) + 1);
 
-      bool blocked = false;
+      // 尖点（σ = 1 − dκ ≤ 0）在本项目地图上到不了（d·κ ≤ 0.106），
+      // 但换地图或放宽 max_lateral_offset_m 之后就可能。to_cartesian 会抛，
+      // 这里**把它当成"这条候选不可行"而不是让异常穿透上去** ——
+      // 一条候选的几何退化不该让整个规划周期失败。
+      try {
+        candidate.points = build_lateral_geometry(
+          line, start, target_offset_m, maneuver_span_m, evaluation_span_m, params.resample_step_m);
+      } catch (const std::domain_error &) {
+        ++result.blocked_count;
+        continue;
+      }
+
       double min_clearance_m = std::numeric_limits<double>::infinity();
-
-      for (int i = 0; i <= segment_count; ++i) {
-        const double along_m = evaluation_span_m * i / segment_count;
-
-        FrenetState state;
-        state.s_m = start.s_m + along_m;
-        if (along_m <= maneuver_span_m) {
-          state.d_m = lateral.value_at(along_m);
-          state.d_prime = lateral.first_derivative_at(along_m);
-          state.d_double_prime = lateral.second_derivative_at(along_m);
-        } else {
-          // 机动做完之后**保持**那个偏移，不要继续外推五次式 ——
-          // 五次式在区间外发散得很快（1.5·S 处已偏出米级），
-          // 而"变道完成后沿新位置直行"才是物理上该发生的事。
-          state.d_m = target_offset_m;
-          state.d_prime = 0.0;
-          state.d_double_prime = 0.0;
-        }
-
-        // 尖点（σ = 1 − dκ ≤ 0）在本项目地图上到不了（d·κ ≤ 0.106），
-        // 但换地图或放宽 max_lateral_offset_m 之后就可能。to_cartesian 会抛，
-        // 这里**把它当成"这条候选不可行"而不是让异常穿透上去** ——
-        // 一条候选的几何退化不该让整个规划周期失败。
-        CartesianState pose;
-        try {
-          pose = to_cartesian(line, state);
-        } catch (const std::domain_error &) {
-          blocked = true;
-          break;
-        }
-
-        const Rectangle body = body_at(pose, params);
+      for (const CartesianState & pose : candidate.points) {
+        const Rectangle body = vehicle_body_at(pose, params);
         for (const Rectangle & obstacle : obstacles) {
           min_clearance_m = std::min(min_clearance_m, distance_m(body, obstacle));
         }
-        // **准入条件，不是代价项**：不满足直接淘汰，不允许"够便宜就擦着过"。
-        if (min_clearance_m < params.safety_margin_m) {
-          blocked = true;
-          break;
-        }
-
-        candidate.points.push_back(pose);
       }
 
-      if (blocked) {
+      // **准入条件，不是代价项**：不满足直接淘汰，不允许"够便宜就擦着过"。
+      if (min_clearance_m < params.safety_margin_m) {
         ++result.blocked_count;
         continue;
       }

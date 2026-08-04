@@ -19,7 +19,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "numeric_checks.hpp"
+#include "ads_common/numeric_checks.hpp"
 
 namespace ads_control
 {
@@ -38,8 +38,8 @@ namespace
 // 校验失败时报出**名字**：五个参数共用一句「参数非法」的话，
 // 排查时还得回来读代码才知道是哪一项。启动期的一次字符串拼接，
 // 换来的是"看日志就知道改哪一行 YAML"。实现见 numeric_checks.hpp。
-using internal::RequireFinite;
-using internal::RequireFinitePositive;
+using ads_common::RequireFinite;
+using ads_common::RequireFinitePositive;
 
 constexpr char kStanleyParams[] = "StanleyParams";
 constexpr char kStanleyController[] = "StanleyController";

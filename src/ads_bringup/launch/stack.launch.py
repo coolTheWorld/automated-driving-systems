@@ -112,6 +112,55 @@ def _resolve_sim_source(context, *args, **kwargs):
     ]
 
 
+def planning_node_params() -> dict:
+    """
+    planning_node 的全部参数，来自两个 YAML 且**不引入任何新数字**.
+
+    分工与 control_node 一致，判据同样是「换一辆车它会不会变」：
+
+      * vehicle_params.yaml —— 车**外廓**（长/宽/后悬，碰撞检查用）和
+        **能力**（巡航速度、最大加减速）。换车会变。
+      * planning_params.yaml —— 采样网格、安全间距、代价权重。换驾驶风格才变。
+
+    ⚠️ **车宽绝不在 planning_params.yaml 里再抄一份。** 抄一份的症状是
+       「改了车宽之后碰撞检查还用旧值」，而没有任何一层报错。
+
+    :return: 传给 planning_node 的参数字典
+    """
+    share = Path(get_package_share_directory('ads_planning')) / 'config'
+    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
+    planning = yaml.safe_load((share / 'planning_params.yaml').read_text(encoding='utf-8'))
+
+    geo = vehicle['geometry']
+    lim = vehicle['limits']
+    return {
+        # 采样网格
+        'lateral.max_offset_m': planning['lateral']['max_offset_m'],
+        'lateral.offset_step_m': planning['lateral']['offset_step_m'],
+        'longitudinal.min_horizon_m': planning['longitudinal']['min_horizon_m'],
+        'longitudinal.max_horizon_m': planning['longitudinal']['max_horizon_m'],
+        'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],
+        'trajectory.resample_step_m': planning['trajectory']['resample_step_m'],
+        # 安全（准入条件，不是代价项）
+        'safety.margin_m': planning['safety']['margin_m'],
+        'safety.stop_margin_m': planning['safety']['stop_margin_m'],
+        # 代价权重
+        'cost.weight_offset': planning['cost']['weight_offset'],
+        'cost.weight_curvature': planning['cost']['weight_curvature'],
+        'cost.weight_clearance': planning['cost']['weight_clearance'],
+        'cost.weight_consistency': planning['cost']['weight_consistency'],
+        # 车辆外廓与能力 —— 规划器不得重新定义
+        'vehicle.length_m': geo['length_m'],
+        'vehicle.width_m': geo['width_m'],
+        'vehicle.rear_overhang_m': geo['rear_overhang_m'],
+        'speed.cruise_speed_mps': lim['cruise_speed_mps'],
+        'speed.max_lateral_accel_mps2': planning['speed']['max_lateral_accel_mps2'],
+        'speed.max_accel_mps2': lim['max_accel_mps2'],
+        # ⚠️ 用的是 max_decel（3.0，舒适约束）而**不是** emergency_decel（5.0）。
+        'speed.max_decel_mps2': lim['max_decel_mps2'],
+    }
+
+
 def control_node_params() -> dict:
     """
     control_node 的全部参数，来自两个 YAML 且**不引入任何新数字**.
@@ -140,7 +189,6 @@ def control_node_params() -> dict:
         'geometry.wheelbase_m': geo['wheelbase_m'],
         'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
         'limits.max_steer_rate_rad_s': lim['max_steer_rate_rad_s'],
-        'limits.cruise_speed_mps': lim['cruise_speed_mps'],
         'limits.max_accel_mps2': lim['max_accel_mps2'],
         # ⚠️ 注意用的是 max_decel（3.0，舒适约束）而**不是** emergency_decel（5.0，
         #    物理能力）。后者只允许安全模块下发；常规控制器自己不得越过 3.0。
@@ -151,7 +199,6 @@ def control_node_params() -> dict:
         'lateral.search_window': control['lateral']['search_window'],
         'longitudinal.kp': control['longitudinal']['kp'],
         'longitudinal.ki': control['longitudinal']['ki'],
-        'profile.max_lateral_accel_mps2': control['profile']['max_lateral_accel_mps2'],
         'goal.stop_distance_m': control['goal']['stop_distance_m'],
         'safety.max_lateral_error_m': control['safety']['max_lateral_error_m'],
         'safety.odom_timeout_s': control['safety']['odom_timeout_s'],
@@ -211,10 +258,29 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # P2：路径跟踪控制（横向 Stanley + 纵向速度剖面/PI）。
+        # P3：运动规划（Frenet 采样 + 碰撞检测 + 速度剖面）。
         #
-        # 它同样对仿真源**一无所知** —— 只订阅 /route/path、/odom 和 TF，
-        # 只发 /vehicle_cmd。这三个都是 SPEC §4.1 的规范话题，
+        # 它插在 map_node 与 control_node 之间：把全局路径 + 障碍物
+        # 变成一条**带速度**的轨迹。
+        #
+        # ⚠️ **/perception/obstacles 现在还没有发布者**（真值障碍物发布器在 P3-S5）。
+        #    这不影响启动：没有障碍物时它就按空障碍物列表规划，沿车道中心线走。
+        #    「等一个可能永远不来的话题」是很常见的死法，本节点不这么做。
+        Node(
+            package='ads_planning',
+            executable='planning_node',
+            name='planning_node',
+            parameters=[planning_node_params(), {'use_sim_time': True}],
+            output='screen',
+        ),
+
+        # P2：路径跟踪控制（横向 Stanley + 纵向 PI）。
+        #
+        # ⚠️ **P3-S4 起它吃 /planning/trajectory 而不是 /route/path** ——
+        #    速度剖面已经移到规划侧（算目标是规划，跟目标才是控制）。
+        #
+        # 它同样对仿真源**一无所知** —— 只订阅 /planning/trajectory、/odom 和 TF，
+        # 只发 /vehicle_cmd。这些都是 SPEC §4.1 意义上的规范接口，
         # 所以 sim:=carla 那天它也一行不用改。
         #
         # ⚠️ 参数**全部**从 YAML 读，这个文件里一个数字都不写。

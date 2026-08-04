@@ -2,7 +2,7 @@
 
 > 详细拆解与理由见 [plan.md](./plan.md)　|　规格见 [SPEC.md](../SPEC.md)
 > 状态：**P0a 29/29**、**P1 28/28**、**P2 28/28**、**P0b 方案 B 已实测** —— 全部达成
-> 　　**当前阶段：P3 运动规划（Frenet 采样）—— S1 ✓、S2 ✓（CP-P3-A）、S3 ✓，下一步 S4**
+> 　　**当前阶段：P3 运动规划 —— S1 ✓、S2 ✓（CP-P3-A）、S3 ✓、S4 ✓，下一步 S5（要仿真器）**
 > 更新：2026-08-04　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：[P2 清单](#p2-控制stanley--pid当前阶段)（当前）→
@@ -13,8 +13,61 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P3 的 S1、S2、S3 均已完成。下一步 S4（速度规划从 `ads_control`
-迁移到 `ads_planning` + 障碍物触发的减速停车）。**
+**当前位置**：**P3 的 S1–S4 全部完成，整条 `map_node → planning_node → control_node`
+链路已在 L3-G 里端到端跑通（不需要 GPU）。下一步 S5 —— 那是需要真仿真器的部分。**
+
+恢复命令：
+```bash
+export COMPOSE_FILE=docker/docker-compose.local.yml && docker compose up -d
+docker compose exec dev bash -c 'cd /workspace && colcon test-result --all | tail -1'
+```
+
+### ✅ P3-S4 完成（2026-08-04）—— 速度规划迁移 + 轨迹装配 + 节点接线
+
+| 判据 | 结果 |
+|---|---|
+| 全量 | **580 tests, 0 failures**（S3 结束时 532） |
+| gtest 用例 | 189 → **201**（新增 `test_trajectory` 12） |
+| **搬家判据**：`test_speed_profile` | **19 个全绿、数字一个没改** |
+| **L3-G 闭环**（链路里多了 `planning_node`） | ✅ 通过 |
+| `libads_planning.so` 零 ROS | ✅ |
+
+### ⚠️ S4/S5 的边界被移动了（原计划有编译顺序死结）
+
+原计划 4.1「搬走 speed_profile」+ 5.4「control 改吃轨迹」中间隔着一个
+**编不过的中间态**：搬走之后 `ads_control` 立刻挂，L3-G 随之红。
+所以把 5.3（`planning_node`）和 5.4 并进了 S4。
+
+**好处是 S4 全程可在 CI 内验证**；S5 现在只剩「要真仿真器、要人看」的部分：
+障碍物生成物 + 真值发布器 + CP-P3-B 实测 + CP-P2-B 回归。
+
+### 🔍 S4 踩到的一个**只在特定条件下才现形**的设计问题
+
+`SpeedProfile` 从 P2 起就在末点强制 `v = 0` —— 那时它覆盖整条路线，末点就是终点。
+P3 的轨迹是 **30 m 滚动窗口**，末点只是"看到这儿为止"，再归零就是宣称
+「30 m 后你会停住」，后向扫描会把窗口后半段速度全压低。
+
+**隐蔽之处**：`√(2·3·30) = 13.4 m/s` 高于巡航 5.556，所以**自车所在的窗口前端
+一点问题都没有**。直路上一切正常，只有窗口因路径末端变短时才突然"莫名其妙减速"。
+
+修法：`SpeedProfileParams::terminal_speed_mps`（默认 0，所以 P2 的 19 个用例一字不变）。
+前视截断 ⟹ 填巡航；路径末端/停车点 ⟹ 填 0。
+
+### 🔍 故障注入：5 次（trajectory.cpp），全部转红且失败集互不相同
+
+| 注入 | 红了几条 |
+|---|---|
+| 停车点用轨迹点而不是车体外廓（漏 3.55 m 车头） | 2 |
+| 忘记退 `stop_margin_m` | 1 |
+| 停车轨迹末点不归零 | 1 |
+| 末点一律归零（P3 之前的行为） | 2 |
+| 停车时回中心线而不是保持当前横向位置 | 1 |
+
+### 📌 顺手合并的重复：`numeric_checks` 下沉到 `ads_common`
+
+它自己的注释写着「本包里有三处要做同一件事」—— 而我在 S3 又在 `quintic.cpp`、
+`lattice.cpp` 各写了一份，变成**五处**。按同一条判据（有逻辑、多消费者）下沉，
+命名空间 `ads_control::internal` → `ads_common`。
 
 恢复命令：
 ```bash
@@ -168,8 +221,8 @@ No such file」—— 看起来像 ads_common 装坏了，根因却在 CMake 那
 | S1 | 参考线几何下沉 + 包骨架 + 推导文档 | **✅ 全部完成**（含 `docs/modules/planning.md`） |
 | S2 | Frenet ↔ 笛卡尔双向变换【CP-P3-A】 | **✅ 达成** |
 | S3 | 横向 lattice 采样 + 碰撞检测 + 代价函数 | **✅ 完成** |
-| S4 | 速度规划迁移 + 障碍物触发减速 | **← 下一步**（已拍板：移到 `ads_planning`） |
-| S5 | `planning_node` + 真值障碍物 + control 改造【CP-P3-B】 | 待办 |
+| S4 | 速度规划迁移 + 轨迹装配 + `planning_node` + control 改吃轨迹 | **✅ 完成** |
+| S5 | 障碍物生成物 + 真值发布器 + **CP-P3-B 实测** + CP-P2-B 回归 | **← 下一步（要真仿真器）** |
 | S6 | 文档 + CI + 收尾 | 待办 |
 
 ---

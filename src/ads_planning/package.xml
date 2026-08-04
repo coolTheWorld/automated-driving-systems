@@ -35,6 +35,20 @@
        症状是控制器和规划器对同一个位置算出不同的横向偏移，而两边各自都自洽。 -->
   <depend>ads_common</depend>
 
+  <!-- 以下全部只服务于 node/planning_node.cpp（ROS 包装层）。
+       lib/ 那一半（libads_planning.so）一个都不链接 —— 由 CMakeLists 里
+       target_link_libraries 的作用域 + no_ros_dependencies 这道 CTest 机械保证。 -->
+  <depend>rclcpp</depend>
+  <depend>ads_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <!-- 诊断量（候选数/淘汰数/停车裕度）用 DiagnosticArray 发出来。
+       用它而不是往 ads_msgs 里加新消息：这些是**调试量**不是模块间契约。 -->
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->

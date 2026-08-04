@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NUMERIC_CHECKS_HPP_
-#define NUMERIC_CHECKS_HPP_
+#ifndef ADS_COMMON__NUMERIC_CHECKS_HPP_
+#define ADS_COMMON__NUMERIC_CHECKS_HPP_
 
 // =============================================================================
-//  入参校验的三个小工具 —— **内部头文件，不安装、不对外**
+//  入参校验的三个小工具
 //
-//  为什么值得单独抽一个文件：本包里有三处要做同一件事（Stanley、速度剖面、
-//  速度环），而这件事本身是本仓库**已经吃过两次亏**的那一类：
+//  为什么值得单独抽一个文件、又为什么在 ads_common：
+//  **有逻辑、且有多个消费者。** 起初只有 ads_control 里三处（Stanley、速度剖面、
+//  速度环），P3-S4 之后变成跨两个包五处（再加 quintic、lattice）——
+//  而这件事本身是本仓库**已经吃过两次亏**的那一类：
 //
 //      NaN 参与**任何**比较都返回 false。
 //      所以 `if (x <= 0.0) throw;` 对 NaN **恒为假**，一条都拦不住。
@@ -36,9 +38,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace ads_control
-{
-namespace internal
+namespace ads_common
 {
 
 /// @brief 要求"有限"（正负都合法）。用于运行期入参，如误差、车速、dt。
@@ -73,7 +73,6 @@ inline void RequireFiniteNonNegative(double value, const char * what, const char
   }
 }
 
-}  // namespace internal
-}  // namespace ads_control
+}  // namespace ads_common
 
-#endif  // NUMERIC_CHECKS_HPP_
+#endif  // ADS_COMMON__NUMERIC_CHECKS_HPP_

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ADS_CONTROL__SPEED_PROFILE_HPP_
-#define ADS_CONTROL__SPEED_PROFILE_HPP_
+#ifndef ADS_PLANNING__SPEED_PROFILE_HPP_
+#define ADS_PLANNING__SPEED_PROFILE_HPP_
 
 // =============================================================================
 //  速度剖面：路径上每一点该跑多快 —— 纯 C++17，**不依赖 ROS**
@@ -42,7 +42,7 @@
 
 #include "ads_common/reference_line.hpp"
 
-namespace ads_control
+namespace ads_planning
 {
 
 /// @brief 速度剖面的全部参数。
@@ -80,21 +80,57 @@ struct SpeedProfileParams
   /// ⚠️ **不要用 `emergency_decel_mps2`（5.0）**。那是车辆的物理能力，
   ///    只有安全模块可以下发。常规剖面用它等于把每次到站都开成紧急制动。
   double max_decel_mps2;
+
+  /// **末点**的允许速度，m/s，非负。默认 0 = 在末点停住。
+  ///
+  /// ⚠️ **P3-S4 新增。P2 里这一项是写死的 0，因为那时剖面覆盖的是整条路线，
+  ///    末点就是终点。P3 的轨迹是一个 30 m 的滚动窗口，末点只是"看到这儿为止"** ——
+  ///    再强制归零就等于宣称「30 m 后你会停住」，那是假的。
+  ///
+  ///    后果不像听上去那么无害：后向扫描会从 0 往回传，
+  ///    窗口里靠后的一大段速度全被压低。本项目 max_decel = 3.0、窗口 30 m 时，
+  ///    `√(2·3·30) = 13.4 m/s` 仍高于巡航 5.556，所以**自车所在的窗口前端看不出问题** ——
+  ///    这正是它危险的地方：直路上一切正常，等到窗口因路径末端而变短时
+  ///    才突然开始"莫名其妙地减速"。
+  ///
+  ///    该填什么：窗口因**前视距离**截断 ⟹ 填巡航速度；
+  ///              窗口因**路径末端或停车点**截断 ⟹ 填 0。
+  ///
+  /// 留 0 作默认值是有意的：**漏填时行为是保守的**（早停），
+  /// 而不是"车冲过终点"。见 `trajectory.cpp` 里的判断。
+  double terminal_speed_mps{0.0};
 };
 
 /// @brief 一条路径对应的速度剖面。**不可变**，构造时一次算完。
 ///
-/// @note 构造时**复制**了路径的弧长数组，之后不再持有 `ReferenceLine` 的引用。
+/// @note 构造时**复制**了弧长数组，之后不再持有任何输入的引用。
 ///       多存 n 个 double 换掉一个悬垂引用的可能 —— 而"路径对象先于剖面析构"
-///       在 S4 换路径时是完全可能发生的（新剖面算好了，旧路径先被换掉）。
+///       在换路径时是完全可能发生的（新剖面算好了，旧路径先被换掉）。
 class SpeedProfile
 {
 public:
-  /// @brief 从路径与参数算出剖面。
+  /// @brief 从逐点弧长与曲率算出剖面。
   ///
-  /// @param path   已预处理的路径（提供逐点弧长与曲率）。
-  /// @param params 见 SpeedProfileParams。
-  /// @throw std::invalid_argument 任一参数非有限或非正。
+  /// @param arc_lengths_m     从起点算起的累计弧长，**严格递增**，单位 m。
+  /// @param curvatures_inv_m  各点曲率，单位 1/m。长度必须与 `arc_lengths_m` 相同。
+  /// @param params            见 SpeedProfileParams。
+  /// @throw std::invalid_argument 任一参数非有限或非正；两个数组长度不同或少于 2 个点。
+  ///
+  /// @note **为什么收两个裸数组而不是某个路径类**（P3-S4 改的）：
+  ///       本类真正需要的输入就只有这两样。收 `ReferenceLine` 的话，
+  ///       规划器要把**自己算出来的候选轨迹**喂进来就得先塞回一个 ReferenceLine，
+  ///       而那一步会用三点差分**重算一遍曲率** —— 于是同一条轨迹有了两个曲率真值，
+  ///       绕障段（五次多项式解析曲率 vs 三点差分）差得比中心线上大得多。
+  ///       把输入缩到"它真正需要的"，这个岔路口就不存在了。
+  SpeedProfile(
+    const std::vector<double> & arc_lengths_m, const std::vector<double> & curvatures_inv_m,
+    const SpeedProfileParams & params);
+
+  /// @brief 便捷重载：直接从参考线取弧长与曲率。
+  ///
+  /// @note 用在**停车剖面**上（planning.md §6：绕不过去时轨迹就是中心线本身），
+  ///       以及全部 L1 用例里。它不是"给测试留的后门"——
+  ///       绕障轨迹走上面那个数组版，中心线轨迹走这个，两条路各有生产调用方。
   SpeedProfile(const ads_common::ReferenceLine & path, const SpeedProfileParams & params);
 
   /// @brief 按最近点投影查剖面速度，**O(1)**。控制回调里用这个。
@@ -151,6 +187,6 @@ private:
   std::vector<double> arc_lengths_m_;
 };
 
-}  // namespace ads_control
+}  // namespace ads_planning
 
-#endif  // ADS_CONTROL__SPEED_PROFILE_HPP_
+#endif  // ADS_PLANNING__SPEED_PROFILE_HPP_

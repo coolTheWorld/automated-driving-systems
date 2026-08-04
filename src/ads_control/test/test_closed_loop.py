@@ -89,7 +89,6 @@ def _control_params() -> dict:
         'geometry.wheelbase_m': vehicle['geometry']['wheelbase_m'],
         'limits.max_steer_angle_rad': lim['max_steer_angle_rad'],
         'limits.max_steer_rate_rad_s': lim['max_steer_rate_rad_s'],
-        'limits.cruise_speed_mps': lim['cruise_speed_mps'],
         'limits.max_accel_mps2': lim['max_accel_mps2'],
         'limits.max_decel_mps2': lim['max_decel_mps2'],
         'lateral.gain': control['lateral']['gain'],
@@ -97,11 +96,52 @@ def _control_params() -> dict:
         'lateral.search_window': control['lateral']['search_window'],
         'longitudinal.kp': control['longitudinal']['kp'],
         'longitudinal.ki': control['longitudinal']['ki'],
-        'profile.max_lateral_accel_mps2': control['profile']['max_lateral_accel_mps2'],
         'goal.stop_distance_m': control['goal']['stop_distance_m'],
         'safety.max_lateral_error_m': control['safety']['max_lateral_error_m'],
         'safety.odom_timeout_s': control['safety']['odom_timeout_s'],
         'control_rate_hz': control['control_rate_hz'],
+        'use_sim_time': True,
+    }
+
+
+def _planning_params() -> dict:
+    """
+    Collect planning_node parameters from the two YAML files.
+
+    ⚠️ **P3-S4 起 L3-G 的链路里多了 planning_node。**
+    control_node 不再直接订阅 /route/path，而是吃 /planning/trajectory ——
+    不把规划器拉进来的话，控制器永远收不到轨迹，闭环测试会以
+    「车一直不动」的形式失败，而根因看起来像控制器坏了。
+
+    与 `stack.launch.py` 的 `planning_node_params()` 同一套，理由见 `_control_params`。
+
+    :return: 传给 planning_node 的参数字典
+    """
+    share = Path(get_package_share_directory('ads_planning')) / 'config'
+    vehicle = yaml.safe_load((share / 'vehicle_params.yaml').read_text(encoding='utf-8'))
+    planning = yaml.safe_load((share / 'planning_params.yaml').read_text(encoding='utf-8'))
+    geo = vehicle['geometry']
+    lim = vehicle['limits']
+    return {
+        'lateral.max_offset_m': planning['lateral']['max_offset_m'],
+        'lateral.offset_step_m': planning['lateral']['offset_step_m'],
+        'longitudinal.min_horizon_m': planning['longitudinal']['min_horizon_m'],
+        'longitudinal.max_horizon_m': planning['longitudinal']['max_horizon_m'],
+        'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],
+        'trajectory.resample_step_m': planning['trajectory']['resample_step_m'],
+        'safety.margin_m': planning['safety']['margin_m'],
+        'safety.stop_margin_m': planning['safety']['stop_margin_m'],
+        'cost.weight_offset': planning['cost']['weight_offset'],
+        'cost.weight_curvature': planning['cost']['weight_curvature'],
+        'cost.weight_clearance': planning['cost']['weight_clearance'],
+        'cost.weight_consistency': planning['cost']['weight_consistency'],
+        'vehicle.length_m': geo['length_m'],
+        'vehicle.width_m': geo['width_m'],
+        'vehicle.rear_overhang_m': geo['rear_overhang_m'],
+        'speed.cruise_speed_mps': lim['cruise_speed_mps'],
+        'speed.max_lateral_accel_mps2': planning['speed']['max_lateral_accel_mps2'],
+        'speed.max_accel_mps2': lim['max_accel_mps2'],
+        'speed.max_decel_mps2': lim['max_decel_mps2'],
         'use_sim_time': True,
     }
 
@@ -151,6 +191,9 @@ def generate_test_description():
 
         Node(package='ads_map', executable='map_node', name='map_node',
              parameters=[{'use_sim_time': True}], output='screen'),
+
+        Node(package='ads_planning', executable='planning_node', name='planning_node',
+             parameters=[_planning_params()], output='screen'),
 
         Node(package='ads_control', executable='control_node', name='control_node',
              parameters=[_control_params()], output='screen'),
