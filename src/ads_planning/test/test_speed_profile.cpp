@@ -36,7 +36,7 @@
 
 #include "ads_common/reference_line.hpp"
 #include "ads_common/testing/path_fixtures.hpp"
-#include "ads_control/speed_profile.hpp"
+#include "ads_planning/speed_profile.hpp"
 
 namespace
 {
@@ -49,8 +49,8 @@ using ads_common_test::MakeLeftArc;
 using ads_common_test::MakeRightArc;
 using ads_common_test::MakeStraightAlongX;
 using ads_common_test::MakeStraightThenLeftArc;
-using ads_control::SpeedProfile;
-using ads_control::SpeedProfileParams;
+using ads_planning::SpeedProfile;
+using ads_planning::SpeedProfileParams;
 
 // config/vehicle_params.yaml 与 control_params.yaml 的**手抄副本**（同 test_stanley.cpp
 // 的说明：L1 不读 YAML，改了 YAML 要回来改这里，真正的防线在 S4 的一致性断言）。

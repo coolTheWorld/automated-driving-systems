@@ -166,19 +166,27 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 SPEC §5 列出的其余包（`ads_perception`、`ads_localization`、`ads_prediction` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
-`ads_planning`（P3，**建设中**）目前有四个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
+`ads_planning`（P3，**建设中**）目前有六个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
 **CP-P3-A 已达成**）、**`quintic`**（五次多项式，六个边界条件的闭式解）、
 **`collision`**（OBB 分离轴判交 + **精确**间距）、**`lattice`**（`d_T` × `S` 二维采样 +
-安全间距准入 + 代价排序）。`node/planning_node.cpp` 要到 P3-S5 才有 ——
-现在**起不了任何节点**。
+安全间距准入 + 代价排序）、**`speed_profile`**（曲率限速 + 前后向扫描，
+**P3-S4 从 `ads_control` 搬来** —— 算目标是规划，跟目标才是控制）、
+**`trajectory`**（几何 + 速度装配 + **绕不过去时的停车剖面**）。
+`node/planning_node.cpp` 已跑通，在 `stack.launch.py` 和 L3-G 里都接上了。
+
+⚠️ **P3-S4 起数据流变了**：`map_node → /route/path → planning_node →
+/planning/trajectory → control_node`。`control_node` **不再订阅 `/route/path`、
+也不再自己算速度剖面**。改动涉及它们时别照旧图施工。
 推导、参数与边界见 [docs/modules/planning.md](docs/modules/planning.md)，**改这个模块前先读它**。
 其中 §6 那个可行性不等式最要紧：**车道 3.5 m 装 1.8 m 的车再留 0.5 m 间距，
 障碍物左缘必须 ≤ −0.55 m 才绕得过去** —— 随手把障碍物放在车道中间是几何上无解的，
 所以 P3 交付「可行则绕、不可行则停」**两个**能力。
 
-`ads_common` 是**唯一允许被多个模块共用的包**，目前两样东西：`angles`（角度归一化/差）
-和 **`reference_line`**（折线的弧长参数化、逐点曲率、最近点投影；P3-S1 从
-`ads_control/path_tracking` 下沉而来）。
+`ads_common` 是**唯一允许被多个模块共用的包**，目前三样东西：`angles`（角度归一化/差）、
+**`reference_line`**（折线的弧长参数化、逐点曲率、最近点投影；P3-S1 从
+`ads_control/path_tracking` 下沉而来）、**`numeric_checks`**（`RequireFinite` 三兄弟；
+P3-S4 从 `ads_control/src` 下沉 —— 它自己的注释写着"本包里有三处要做同一件事"，
+而到 S3 已经变成跨两个包**五处**）。
 放这儿的判据不是「感觉通用」，而是**有没有第二个消费者、且它有逻辑**：
 控制侧把投影当横向/航向误差，规划侧把同一个投影当 Frenet 的 (s, d)。
 反例是 `Pose2D` —— 它在 `ads_map` 和 `ads_common` 里**有意各留一份**，
@@ -189,9 +197,8 @@ Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
 
-`ads_control`（P2 已完成）目前有三个 lib：**`stanley`**（前轴换算 + 控制律 +
-转角/转向速率双重限幅）、**`speed_profile`**（曲率限速 + 前后向扫描）、
-**`speed_controller`**（速度环 PI + 条件积分抗饱和）。
+`ads_control`（P2 已完成）目前有**两个** lib（`speed_profile` 已于 P3-S4 搬走）：**`stanley`**（前轴换算 + 控制律 +
+转角/转向速率双重限幅）、**`speed_controller`**（速度环 PI + 条件积分抗饱和）。
 `node/control_node.cpp`（S4）已跑通闭环，**CP-P2-B 8/8 达标**（2026-08-03，两遍复现）。`libads_control.so` 同样零 ROS 依赖，且**不依赖 `ads_map`** ——
 两者是 SPEC §3.3 意义上的两个模块，只通过 ROS 话题通信。
 推导与参数见 [docs/modules/control.md](docs/modules/control.md)，**改这个模块前先读它**：
@@ -233,12 +240,13 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_map/test_routing                 # Dijkstra：路径与长度 vs 穷举脚本
 ./build/ads_common/test_reference_line       # 弧长/曲率/最近点，全部 vs 解析解（P2-S1 写，P3-S1 下沉至此）
 ./build/ads_control/test_stanley             # Stanley + **CP-P2-A 闭环收敛判据**（P2-S2）
-./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
+./build/ads_planning/test_speed_profile      # 曲率限速 + 前后向扫描（P2-S3 写，P3-S4 搬来）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）
 ./build/ads_planning/test_frenet             # Frenet ↔ 笛卡尔，闭式解 + 往返一致性（**CP-P3-A**）
 ./build/ads_planning/test_quintic            # 五次多项式：六个边界条件逐项复现（P3-S3）
 ./build/ads_planning/test_collision          # OBB 判交 + 间距，含相切/包含/退化（P3-S3）
 ./build/ads_planning/test_lattice            # 横向采样 + **§6 可行性不等式的两侧**（P3-S3）
+./build/ads_planning/test_trajectory         # 轨迹装配 + **绕不过去时的停车剖面**（P3-S4）
 
 # L3-G：**不需要 GPU** 的端到端闭环（假车 + map_node + control_node），已进 CI。
 # 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。

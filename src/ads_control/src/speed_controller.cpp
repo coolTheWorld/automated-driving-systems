@@ -19,7 +19,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "numeric_checks.hpp"
+#include "ads_common/numeric_checks.hpp"
 
 namespace ads_control
 {
@@ -27,9 +27,9 @@ namespace ads_control
 namespace
 {
 
-using internal::RequireFinite;
-using internal::RequireFiniteNonNegative;
-using internal::RequireFinitePositive;
+using ads_common::RequireFinite;
+using ads_common::RequireFiniteNonNegative;
+using ads_common::RequireFinitePositive;
 
 constexpr char kParams[] = "SpeedControllerParams";
 constexpr char kController[] = "SpeedController";

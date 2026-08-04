@@ -28,6 +28,7 @@
        PackageNotFoundError —— 而 test_every_launched_executable_actually_exists
        就是为了在测试期抓住它，本次它确实抓住了。 -->
   <exec_depend>ads_control</exec_depend>
+  <exec_depend>ads_planning</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

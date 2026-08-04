@@ -29,7 +29,10 @@ add_library(${PROJECT_NAME} SHARED
   src/frenet.cpp
   src/quintic.cpp
   src/collision.cpp
-  src/lattice.cpp)
+  src/lattice.cpp
+  # P3-S4 从 ads_control 搬来：算目标速度是**规划**，跟目标速度才是控制。
+  src/speed_profile.cpp
+  src/trajectory.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -53,6 +56,35 @@ install(TARGETS ${PROJECT_NAME}
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(ads_common)
+
+# -----------------------------------------------------------------------------
+# 节点：ROS 包装层（P3-S4）
+# -----------------------------------------------------------------------------
+# 这一层**只做翻译**：ROS 消息 ↔ lib 的调用。规划算法一行都不在这里。
+find_package(rclcpp REQUIRED)
+find_package(ads_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+
+add_executable(planning_node node/planning_node.cpp)
+target_link_libraries(planning_node ${PROJECT_NAME})
+ament_target_dependencies(planning_node
+  rclcpp ads_msgs nav_msgs geometry_msgs diagnostic_msgs tf2 tf2_geometry_msgs tf2_ros)
+
+install(TARGETS planning_node
+  DESTINATION lib/${PROJECT_NAME})
+
+# 规划参数装进本包 share；车辆参数也装一份（**符号链接语义上的单一来源仍成立**，
+# 见 ads_control/CMakeLists.txt 的同一段说明：ROS 包安装后必须自包含，
+# 不能依赖"工作区恰好挂在 /workspace"这种只在本容器成立的假设）。
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/planning_params.yaml
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/vehicle_params.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
 
 # -----------------------------------------------------------------------------
 # L1 单元测试
@@ -84,6 +116,17 @@ if(BUILD_TESTING)
   # —— 贴边障碍物可绕、车道中心障碍物几何上无解必须报不可行。
   ament_add_gtest(test_lattice test/test_lattice.cpp)
   target_link_libraries(test_lattice ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：速度剖面（曲率限速 + 前后向扫描）。纯几何，判据全是闭式解。
+  # 随 src/speed_profile.cpp 一同从 ads_control 搬来，**用例一个没删、数字一个没改**。
+  ament_add_gtest(test_speed_profile test/test_speed_profile.cpp)
+  target_link_libraries(test_speed_profile ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：轨迹装配（几何 + 速度）与**停车剖面**。
+  # 含 planning.md §6 的「绕不过去就停」那条路径 —— 它是 P3 的第二个交付能力，
+  # 不是异常分支。
+  ament_add_gtest(test_trajectory test/test_trajectory.cpp)
+  target_link_libraries(test_trajectory ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_planning.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
