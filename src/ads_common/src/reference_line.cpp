@@ -179,22 +179,16 @@ PathProjection ReferenceLine::project(
   // ---------------------------------------------------------------------------
   //  在投影点处插值
   // ---------------------------------------------------------------------------
-  const PathPoint & p0 = points_[best_index];
-  const PathPoint & p1 = points_[best_index + 1];
+  const PathPoint interpolated = interpolate(best_index, best_ratio);
 
   PathProjection result;
   result.index = best_index;
   result.ratio = best_ratio;
-  result.x_m = p0.x_m + best_ratio * (p1.x_m - p0.x_m);
-  result.y_m = p0.y_m + best_ratio * (p1.y_m - p0.y_m);
-  result.s_m = p0.s_m + best_ratio * (p1.s_m - p0.s_m);
-  // 曲率是普通标量，直接线性插值。
-  result.curvature_inv_m =
-    p0.curvature_inv_m + best_ratio * (p1.curvature_inv_m - p0.curvature_inv_m);
-  // 朝向**不是**普通标量：跨 ±π 时线性插值会插到反方向去。
-  // 先取最短角度差再按比例加，最后归一化。
-  result.heading_rad = ads_common::normalize_angle(
-    p0.heading_rad + best_ratio * ads_common::angle_diff(p0.heading_rad, p1.heading_rad));
+  result.x_m = interpolated.x_m;
+  result.y_m = interpolated.y_m;
+  result.s_m = interpolated.s_m;
+  result.curvature_inv_m = interpolated.curvature_inv_m;
+  result.heading_rad = interpolated.heading_rad;
 
   // ---------------------------------------------------------------------------
   //  横向误差与航向误差
@@ -214,6 +208,62 @@ PathProjection ReferenceLine::project(
   result.heading_error_rad = ads_common::angle_diff(query.heading_rad, result.heading_rad);
 
   return result;
+}
+
+PathPoint ReferenceLine::interpolate(std::size_t index, double ratio) const
+{
+  const PathPoint & p0 = points_[index];
+  const PathPoint & p1 = points_[index + 1];
+
+  PathPoint out;
+  out.x_m = p0.x_m + ratio * (p1.x_m - p0.x_m);
+  out.y_m = p0.y_m + ratio * (p1.y_m - p0.y_m);
+  out.s_m = p0.s_m + ratio * (p1.s_m - p0.s_m);
+  // 曲率是普通标量，直接线性插值。
+  out.curvature_inv_m = p0.curvature_inv_m + ratio * (p1.curvature_inv_m - p0.curvature_inv_m);
+  // 朝向**不是**普通标量：跨 ±π 时线性插值会插到反方向去。
+  // 先取最短角度差再按比例加，最后归一化。
+  out.heading_rad = ads_common::normalize_angle(
+    p0.heading_rad + ratio * ads_common::angle_diff(p0.heading_rad, p1.heading_rad));
+  return out;
+}
+
+PathPoint ReferenceLine::at(double s_m) const
+{
+  // 非有限值单独判：NaN 参与任何比较都返回 false，下面两个区间判断对它**恒为假**，
+  // 会原样放行然后在二分查找里给出一个任意的段。本仓库已因这一条吃过两次亏
+  // （见 CLAUDE.md「用比较去拦非有限值」），而且要拦 ±inf 不只是 NaN。
+  if (!std::isfinite(s_m)) {
+    throw std::out_of_range("ReferenceLine::at: s_m 不是有限值");
+  }
+
+  // 端点容差：调用方常写 at(length_m())，而 length_m() 本身是浮点累加的结果，
+  // 上游再做一次乘除就可能溢出末点几个 ulp。容差取 kMinSpacingM（1 mm）——
+  // 与「相邻点距下限」同源，含义是「不足一个可分辨间距的越界视为落在端点上」。
+  // 超过这个量的越界仍然抛，因为那已经不是浮点误差而是逻辑错误。
+  if (s_m < -kMinSpacingM || s_m > length_m() + kMinSpacingM) {
+    throw std::out_of_range(
+      "ReferenceLine::at: s_m = " + std::to_string(s_m) + " 越界，路径长度 " +
+      std::to_string(length_m()));
+  }
+  const double clamped_s_m = std::clamp(s_m, 0.0, length_m());
+
+  // 找到最后一个满足 points_[i].s_m <= clamped_s_m 的 i。
+  // s_m 严格递增（构造时已拒掉重合点），所以可以二分。
+  // upper_bound 返回第一个 **>** 目标的位置，减一即所求；
+  // 再夹到最后一段，处理 clamped_s_m == length_m() 的情形。
+  const auto it = std::upper_bound(
+    points_.begin(), points_.end(), clamped_s_m,
+    [](double value, const PathPoint & point) { return value < point.s_m; });
+  const std::size_t index =
+    std::min(static_cast<std::size_t>(it - points_.begin()) - 1u, points_.size() - 2u);
+
+  const double segment_length_m = points_[index + 1].s_m - points_[index].s_m;
+  // 构造时已保证段长 > kMinSpacingM，这里只是除零兜底。
+  const double ratio =
+    segment_length_m > kMinSpacingM ? (clamped_s_m - points_[index].s_m) / segment_length_m : 0.0;
+
+  return interpolate(index, ratio);
 }
 
 }  // namespace ads_common

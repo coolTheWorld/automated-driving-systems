@@ -154,6 +154,25 @@ public:
   /// @brief 路径总长度，单位 m（= 最后一点的累计弧长）。
   double length_m() const noexcept { return points_.back().s_m; }
 
+  /// @brief 按弧长求值：返回参考线在 `s_m` 处的位置、切向与曲率。
+  ///
+  /// @param s_m 累计弧长，必须落在 `[0, length_m()]`。
+  /// @return 插值出来的路径点。`s_m` 字段等于入参（浮点误差内）。
+  /// @throw std::out_of_range `s_m` 越界或非有限。
+  ///
+  /// @note **越界是抛异常，不是夹到端点** —— 与 `project()` 的行为**有意不同**。
+  ///
+  ///       `project()` 夹取是对的：它回答「离我最近的路径点在哪」，
+  ///       而车开过终点之后，最近的点确实就是终点。
+  ///
+  ///       `at()` 回答的是另一个问题：「弧长 s 处是什么」。s 超出路径就**不存在**
+  ///       这样一个点，夹取等于回答了一个没被问的问题。P2-S4 已经因为
+  ///       「投影夹到端点」误诊过一次（冲过终点 4 m 与恰好停住给出一模一样的数，
+  ///       见 CLAUDE.md 陷阱表），所以这里选择让调用方显式处理：
+  ///       规划器该用 `length_m()` 自己把前视距离截断，因为「路走到头了怎么办」
+  ///       是策略不是几何。
+  PathPoint at(double s_m) const;
+
   /// @brief 把查询位姿投影到路径上。
   ///
   /// @param query 查询位姿。做 Stanley 时这里传的是**前轴**中心的位置
@@ -199,6 +218,14 @@ public:
   static constexpr std::size_t kDefaultSearchWindow = 30;
 
 private:
+  /// @brief 在第 `index` 段（`[index, index+1]`）的归一化位置 `ratio` 处插值。
+  ///
+  /// `project()` 与 `at()` **共用**这一个实现。分开写两份的话，
+  /// 两处对「朝向要过 angle_diff 插值、曲率可以直接线性插值」的理解会漂移 ——
+  /// 而漂移的症状是同一个几何位置从两个接口拿到两个不同的朝向，
+  /// 差值只在跨 ±π 的路段上出现，直路上完全正确。
+  PathPoint interpolate(std::size_t index, double ratio) const;
+
   std::vector<PathPoint> points_;
 };
 

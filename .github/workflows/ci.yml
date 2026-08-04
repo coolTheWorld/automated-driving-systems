@@ -171,6 +171,27 @@ jobs:
                 exit 1
               fi
               echo "✓ L3-G 闭环（假车 + map_node + control_node）跑了 ${L3G_COUNT} 个用例"
+
+              # 第五道：断言「lib/ 不许链接 ROS」的机械校验**本身**确实跑了。
+              #
+              # 与第四道同一个论证：`no_ros_dependencies` 是个 CTest，它失败会被
+              # 第二道抓住 —— 但它**没被注册**的话，第二三道都察觉不到，
+              # 总数只是少一条。而这条约束（SPEC §3.3）恰恰是最容易在
+              # "顺手改一下 CMakeLists" 时消失的，且消失后没有任何症状：
+              # 编译照过、测试照绿，只是 L1 从毫秒级掉到秒级，然后就没人跑了。
+              #
+              # ads_control 的历史是现成的反面教材：它的 CMakeLists 从 P2-S1 起
+              # 就写着"verify_control.sh 会 ldd 这个 .so"，而那个脚本从没被写出来，
+              # 整个 P2 期间这条约束只靠纪律维持 —— 直到 P2-S5 逐个 grep 才发现。
+              for pkg in ads_control ads_planning; do
+                TAG=$(head -1 "build/${pkg}/Testing/TAG")
+                if ! grep -q "no_ros_dependencies" "build/${pkg}/Testing/${TAG}/Test.xml"; then
+                  echo "✗ ${pkg} 的 no_ros_dependencies 校验没有出现在测试结果里 ——"
+                  echo "  它没跑，而不是它通过了。SPEC §3.3「lib/ 与 ROS 解耦」当前无人看守。"
+                  exit 1
+                fi
+                echo "✓ ${pkg}：lib 零 ROS 依赖的机械校验已执行"
+              done
             '
 
       # launch 文件是 Python，语法错误和 import 错误只有真正执行才会暴露。

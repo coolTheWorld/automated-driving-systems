@@ -147,6 +147,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **横向加速度超标 ≠ 横向跟得不好** | 修好转向执行机构后横向误差降了 12.7 倍，**最大横向加速度一个数都没变**（2.113） | `a_lat = v²·κ` 里有**两个**因子，横向误差不影响 κ，**只有速度会**。实测峰值处横向误差只有 −0.027 m，而车速比剖面高 +0.85 m/s；按剖面速度过那个弯 `a_lat` 恰好是 1.5002 = 限值。**看到横向加速度超标就去调横向增益，方向从一开始就是错的** |
 | **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `reference_line.hpp`（P3-S1 前叫 `ads_control/path_tracking.hpp`）早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
 | **纯 P 速度环跟不上剖面的斜坡** | 车总是"入弯偏快、终点冲过头"，而稳态巡航时速度跟得很准 | 「纯 P 对常值目标无稳态误差」只对**常值**成立。速度剖面在入弯前和终点前是**斜坡**，一阶系统跟踪斜坡的稳态误差 = 斜率/`K_p` = 3.0/1.0 = **3.0 m/s**。解法是加速度前馈 `a = v·dv/ds + K_p·(v_ref − v)`，**不是调大 K_p** |
+| **测试的采样步长与被测结构的周期可通约** | 用例**全绿，但什么都没测** —— 故障注入进去也不红 | P3-S2 实测：验「朝向跨 ±π 不能裸插值」的用例按「总长的 1/20」= 0.6 m 步进，而参考线段长恰好 0.5 m，两者在 s=6.0 重合，**而跨 ±π 的那一段偏偏就从 6.0 开始** → 只采到 ratio=0 的端点，端点上朴素插值与正确插值给出**同一个值**。改成与段长不整除的步长（0.037）后注入立刻红。**凡是「沿某个离散结构扫一遍」的用例，步长都不能与它的周期整除** |
 | 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
@@ -160,10 +161,17 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有八个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
-`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_planning`、`ads_perception`、`ads_localization` 等）**尚未创建**，
+`src/` 下**目前有九个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`ads_planning`、`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_perception`、`ads_localization`、`ads_prediction` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
+
+`ads_planning`（P3，**建设中**）目前只有 `lib/frenet`（Frenet ↔ 笛卡尔双向变换，
+**CP-P3-A 已达成**）。`node/planning_node.cpp` 要到 P3-S5 才有 —— 现在**起不了任何节点**。
+推导、参数与边界见 [docs/modules/planning.md](docs/modules/planning.md)，**改这个模块前先读它**。
+其中 §6 那个可行性不等式最要紧：**车道 3.5 m 装 1.8 m 的车再留 0.5 m 间距，
+障碍物左缘必须 ≤ −0.55 m 才绕得过去** —— 随手把障碍物放在车道中间是几何上无解的，
+所以 P3 交付「可行则绕、不可行则停」**两个**能力。
 
 `ads_common` 是**唯一允许被多个模块共用的包**，目前两样东西：`angles`（角度归一化/差）
 和 **`reference_line`**（折线的弧长参数化、逐点曲率、最近点投影；P3-S1 从
@@ -224,6 +232,7 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_control/test_stanley             # Stanley + **CP-P2-A 闭环收敛判据**（P2-S2）
 ./build/ads_control/test_speed_profile       # 曲率限速 + 前后向扫描，全部 vs 闭式解（P2-S3）
 ./build/ads_control/test_speed_controller    # 速度环 + 抗饱和 + bridge 饱和环节（P2-S3）
+./build/ads_planning/test_frenet             # Frenet ↔ 笛卡尔，闭式解 + 往返一致性（**CP-P3-A**）
 
 # L3-G：**不需要 GPU** 的端到端闭环（假车 + map_node + control_node），已进 CI。
 # 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。
