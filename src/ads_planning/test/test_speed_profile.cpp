@@ -52,10 +52,13 @@ using ads_common_test::MakeStraightThenLeftArc;
 using ads_planning::SpeedProfile;
 using ads_planning::SpeedProfileParams;
 
-// config/vehicle_params.yaml 与 control_params.yaml 的**手抄副本**（同 test_stanley.cpp
-// 的说明：L1 不读 YAML，改了 YAML 要回来改这里，真正的防线在 S4 的一致性断言）。
+// config/vehicle_params.yaml 与 **planning_params.yaml** 的手抄副本
+// （P3-S4 起 profile 段从 control_params.yaml 搬到了 planning_params.yaml）。
+// L1 不读 YAML，改了 YAML 要回来改这里，真正的防线在 S5 的 planning_node 参数断言。
 constexpr double kCruiseSpeedMps = 5.556;  // 20 km/h
-constexpr double kMaxLateralAccelMps2 = 1.5;
+// ⚠️ P3-S5 从 1.5 一路降到 1.15：规划限值加上跟踪超调（实测 55–66%）才是车真正
+//    受的横向加速度，1.5 会让实测到 2.33 而 CP-P2-B 的判据是 2.0。见 planning_params.yaml。
+constexpr double kMaxLateralAccelMps2 = 1.15;
 constexpr double kMaxAccelMps2 = 1.5;
 constexpr double kMaxDecelMps2 = 3.0;
 
@@ -125,9 +128,9 @@ TEST(SpeedProfileParamsCheck, RejectNonPositiveOrNonFiniteValues)
 
 TEST(CurvatureLimit, MatchesTheClosedFormOnEachRadiusOnTheMap)
 {
-  // R=8（路口转弯车道）：√(1.5×8) = 3.4641 m/s = 12.5 km/h。
+  // R=8（路口转弯车道）：√(1.15×8) = 3.0332 m/s = 10.9 km/h。
   // 定速 20 km/h 过这个弯，横向加速度是 3.86 m/s² —— 紧急变道的量级。
-  // R=13.75（环线四角外侧）：√(1.5×13.75) = 4.5415 m/s，仍低于巡航值。
+  // R=13.75（环线四角外侧）：√(1.15×13.75) = 3.9765 m/s，仍低于巡航值。
   //
   // ⚠️ **判据不能卡到 1e-9**，而偏差的来源是可以精确写出来的：
   //    弧长按**弦长**累加（ReferenceLine 的做法），弦比弧短一个因子 (1 − Δφ²/24)，
@@ -140,14 +143,14 @@ TEST(CurvatureLimit, MatchesTheClosedFormOnEachRadiusOnTheMap)
   //    方向是**保守**的（限速偏小 = 过弯更慢），这一点单独断言 ——
   //    哪天它变成偏大，就是弧长或曲率的符号/公式被改坏了。
   //
-  // 圆弧取 40 m 长：终点减速只影响末尾 2 m（3.4641 → 0 按 −3.0），中段才是纯曲率限速。
+  // 圆弧取 40 m 长：终点减速只影响末尾 1.5 m（3.0332 → 0 按 −3.0），中段才是纯曲率限速。
   struct Case
   {
     double radius_m;
     double expected_mps;
   };
   const Case cases[] = {
-    {kTurnRadiusM, 3.4641016151377544}, {kCornerOuterRadiusM, 4.541475531146237}};
+    {kTurnRadiusM, 3.03315017762062}, {kCornerOuterRadiusM, 3.9764934301467165}};
 
   for (const Case & c : cases) {
     const ReferenceLine path(MakeLeftArc(c.radius_m, 0.0, 0.0, 0.0, 40.0 / c.radius_m, 0.5, false));
@@ -303,7 +306,7 @@ TEST(Scans, BrakingForACurveStartsBeforeTheCurveNotInsideIt)
     DistanceForSpeedChangeM(kCruiseSpeedMps, entry_speed_mps, kMaxDecelMps2);
   EXPECT_NEAR(
     DistanceForSpeedChangeM(kCruiseSpeedMps, CurvatureLimitMps(kTurnRadiusM), kMaxDecelMps2),
-    3.144856, 1e-6);
+    3.611523, 1e-6);
 
   std::size_t first_slow = 0;
   while (profile.speeds_mps()[first_slow] > kCruiseSpeedMps - 1e-9) {
@@ -339,7 +342,7 @@ TEST(Scans, TheDecelerationConstraintHoldsEverywhere)
 
 TEST(Scans, AcceleratingOutOfACurveTakesTheClosedFormDistance)
 {
-  // 出弯回到巡航速度要 6.29 m（3.4641 → 5.556 按 +1.5）。
+  // 出弯回到巡航速度要 7.22 m（3.0332 → 5.556 按 +1.5）。
   // 少了前向扫描，剖面会在出弯那一点**瞬间**跳回巡航速度 ——
   // 速度环于是要求一个远超 +1.5 的加速度，被限幅后车实际跟不上，
   // 表现为"出弯后速度一直低于剖面"，而人会去查 PID。
@@ -350,7 +353,7 @@ TEST(Scans, AcceleratingOutOfACurveTakesTheClosedFormDistance)
 
   EXPECT_NEAR(
     DistanceForSpeedChangeM(CurvatureLimitMps(kTurnRadiusM), kCruiseSpeedMps, kMaxAccelMps2),
-    6.289712, 1e-6);
+    7.223045, 1e-6);
 
   // 参考点同上：**最后一个曲率仍是满值的点**，不是几何上的弯直衔接处。
   std::size_t exit = path.points().size() - 1;

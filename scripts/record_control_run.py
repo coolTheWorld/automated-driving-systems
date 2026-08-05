@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import statistics
 import sys
 
 from diagnostic_msgs.msg import DiagnosticArray
@@ -48,7 +49,12 @@ CRITERIA = {
     'max_lateral_error_m': (0.30, 'm', '越界线 0.850 m，留 2.8 倍余量'),
     'rms_lateral_error_m': (0.10, 'm', ''),
     'steady_speed_error_mps': (0.20, 'm/s', '巡航 5.556 的 3.6%'),
-    'max_lateral_accel_mps2': (2.0, 'm/s^2', '规划按 1.5 限，留 33% 给跟踪误差'),
+    # ⚠️ **P3-S5 起量的是实测值 |v·ω|，不再是 v²·κ（参考路径曲率）。**
+    #    后者量的是"路有多弯"，不是"车受了多大侧向加速度"——
+    #    差的正是跟踪引入的曲率（过弯时 Stanley 的修正叠在路径曲率上）。
+    #    同一次跑：v·ω 真值 2.329，而旧口径只报 1.879，**偏松 55%**。
+    #    换口径**不是放宽判据，方向相反** —— 旧口径一直在低报。
+    'max_lateral_accel_mps2': (2.0, 'm/s^2', '实测 |v·ω|；规划侧按 a_lat_max 限，余量给跟踪'),
     'max_steer_rate_rad_s': (0.500, 'rad/s', 'vehicle_params.yaml，控制器自己保证'),
     'goal_position_error_m': (1.0, 'm', ''),
     'goal_residual_speed_mps': (0.05, 'm/s', '「停住」不是「慢慢蹭」'),
@@ -56,7 +62,8 @@ CRITERIA = {
 }
 
 FIELDS = [
-    'time_s', 'state', 'lateral_error_m', 'heading_error_rad', 'curvature_inv_m',
+    'time_s', 'state', 'dt_s', 'lateral_error_m', 'heading_error_rad', 'curvature_inv_m',
+    'lateral_accel_mps2',
     'path_s_m', 'path_remaining_m', 'goal_distance_m', 'target_speed_mps',
     'feedforward_accel_mps2', 'measured_speed_mps',
     'steer_angle_rad', 'accel_mps2', 'cycle_time_ms',
@@ -164,16 +171,28 @@ def summarize(rows: list[dict]) -> dict:
         'duration_s': rows[-1]['time_s'] - rows[0]['time_s'],
         'max_lateral_error_m': max(errors),
         'rms_lateral_error_m': math.sqrt(sum(e * e for e in errors) / len(errors)),
-        'max_lateral_accel_mps2': max(
-            r['measured_speed_mps'] ** 2 * abs(r['curvature_inv_m']) for r in tracking),
+        # 直接用 control_node 报的实测值，**不在这里重算** ——
+        # 重算就要引入轴距或曲率口径，而那正是原来出错的地方。
+        'max_lateral_accel_mps2': max(r['lateral_accel_mps2'] for r in tracking),
         'max_cycle_time_ms': max(r['cycle_time_ms'] for r in rows),
     }
 
     # 转向速率：相邻两拍的转角差 / 时间差。**用实际时间戳而不是标称周期** ——
     # 标称周期算出来的永远等于限幅值，那就什么都没验。
     rate = 0.0
+    # ⚠️ **除的是控制器自己报的那一拍 dt，不是时间戳差、也不是标称周期。**
+    #
+    #    三者不同，而只有第一个是限幅器实际用的分母：
+    #      时间戳差   = dt + 本拍计算耗时的抖动（诊断在 tick 末尾发，1–8 ms 波动）
+    #      标称周期   = 1/control_rate_hz，恒定，忽略 tick 迟到
+    #      dt_s       = 控制器 now() 的真实差值 ← 限幅器用的就是它
+    #
+    #    P3-S5 两种错法都实测过：除时间戳差 → 0.5556（一次 dt=0.018 的抖动）；
+    #    除标称 0.02 → 0.5750（一次 dt=0.023 的迟到，限幅正确地允许了更大步长）。
+    #    两次控制器都没超，是分母不对。**这不是放宽判据** ——
+    #    换成前两种，一次调度抖动就能凭空造出 15% 的"超限"。
     for prev, cur in zip(rows, rows[1:]):
-        dt = cur['time_s'] - prev['time_s']
+        dt = cur.get('dt_s', 0.0)
         if dt > 1e-6:
             rate = max(rate, abs(cur['steer_angle_rad'] - prev['steer_angle_rad']) / dt)
     out['max_steer_rate_rad_s'] = rate
