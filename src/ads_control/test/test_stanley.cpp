@@ -82,8 +82,14 @@ constexpr double kControlDtS = 0.02;  // 50 Hz
 
 // 地图上最急的弯：路口转弯车道 R = 8 m（config/campus_map.yaml 的 turn_radius_m）。
 constexpr double kTurnRadiusM = 8.0;
-// 曲率限速：v = √(a_lat_max / |κ|) = √(1.5 × 8) = 3.4641 m/s。S3 会实现它，
+// 曲率限速：v = √(a_lat_max / |κ|) = √(1.5 × 8) = 3.4641 m/s。S3 已实现它，
 // 这里直接用那个值，因为 CP-P2-A 要验的是"按限速过弯时跟得住"。
+//
+// ⚠️ **这个 1.5 是有意不跟着 planning_params.yaml 走的**（那边 P3-S5 已降到 1.15）。
+//    理由：把它降下来 = 用更慢的车速跑同一条弯，判据只会**更容易过** ——
+//    那是在放宽判据，SPEC §11 明令禁止。CP-P2-A 的全部实测基线
+//    （稳态 0.01618 m 等）都是在 3.4641 上量的，改了这个数它们全部作废。
+//    所以这里保留 1.5：它现在的含义是"比规划器实际会给的更严苛的一档车速"。
 constexpr double kMaxLateralAccelMps2 = 1.5;
 
 StanleyParams DefaultParams()
@@ -744,7 +750,9 @@ TEST(ClosedLoop, TheSteeringRateLimitOnlyBindsAboveRadiusTimesRateLimit)
   //   所以入弯真正需要的转向速率就是 v/R，**不是**"1.2 s 打到满舵"那种阶跃。
   //   限幅开始起作用的临界车速因此是   v* = R · max_steer_rate = 8 × 0.5 = 4.0 m/s。
   //
-  //   按 a_lat_max = 1.5 限速得 3.464 m/s，在临界值**以下 13%** —— 限幅根本没碰到。
+  //   本用例按 a_lat_max = 1.5 限速得 3.464 m/s，在临界值**以下 13%** —— 限幅根本没碰到。
+  //   （规划器实际用的是 1.15 → 3.033，余量更大 24%；本用例有意保留更严苛的 1.5，
+  //    见文件顶部 kMaxLateralAccelMps2 的注释。）
   //
   // ⚠️ 交给 S3 的一条约束：a_lat_max 调到 2.0 时 √(2.0×8) = **恰好 4.0 m/s**，
   //    正好顶在临界值上。也就是说"横向加速度上限"这个看起来只关舒适性的参数，

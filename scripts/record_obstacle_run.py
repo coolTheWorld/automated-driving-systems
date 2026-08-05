@@ -302,20 +302,36 @@ def score(recorder, scenario):
 
     :return: (是否全部通过, 打印用的行列表)
     """
+    # ⚠️ **两套样本集，分开用，混了就出假失败。**
+    #
+    #    `rows` = 只有控制器在跟踪的拍。**跟踪质量**类的量（横向偏移、车道余量）
+    #    只在这里面有意义 —— 车都没在跟轨迹，问"它偏了多少"是没有定义的。
+    #
+    #    `all_rows` = 整段记录。**安全与末态**类的量（有没有撞、最近到过多少、
+    #    最后停没停住）必须在这里面算：车在非跟踪状态下照样在动、照样会撞。
+    #
+    #    这条是实测踩出来的（CP-P3-B block 场景）：block 场景的正确结局是
+    #    「planner 报绕不过去 → 控制器跟停车轨迹 → 到停车点报 GOAL_REACHED →
+    #      停车轨迹退化成零长度 → 控制器落到 NO_PATH 降级分支刹停并保持」。
+    #    于是**最后 449 拍全是 NO_PATH**，而车正是在这 449 拍里从 0.95 m/s
+    #    刹到 0.000。拿 `rows[-1]` 当末速，量到的是**刹车过程中间的一个值**，
+    #    判据报 0.950 FAIL，而车其实稳稳停在障碍物前 1.918 m。
+    #    **假失败与真失败在现场长得一模一样**，这一条在 CLAUDE.md 里已经写过一次了。
     rows = [r for r in recorder.rows if r['control_state'] in ('TRACKING', 'GOAL_REACHED')]
+    all_rows = recorder.rows
     if not rows:
         return False, [('没有 TRACKING 样本', '-', '-', 'FAIL', '控制器起来了吗？')]
 
-    min_clearance_m = min(r['clearance_m'] for r in rows)
-    collisions = sum(r['collided'] for r in rows)
+    min_clearance_m = min(r['clearance_m'] for r in all_rows)
+    collisions = sum(r['collided'] for r in all_rows)
     on_lane = [r for r in rows if r['on_south_straight']]
     min_lane_edge_margin_m = (min(r['lane_edge_margin_m'] for r in on_lane)
                               if on_lane else float('nan'))
     max_planner_offset_m = max(
         abs(float(r['planner_lateral_offset_m'])) for r in rows if r['planner_lateral_offset_m'])
     final_planner_offset_m = abs(float(rows[-1]['planner_lateral_offset_m'] or 0.0))
-    final_speed_mps = abs(rows[-1]['speed_mps'])
-    stopping_ticks = sum(1 for r in rows if '绕不过去' in r['planner_message'])
+    final_speed_mps = abs(all_rows[-1]['speed_mps'])
+    stopping_ticks = sum(1 for r in all_rows if '绕不过去' in r['planner_message'])
 
     lines = []
 
@@ -346,7 +362,8 @@ def score(recorder, scenario):
             '规划器报告不可行的拍数', '%d' % stopping_ticks, stopping_ticks > 0, '> 0',
             '「车停了」与「车挂了」必须分得开')
         passed &= check(
-            '终速 (m/s)', '%.3f' % final_speed_mps, final_speed_mps < 0.1, '< 0.10', '停住不是慢慢蹭')
+            '终速 (m/s)', '%.3f' % final_speed_mps, final_speed_mps < 0.1, '< 0.10',
+            '停住不是慢慢蹭；取**整段**末拍，车是在 NO_PATH 里刹完的')
         passed &= check(
             '停车点到障碍物间距 (m)', '%.3f' % min_clearance_m,
             min_clearance_m >= recorder.safety_margin_m,

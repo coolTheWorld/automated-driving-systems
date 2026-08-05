@@ -73,7 +73,7 @@ PlanParams MakeParams()
   params.lattice.weight_consistency = 0.5;
 
   params.speed.cruise_speed_mps = kCruiseSpeedMps;
-  params.speed.max_lateral_accel_mps2 = 1.5;
+  params.speed.max_lateral_accel_mps2 = 1.15;  // P3-S5 从 1.5 降下来，见 planning_params.yaml
   params.speed.max_accel_mps2 = 1.5;
   params.speed.max_decel_mps2 = kMaxDecelMps2;
 

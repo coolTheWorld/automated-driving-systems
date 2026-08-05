@@ -249,6 +249,7 @@ private:
       speeds_mps_.clear();
       accels_mps2_.clear();
       hint_.reset();
+      rear_hint_.reset();
       RCLCPP_INFO(
         get_logger(), "收到 %zu 个点的轨迹（上游没有目标或已走完），转入减速停车",
         msg->points.size());
@@ -283,6 +284,7 @@ private:
       speeds_mps_.clear();
       accels_mps2_.clear();
       hint_.reset();
+      rear_hint_.reset();
       RCLCPP_ERROR(get_logger(), "轨迹不可用，已丢弃并转入减速停车：%s", e.what());
       return;
     }
@@ -301,6 +303,7 @@ private:
                                   : std::numeric_limits<double>::infinity();
     if (start_jump_m > trajectory_jump_threshold_m_) {
       hint_.reset();
+      rear_hint_.reset();
       speed_controller_->reset();
       goal_announced_ = false;
       RCLCPP_INFO(
@@ -345,10 +348,15 @@ private:
 
   void on_odom(nav_msgs::msg::Odometry::SharedPtr msg)
   {
-    // 只取纵向车速。位姿一律走 TF（SPEC §5：禁止手写变换矩阵）——
+    // 只取纵向车速与横摆角速度。位姿一律走 TF（SPEC §5：禁止手写变换矩阵）——
     // /odom 的位姿在 odom 系，拿它当 map 系用会差整整一个 map→odom 变换，
     // 而本项目那一段**不是单位变换**（P1-S4 实测，见 CLAUDE.md）。
+    //
+    // 横摆角速度只有一个用途：算**实测**横向加速度 |v·ω| 报进 diagnostics。
+    // 它不进任何控制律 —— 控制律用的是参考路径的量，加进来会把
+    // 「跟得准不准」和「路弯不弯」搅在一起。
     measured_speed_mps_ = msg->twist.twist.linear.x;
+    measured_yaw_rate_radps_ = msg->twist.twist.angular.z;
     last_odom_time_ = now();
   }
 
@@ -415,6 +423,29 @@ private:
     const PathProjection projection = path_->project(front, hint_, search_window_);
     hint_ = projection.index;
 
+    // ---- 纵向量要在**后轴**上取，不能复用前轴投影 ----
+    //
+    // ⚠️ **P3-S5 实测出来的，改回去会重现一个很难查的超速。**
+    //
+    //    前轴投影是 Stanley 的推导对象（横向误差、航向误差必须用它）。
+    //    但"我现在该开多快"、"我到终点还有多远"问的是**车在哪**，
+    //    而车在后轴（base_link，Autoware 惯例，轨迹点也是按后轴给的
+    //    —— 见 ads_msgs/TrajectoryPoint.msg）。
+    //
+    //    用前轴投影查速度，等于**把速度目标往前读了一个轴距（2.7 m）**。
+    //    P2 时看不出来：那时剖面覆盖整条路线、沿路变化平缓，2.7 m 可以忽略。
+    //    P3 的剖面是 30 m 滚动窗口，**头几米就从局部曲率限速冲到巡航**，
+    //    2.7 m 正好落在斜坡中段。实测（出 R=12 弯时）：
+    //        后轴处剖面 4.281 m/s ← 车真正该开的
+    //        前轴处剖面 5.130 m/s ← 控制器实际读到的，高 0.85
+    //    再叠加 +1.5 的前馈，车一路加速到 6.53（巡航才 5.556），
+    //    连带把 CP-P2-B 的最大横向误差从 0.080 顶到 0.272（a_lat = v²κ）。
+    //
+    //    **同一个错误也让车早停一个轴距**：到达判据用前轴的剩余弧长，
+    //    而轨迹末点是后轴该停的位置，于是轨迹只剩 2.7 m 时就宣布到了。
+    const PathProjection rear_projection = path_->project(rear, rear_hint_, search_window_);
+    rear_hint_ = rear_projection.index;
+
     if (std::abs(projection.lateral_error_m) > max_lateral_error_m_) {
       degrade(
         ControlState::kOffPath, dt_s,
@@ -428,14 +459,20 @@ private:
     //    横向误差只剩偏移量的横向分量，会趋于 0 —— 一个只看横向误差的上层
     //    会认为"跟得很好"，而车正在开向天边。由 path_tracking 的
     //    ClampsBeyondBothEnds 用例钉死了这个行为。
-    const double remaining_m = path_->length_m() - projection.s_m;
+    const double remaining_m = path_->length_m() - rear_projection.s_m;
     // ⚠️ **到终点的直线距离要单独算，不能用 remaining_m。**
     //    车冲过终点之后投影被夹到末点，remaining_m 恒为 0 —— 冲过去 20 m
-    //    和恰好停在终点长得一模一样。这正是 path_tracking 头文件里交给 S4 的
+    //    和恰好停在终点长得一模一样。这正是 reference_line 头文件里交给 S4 的
     //    那个陷阱（ClampsBeyondBothEnds 用例钉住的行为）。
-    //    量在**前轴**上：路径末点是"前轴该停在哪"，因为整条路径都是按前轴跟踪的。
+    //
+    //    量在**后轴**上：轨迹点是后轴的期望位姿（ads_msgs/TrajectoryPoint.msg），
+    //    所以末点就是"后轴该停在哪"。
+    //    ⚠️ 这一行 P2 时写的是前轴，注释还说"整条路径都是按前轴跟踪的" ——
+    //       那是把 Stanley 的控制点当成了轨迹的语义。后果是**车早停一个轴距**：
+    //       CP-P3-B 场景二实测停车间距 4.265 m，而设计值是 1.5 m，
+    //       差的 2.77 m ≈ 轴距 2.7 m。
     const PathPoint & tail = path_->points().back();
-    const double goal_distance_m = std::hypot(front.x_m - tail.x_m, front.y_m - tail.y_m);
+    const double goal_distance_m = std::hypot(rear.x_m - tail.x_m, rear.y_m - tail.y_m);
     const bool goal_reached = remaining_m <= goal_stop_distance_m_;
     if (goal_reached && !goal_announced_) {
       goal_announced_ = true;
@@ -460,8 +497,9 @@ private:
     double target_speed_mps = 0.0;
     double feedforward_accel_mps2 = -max_decel_mps2_;
     if (!goal_reached) {
-      target_speed_mps = speed_at(projection);
-      feedforward_accel_mps2 = accel_at(projection);
+      // 纵向量在**后轴**投影上取，理由见上面那段 ⚠️。
+      target_speed_mps = speed_at(rear_projection);
+      feedforward_accel_mps2 = accel_at(rear_projection);
     }
 
     const double steer_rad = stanley_->update(
@@ -473,9 +511,9 @@ private:
     const double cycle_ms = (now() - tick_start).seconds() * 1e3;
     publish_debug(front, projection, target_speed_mps);
     publish_diagnostics(
-      goal_reached ? ControlState::kGoalReached : ControlState::kTracking, "", projection,
-      target_speed_mps, feedforward_accel_mps2, steer_rad, accel_mps2, remaining_m, goal_distance_m,
-      cycle_ms);
+      goal_reached ? ControlState::kGoalReached : ControlState::kTracking, "", projection, dt_s,
+      rear_projection.curvature_inv_m, target_speed_mps, feedforward_accel_mps2, steer_rad,
+      accel_mps2, remaining_m, goal_distance_m, cycle_ms);
   }
 
   /// 降级：**减速停车**并把原因说清楚。
@@ -504,7 +542,7 @@ private:
 
     PathProjection empty;
     publish_diagnostics(
-      state, reason, empty, 0.0, accel_mps2, steer_rad, accel_mps2, 0.0, 0.0, 0.0);
+      state, reason, empty, dt_s, 0.0, 0.0, accel_mps2, steer_rad, accel_mps2, 0.0, 0.0, 0.0);
   }
 
   void publish_command(double steer_rad, double accel_mps2)
@@ -600,9 +638,10 @@ private:
   }
 
   void publish_diagnostics(
-    ControlState state, const std::string & reason, const PathProjection & projection,
-    double target_speed_mps, double feedforward_accel_mps2, double steer_rad, double accel_mps2,
-    double remaining_m, double goal_distance_m, double cycle_ms)
+    ControlState state, const std::string & reason, const PathProjection & projection, double dt_s,
+    double vehicle_curvature_inv_m, double target_speed_mps, double feedforward_accel_mps2,
+    double steer_rad, double accel_mps2, double remaining_m, double goal_distance_m,
+    double cycle_ms)
   {
     diagnostic_msgs::msg::DiagnosticStatus status;
     status.name = "ads_control/control_node";
@@ -616,7 +655,46 @@ private:
     status.values.push_back(MakeKeyValue("state", std::string(StateName(state))));
     status.values.push_back(MakeKeyValue("lateral_error_m", projection.lateral_error_m));
     status.values.push_back(MakeKeyValue("heading_error_rad", projection.heading_error_rad));
-    status.values.push_back(MakeKeyValue("curvature_inv_m", projection.curvature_inv_m));
+    // ⚠️ 报**后轴**投影的曲率，不是前轴的。
+    //
+    //    这个字段的唯一消费者是 record_control_run.py，它用来算
+    //    `a_lat = v²·|κ|` 并对 CP-P2-B 的 2.0 判据。而那条判据的说明是
+    //    「规划按 1.5 限，留 33% 给跟踪误差」—— **规划限的是轨迹点的曲率**，
+    //    而轨迹点是后轴位置（ads_msgs/TrajectoryPoint.msg）。
+    //    自行车模型的真实横向加速度 v²/R 也是按后轴的转弯半径算的。
+    //
+    //    用前轴的话，量的是「参考路径在车前方 2.7 m 处有多弯」——
+    //    那既不是规划限的东西，也不是车实际受的加速度。
+    //    P3-S5 实测：同一次跑，前轴口径 1.879、按车自身运动（v²tanδ/L）2.994，
+    //    差 60%。**判据和它要守的量对不上，比判据松更糟** —— 松至少是一致的。
+    // ⚠️ 控制器**这一拍**的 dt。转向速率限幅用的就是它，所以量"实际转了多快"
+    //    必须除它，不能除时间戳差、也不能除标称周期。
+    //
+    //    三者都不一样：
+    //      时间戳差   = dt + 本拍计算耗时的抖动（诊断在 tick 末尾发，含 1–8 ms 波动）
+    //      标称周期   = 1/control_rate_hz，恒定，忽略了 tick 迟到
+    //      本字段     = now() 的真实差值，**限幅器用的就是它**
+    //    P3-S5 实测：某拍 dt=0.023 时限幅允许 0.5×0.023=0.0115 rad，
+    //    而拿标称 0.02 去除就报成 0.575 rad/s —— 物理速率其实仍是 0.5。
+    status.values.push_back(MakeKeyValue("dt_s", dt_s));
+    status.values.push_back(MakeKeyValue("curvature_inv_m", vehicle_curvature_inv_m));
+
+    // ⚠️ **实测**横向加速度 |v·ω|，这才是 CP-P2-B 那条判据该量的东西。
+    //
+    //    P3-S5 之前判据用的是 `v²·κ`（参考路径的曲率）。那量的是
+    //    「路有多弯」，不是「车受了多大侧向加速度」—— 两者差的正是
+    //    **跟踪引入的曲率**：车过弯时 Stanley 的修正会叠在路径曲率之上。
+    //    同一次跑实测三个口径：
+    //        v·ω（真值，横摆角速度）     2.329
+    //        v²·κ_后轴（参考路径曲率）    2.687
+    //        v²·tanδ/L（指令转角）       2.376
+    //    而修复前判据用的 v²·κ_前轴 只报 1.879 —— **偏松 55%**，
+    //    于是「CP-P2-B 8/8」这个结论从 P2 起就建立在一个量错了的数上。
+    //
+    //    用 v·ω 是因为它**不含任何模型假设**：横摆角速度是仿真器/IMU 直接给的，
+    //    不依赖轴距、不依赖"转角指令是否已经执行到位"。
+    status.values.push_back(
+      MakeKeyValue("lateral_accel_mps2", std::abs(measured_speed_mps_ * measured_yaw_rate_radps_)));
     status.values.push_back(MakeKeyValue("path_s_m", projection.s_m));
     status.values.push_back(MakeKeyValue("path_remaining_m", remaining_m));
     // 与 path_remaining_m 的区别见 on_timer 里的说明：冲过终点后前者恒为 0，后者继续增长。
@@ -666,10 +744,16 @@ private:
   double last_trajectory_start_y_m_{0.0};
   bool last_trajectory_start_valid_{false};
   bool stopping_announced_{false};
+  /// 前轴投影的局部搜索提示（Stanley 用）。
   std::optional<std::size_t> hint_;
+  /// **后轴**投影的提示。与 hint_ 分开是因为两者相差一个轴距，
+  /// 共用一个会让其中一个的局部搜索窗口每拍都偏 2.7 m。
+  std::optional<std::size_t> rear_hint_;
 
   // ---- 运行状态 ----
   double measured_speed_mps_{0.0};
+  /// 横摆角速度，rad/s，来自 /odom。只用于算实测横向加速度，不进控制律。
+  double measured_yaw_rate_radps_{0.0};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_tick_{0, 0, RCL_ROS_TIME};
   ControlState last_state_{ControlState::kNoPath};
