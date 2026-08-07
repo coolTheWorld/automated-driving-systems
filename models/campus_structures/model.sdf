@@ -1,0 +1,579 @@
+<?xml version="1.0" ?>
+<!-- ===========================================================
+     campus_structures —— 园区路侧立体结构（杆件与建筑）
+
+     ⚠️ 本文件由 scripts/gen_map.py 从 config/campus_map.yaml 生成，
+        请勿手改。
+
+     它是 **P4 定位的前提**，不是装饰：加它之前世界里所有点的
+     法向都是 (0,0,1)，NDT 只能约束 z/roll/pitch，x/y/yaw
+     完全不可观 —— 配准会「收敛」到一个任意的位姿。
+
+     与 maps/campus_cloud.pcd 同源：NDT 用的先验点云就是从
+     这些同样的几何解析采样出来的，两者不可能漂移。
+     =========================================================== -->
+<sdf version="1.9">
+  <model name="campus_structures">
+    <static>true</static>
+    <link name="link">
+      <visual name="pole_loop_east_0l_visual">
+        <pose>21.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_0l_collision">
+        <pose>21.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_0r_visual">
+        <pose>21.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_0r_collision">
+        <pose>21.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_1l_visual">
+        <pose>41.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_1l_collision">
+        <pose>41.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_1r_visual">
+        <pose>41.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_1r_collision">
+        <pose>41.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_2l_visual">
+        <pose>61.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_2l_collision">
+        <pose>61.000000 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_2r_visual">
+        <pose>61.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_2r_collision">
+        <pose>61.000000 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_3l_visual">
+        <pose>79.608126 -44.297931 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_3l_collision">
+        <pose>79.608126 -44.297931 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_3r_visual">
+        <pose>82.329569 -54.955967 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_3r_collision">
+        <pose>82.329569 -54.955967 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_4l_visual">
+        <pose>84.500000 -33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_4l_collision">
+        <pose>84.500000 -33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_4r_visual">
+        <pose>95.500000 -33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_4r_collision">
+        <pose>95.500000 -33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_5l_visual">
+        <pose>84.500000 -13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_5l_collision">
+        <pose>84.500000 -13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_5r_visual">
+        <pose>95.500000 -13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_5r_collision">
+        <pose>95.500000 -13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_6l_visual">
+        <pose>84.500000 6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_6l_collision">
+        <pose>84.500000 6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_6r_visual">
+        <pose>95.500000 6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_6r_collision">
+        <pose>95.500000 6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_7l_visual">
+        <pose>84.500000 26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_7l_collision">
+        <pose>84.500000 26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_7r_visual">
+        <pose>95.500000 26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_7r_collision">
+        <pose>95.500000 26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_8l_visual">
+        <pose>83.057476 42.083129 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_8l_collision">
+        <pose>83.057476 42.083129 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_8r_visual">
+        <pose>91.616281 48.993038 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_8r_collision">
+        <pose>91.616281 48.993038 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_9l_visual">
+        <pose>68.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_9l_collision">
+        <pose>68.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_9r_visual">
+        <pose>68.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_9r_collision">
+        <pose>68.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_10l_visual">
+        <pose>48.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_10l_collision">
+        <pose>48.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_10r_visual">
+        <pose>48.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_10r_collision">
+        <pose>48.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_11l_visual">
+        <pose>28.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_11l_collision">
+        <pose>28.699112 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_east_11r_visual">
+        <pose>28.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_east_11r_collision">
+        <pose>28.699112 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_0l_visual">
+        <pose>-21.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_0l_collision">
+        <pose>-21.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_0r_visual">
+        <pose>-21.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_0r_collision">
+        <pose>-21.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_1l_visual">
+        <pose>-41.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_1l_collision">
+        <pose>-41.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_1r_visual">
+        <pose>-41.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_1r_collision">
+        <pose>-41.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_2l_visual">
+        <pose>-61.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_2l_collision">
+        <pose>-61.000000 44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_2r_visual">
+        <pose>-61.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_2r_collision">
+        <pose>-61.000000 55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_3l_visual">
+        <pose>-79.608126 44.297931 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_3l_collision">
+        <pose>-79.608126 44.297931 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_3r_visual">
+        <pose>-82.329569 54.955967 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_3r_collision">
+        <pose>-82.329569 54.955967 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_4l_visual">
+        <pose>-84.500000 33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_4l_collision">
+        <pose>-84.500000 33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_4r_visual">
+        <pose>-95.500000 33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_4r_collision">
+        <pose>-95.500000 33.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_5l_visual">
+        <pose>-84.500000 13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_5l_collision">
+        <pose>-84.500000 13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_5r_visual">
+        <pose>-95.500000 13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_5r_collision">
+        <pose>-95.500000 13.849556 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_6l_visual">
+        <pose>-84.500000 -6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_6l_collision">
+        <pose>-84.500000 -6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_6r_visual">
+        <pose>-95.500000 -6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_6r_collision">
+        <pose>-95.500000 -6.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_7l_visual">
+        <pose>-84.500000 -26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_7l_collision">
+        <pose>-84.500000 -26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_7r_visual">
+        <pose>-95.500000 -26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_7r_collision">
+        <pose>-95.500000 -26.150444 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_8l_visual">
+        <pose>-83.057476 -42.083129 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_8l_collision">
+        <pose>-83.057476 -42.083129 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_8r_visual">
+        <pose>-91.616281 -48.993038 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_8r_collision">
+        <pose>-91.616281 -48.993038 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_9l_visual">
+        <pose>-68.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_9l_collision">
+        <pose>-68.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_9r_visual">
+        <pose>-68.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_9r_collision">
+        <pose>-68.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_10l_visual">
+        <pose>-48.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_10l_collision">
+        <pose>-48.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_10r_visual">
+        <pose>-48.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_10r_collision">
+        <pose>-48.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_11l_visual">
+        <pose>-28.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_11l_collision">
+        <pose>-28.699112 -44.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_loop_west_11r_visual">
+        <pose>-28.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_loop_west_11r_collision">
+        <pose>-28.699112 -55.500000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_0l_visual">
+        <pose>-5.500000 -29.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_0l_collision">
+        <pose>-5.500000 -29.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_0r_visual">
+        <pose>5.500000 -29.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_0r_collision">
+        <pose>5.500000 -29.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_1l_visual">
+        <pose>-5.500000 -9.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_1l_collision">
+        <pose>-5.500000 -9.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_1r_visual">
+        <pose>5.500000 -9.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_1r_collision">
+        <pose>5.500000 -9.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_2l_visual">
+        <pose>-5.500000 11.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_2l_collision">
+        <pose>-5.500000 11.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="pole_cross_2r_visual">
+        <pose>5.500000 11.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+        <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.55 0.55 0.57 1</diffuse></material>
+      </visual>
+      <collision name="pole_cross_2r_collision">
+        <pose>5.500000 11.000000 2.000000 0 0 0</pose>
+        <geometry><cylinder><radius>0.150000</radius><length>4.000000</length></cylinder></geometry>
+      </collision>
+      <visual name="b_sw_visual">
+        <pose>-45.000000 -25.000000 4.000000 0 0 0.000000</pose>
+        <geometry><box><size>30.000000 18.000000 8.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_sw_collision">
+        <pose>-45.000000 -25.000000 4.000000 0 0 0.000000</pose>
+        <geometry><box><size>30.000000 18.000000 8.000000</size></box></geometry>
+      </collision>
+      <visual name="b_nw_visual">
+        <pose>-45.000000 25.000000 3.000000 0 0 0.000000</pose>
+        <geometry><box><size>24.000000 16.000000 6.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_nw_collision">
+        <pose>-45.000000 25.000000 3.000000 0 0 0.000000</pose>
+        <geometry><box><size>24.000000 16.000000 6.000000</size></box></geometry>
+      </collision>
+      <visual name="b_se_visual">
+        <pose>45.000000 -25.000000 5.000000 0 0 0.300000</pose>
+        <geometry><box><size>26.000000 20.000000 10.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_se_collision">
+        <pose>45.000000 -25.000000 5.000000 0 0 0.300000</pose>
+        <geometry><box><size>26.000000 20.000000 10.000000</size></box></geometry>
+      </collision>
+      <visual name="b_ne_visual">
+        <pose>45.000000 25.000000 3.500000 0 0 -0.200000</pose>
+        <geometry><box><size>20.000000 14.000000 7.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_ne_collision">
+        <pose>45.000000 25.000000 3.500000 0 0 -0.200000</pose>
+        <geometry><box><size>20.000000 14.000000 7.000000</size></box></geometry>
+      </collision>
+      <visual name="b_north_visual">
+        <pose>-20.000000 66.000000 4.500000 0 0 0.000000</pose>
+        <geometry><box><size>34.000000 16.000000 9.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_north_collision">
+        <pose>-20.000000 66.000000 4.500000 0 0 0.000000</pose>
+        <geometry><box><size>34.000000 16.000000 9.000000</size></box></geometry>
+      </collision>
+      <visual name="b_east_visual">
+        <pose>106.000000 10.000000 6.000000 0 0 0.000000</pose>
+        <geometry><box><size>18.000000 26.000000 12.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_east_collision">
+        <pose>106.000000 10.000000 6.000000 0 0 0.000000</pose>
+        <geometry><box><size>18.000000 26.000000 12.000000</size></box></geometry>
+      </collision>
+      <visual name="b_mid_e_visual">
+        <pose>26.000000 4.000000 4.500000 0 0 0.150000</pose>
+        <geometry><box><size>22.000000 20.000000 9.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_mid_e_collision">
+        <pose>26.000000 4.000000 4.500000 0 0 0.150000</pose>
+        <geometry><box><size>22.000000 20.000000 9.000000</size></box></geometry>
+      </collision>
+      <visual name="b_mid_w_visual">
+        <pose>-27.000000 -6.000000 3.500000 0 0 -0.100000</pose>
+        <geometry><box><size>20.000000 22.000000 7.000000</size></box></geometry>
+        <material><ambient>0.60 0.56 0.50 1</ambient><diffuse>0.72 0.68 0.60 1</diffuse></material>
+      </visual>
+      <collision name="b_mid_w_collision">
+        <pose>-27.000000 -6.000000 3.500000 0 0 -0.100000</pose>
+        <geometry><box><size>20.000000 22.000000 7.000000</size></box></geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

@@ -54,6 +54,10 @@ XODR_FILE = REPO_ROOT / "maps" / "campus.xodr"
 # 只生成 model.sdf；同目录的 model.config 是手写的元数据，不含任何几何，
 # 与 models/ego_vehicle/ 的分工完全一致。
 ROAD_SDF_FILE = REPO_ROOT / "models" / "campus_road" / "model.sdf"
+# 路侧立体结构（P4 定位的前提，见文件末尾 build_structures 的说明）。
+STRUCT_SDF_FILE = REPO_ROOT / "models" / "campus_structures" / "model.sdf"
+# NDT 的先验点云地图（P4）。与上面那个 SDF 同源 —— 见 render_cloud 的说明。
+CLOUD_FILE = REPO_ROOT / "maps" / "campus_cloud.pcd"
 
 # 车道中心线的采样基准，供 ads_map 的 C++ 实现做**逐点对账**（P1-S2 的检查点）。
 #
@@ -781,6 +785,27 @@ def _geom_boxes(g: Geom, segs_per_quarter: int) -> list[tuple[float, float, floa
     return boxes
 
 
+def _junction_paving(jun: Junction, width: float) -> tuple[float, float, float, float]:
+    """路口铺装块：所有腿矩形的**轴对齐包围盒**，返回 (中心x, 中心y, 尺寸x, 尺寸y)。
+
+    比按腿逐块画简单得多，也避免了重叠；多出来的边角在视觉上正是真实路口的样子。
+
+    ⚠️ 这个函数被 **Gazebo 路面**和 **NDT 点云地图**两处共用，这是有意的：
+       两边各算一遍就会漂移，而漂移的症状是 NDT 在路口稳定地收敛到一个
+       错误的位姿 —— 残差小、协方差紧、看起来一切正常。
+    """
+    xs, ys = [], []
+    for leg in jun.legs:
+        dirx, diry = unit(leg.hdg_out)
+        nx, ny = -diry, dirx                         # 腿的法向
+        for t in (0.0, math.dist((jun.x, jun.y), (leg.x, leg.y))):
+            for side in (-1.0, 1.0):
+                xs.append(jun.x + t * dirx + side * width / 2.0 * nx)
+                ys.append(jun.y + t * diry + side * width / 2.0 * ny)
+    return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0,
+            max(xs) - min(xs), max(ys) - min(ys))
+
+
 def render_road_sdf(p: dict) -> str:
     """生成 models/campus_road/model.sdf。"""
     d = derive(p)
@@ -838,19 +863,9 @@ def render_road_sdf(p: dict) -> str:
                 n += 1
 
     # ---- 路口铺装 -------------------------------------------------------
-    # 取所有腿矩形的**轴对齐包围盒**，一整块画完。
-    # 比按腿逐块画简单得多，也避免了重叠；多出来的边角在视觉上正是真实路口的样子。
     for jun in net.junctions:
-        xs, ys = [], []
-        for leg in jun.legs:
-            dirx, diry = unit(leg.hdg_out)
-            nx, ny = -diry, dirx                     # 腿的法向
-            for t in (0.0, math.dist((jun.x, jun.y), (leg.x, leg.y))):
-                for side in (-1.0, 1.0):
-                    xs.append(jun.x + t * dirx + side * width / 2.0 * nx)
-                    ys.append(jun.y + t * diry + side * width / 2.0 * ny)
-        box(f"junction_{jun.jid}", (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0,
-            z, 0.0, max(xs) - min(xs), max(ys) - min(ys), th, asphalt)
+        bx, by, dx, dy = _junction_paving(jun, width)
+        box(f"junction_{jun.jid}", bx, by, z, 0.0, dx, dy, th, asphalt)
 
     out.append('    </link>')
     out.append('  </model>')
@@ -859,7 +874,343 @@ def render_road_sdf(p: dict) -> str:
 
 
 # =============================================================================
-#  第四层之三：导出车道中心线采样基准（给 C++ 实现对账用）
+#  第四层之三：路侧立体结构（P4 定位的前提）
+#
+#  ⚠️ 这一层的存在理由不是好看。加它之前，世界里所有点的法向都是 (0,0,1)，
+#     NDT 只能约束 z / roll / pitch，**x / y / yaw 完全不可观** ——
+#     配准会"收敛"到一个任意的位姿。见 config/campus_map.yaml 的同名段。
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class Pole:
+    """一根路灯杆。竖直圆柱，底面贴地。"""
+
+    name: str
+    x: float
+    y: float
+    radius: float
+    height: float
+
+
+@dataclass(frozen=True)
+class Building:
+    """一栋建筑。绕 z 轴旋转的长方体，底面贴地。"""
+
+    name: str
+    x: float
+    y: float
+    yaw: float
+    length: float      # 沿自身 x 轴
+    width: float       # 沿自身 y 轴
+    height: float
+
+
+def _road_keepouts(p: dict, d: dict, net: Network) -> list[tuple[float, float]]:
+    """所有"车可能开到的地方"的采样点。结构必须离它们足够远。
+
+    包含**连接道路**（junction >= 0），否则路口内的转弯轨迹不受保护 ——
+    而路口恰恰是最容易把杆子放进车轨迹里的地方（内侧转角看起来很空）。
+    """
+    pts: list[tuple[float, float]] = []
+    for road in net.roads:
+        for s in road.sample_stations(0.5):
+            x, y, _ = road.pose_at(s)
+            pts.append((x, y))
+    return pts
+
+
+def _dist_point_to_obb(px: float, py: float, b: Building) -> float:
+    """点到矩形（OBB）外廓的最短距离。点在矩形内时返回 0。
+
+    做法是把点转进矩形自身坐标系，问题退化成轴对齐情形：
+    每个轴上超出半边长的部分才产生距离，没超出的记 0。
+    """
+    dx, dy = px - b.x, py - b.y
+    c, s = math.cos(-b.yaw), math.sin(-b.yaw)
+    lx, ly = dx * c - dy * s, dx * s + dy * c        # 转到矩形自身系
+    ox = max(abs(lx) - b.length / 2.0, 0.0)
+    oy = max(abs(ly) - b.width / 2.0, 0.0)
+    return math.hypot(ox, oy)
+
+
+def build_structures(p: dict, d: dict, net: Network) -> tuple[list[Pole], list[Building], int]:
+    """由 YAML 推导出全部杆件与建筑，并**机械校验**它们不侵入路面。
+
+    两类东西的处理**故意不同**：
+
+      · 杆件是按规则生成的（沿路等间距），某些位置与另一条路冲突是几何上
+        必然会发生的（尤其在路口附近，一条路的路侧正好是另一条路的路面）。
+        这类冲突**过滤掉并报告数量** —— 报告是必须的，否则"静默丢弃"
+        会让人以为覆盖是完整的。
+      · 建筑是人手填的，冲突意味着**填错了**，直接抛异常拒绝生成。
+
+    返回 (杆件, 建筑, 被过滤掉的杆件数)。
+    """
+    rs = p["roadside_structures"]
+    pole_cfg = rs["poles"]
+    clearance = rs["clearance_m"]
+    half_surface = d["surface_width_m"] / 2.0
+    keepouts = _road_keepouts(p, d, net)
+
+    # ---- 建筑：先校验，冲突即报错 --------------------------------------
+    buildings: list[Building] = []
+    for spec in rs["buildings"]:
+        b = Building(spec["name"], spec["x_m"], spec["y_m"], spec["yaw_rad"],
+                     spec["length_m"], spec["width_m"], spec["height_m"])
+        gap = min(_dist_point_to_obb(kx, ky, b) for kx, ky in keepouts) - half_surface
+        if gap < clearance:
+            raise ValueError(
+                f"建筑 {b.name} 距路面只有 {gap:.3f} m，小于 clearance_m={clearance}。\n"
+                f"  它会侵入车道 —— 症状是「车正常行驶却撞上建筑」，而人会去查规划器。\n"
+                f"  修法：挪动 config/campus_map.yaml 里 {b.name} 的 x_m/y_m。")
+        buildings.append(b)
+
+    # ---- 杆件：沿常规道路两侧等间距生成，冲突的过滤掉 -------------------
+    spacing = pole_cfg["spacing_m"]
+    offset = half_surface + pole_cfg["setback_m"]
+    radius, height = pole_cfg["radius_m"], pole_cfg["height_m"]
+
+    poles: list[Pole] = []
+    dropped = 0
+    for road in net.roads:
+        if road.junction >= 0:                       # 连接道路不布杆：路口内本就该空
+            continue
+        n = int(road.length / spacing)
+        for i in range(n):
+            s = spacing / 2.0 + i * spacing          # 半格起步，避开道路端点（= 路口边界）
+            x, y, hdg = road.pose_at(s)
+            nx, ny = math.cos(hdg + math.pi / 2.0), math.sin(hdg + math.pi / 2.0)
+            for side, tag in ((1.0, "l"), (-1.0, "r")):
+                px, py = x + side * offset * nx, y + side * offset * ny
+                gap = (min(math.dist((px, py), k) for k in keepouts)
+                       - half_surface - radius)
+                if gap < clearance:
+                    dropped += 1
+                    continue
+                # 与已有杆重合的也丢掉（两条路在路口附近平行时会撞车）
+                if any(math.dist((px, py), (q.x, q.y)) < 2.0 * radius for q in poles):
+                    dropped += 1
+                    continue
+                poles.append(Pole(f"pole_{road.name}_{i}{tag}", px, py, radius, height))
+
+    return poles, buildings, dropped
+
+
+def render_structures_sdf(p: dict) -> str:
+    """生成 models/campus_structures/model.sdf。
+
+    全部杆件与建筑装进**一个**模型的**一个** link：Gazebo 里每个模型/link 都有
+    实体开销，而这些东西全是静态的、永远不会相对运动，拆成几十个模型纯属浪费。
+
+    与 campus_road 不同，这里**有 <collision>**：可以开进去的路灯是个谎言，
+    而且 P5 的感知要把它们当成真实障碍物。静态体不产生接触除非真撞上，
+    所以物理开销可以忽略。
+    """
+    d = derive(p)
+    net = build_network(p, d)
+    poles, buildings, _ = build_structures(p, d, net)
+
+    out: list[str] = []
+    out.append('<?xml version="1.0" ?>')
+    out.append("<!-- ===========================================================")
+    out.append("     campus_structures —— 园区路侧立体结构（杆件与建筑）")
+    out.append("")
+    out.append("     ⚠️ 本文件由 scripts/gen_map.py 从 config/campus_map.yaml 生成，")
+    out.append("        请勿手改。")
+    out.append("")
+    out.append("     它是 **P4 定位的前提**，不是装饰：加它之前世界里所有点的")
+    out.append("     法向都是 (0,0,1)，NDT 只能约束 z/roll/pitch，x/y/yaw")
+    out.append("     完全不可观 —— 配准会「收敛」到一个任意的位姿。")
+    out.append("")
+    out.append("     与 maps/campus_cloud.pcd 同源：NDT 用的先验点云就是从")
+    out.append("     这些同样的几何解析采样出来的，两者不可能漂移。")
+    out.append("     =========================================================== -->")
+    out.append('<sdf version="1.9">')
+    out.append('  <model name="campus_structures">')
+    out.append('    <static>true</static>')
+    out.append('    <link name="link">')
+
+    concrete = ('<ambient>0.45 0.45 0.47 1</ambient>'
+                '<diffuse>0.55 0.55 0.57 1</diffuse>')
+    wall = ('<ambient>0.60 0.56 0.50 1</ambient>'
+            '<diffuse>0.72 0.68 0.60 1</diffuse>')
+
+    for pole in poles:
+        geom = (f'<cylinder><radius>{num(pole.radius)}</radius>'
+                f'<length>{num(pole.height)}</length></cylinder>')
+        pose = f'{num(pole.x)} {num(pole.y)} {num(pole.height / 2.0)} 0 0 0'
+        for kind, extra in (("visual", f'<material>{concrete}</material>'),
+                            ("collision", "")):
+            out.append(f'      <{kind} name="{pole.name}_{kind}">')
+            out.append(f'        <pose>{pose}</pose>')
+            out.append(f'        <geometry>{geom}</geometry>')
+            if extra:
+                out.append(f'        {extra}')
+            out.append(f'      </{kind}>')
+
+    for b in buildings:
+        geom = (f'<box><size>{num(b.length)} {num(b.width)} '
+                f'{num(b.height)}</size></box>')
+        pose = f'{num(b.x)} {num(b.y)} {num(b.height / 2.0)} 0 0 {num(b.yaw)}'
+        for kind, extra in (("visual", f'<material>{wall}</material>'),
+                            ("collision", "")):
+            out.append(f'      <{kind} name="{b.name}_{kind}">')
+            out.append(f'        <pose>{pose}</pose>')
+            out.append(f'        <geometry>{geom}</geometry>')
+            if extra:
+                out.append(f'        {extra}')
+            out.append(f'      </{kind}>')
+
+    out.append('    </link>')
+    out.append('  </model>')
+    out.append('</sdf>')
+    return "\n".join(out) + "\n"
+
+
+# =============================================================================
+#  第四层之四：NDT 的先验点云地图
+#
+#  为什么是解析采样而不是开车跑一圈累积真值点云：地图是**先验**，
+#  它应该来自地图源。用一次仿真跑的产物当先验，等于让地图依赖那一条路线 ——
+#  换条路线或换个世界地图就悄悄变了，而且它进不了 CI（要 GPU、不确定）。
+#  见 tasks/plan.md P4-1 决策二。
+# =============================================================================
+
+
+def _linspace(a: float, b: float, step: float) -> list[float]:
+    """把 [a, b] 按 step **等分**成若干点（含两端）。
+
+    ⚠️ 刻意不用 `while x < b: x += step` 也不用 ceil((b-a)/step) 再夹取。
+       前者累积浮点误差；后者在 (b-a)/step 恰好是整数时可能因为浮点表示
+       （80.00000000000001）多算一步，末尾两个点重合 —— 在点云里完全看不出来，
+       却会让下游算法除以零。等分则两端精确、无需夹取。
+       这个坑 P1 的路径采样已经踩过一次，见 CLAUDE.md。
+    """
+    n = max(1, int(round((b - a) / step)))
+    return [a + (b - a) * i / n for i in range(n + 1)]
+
+
+def _sample_road_surface(p: dict, d: dict, net: Network,
+                         step: float) -> list[tuple[float, float, float]]:
+    """路面点：沿每条常规道路的参考线纵向 × 横向铺格子，再加两个路口铺装块。
+
+    只采**常规道路**：连接道路全部落在路口铺装块内部，两边都采等于重复。
+    高度取路面板的上表面，与 Gazebo 里看到的一致。
+    """
+    half = d["surface_width_m"] / 2.0
+    z = p["visual"]["elevation_m"] + p["visual"]["thickness_m"] / 2.0
+    pts: list[tuple[float, float, float]] = []
+
+    for road in net.roads:
+        if road.junction >= 0:
+            continue
+        for s in _linspace(0.0, road.length, step):
+            x, y, hdg = road.pose_at(s)
+            nx, ny = math.cos(hdg + math.pi / 2.0), math.sin(hdg + math.pi / 2.0)
+            for t in _linspace(-half, half, step):
+                pts.append((x + t * nx, y + t * ny, z))
+
+    for jun in net.junctions:
+        bx, by, dx, dy = _junction_paving(jun, d["surface_width_m"])
+        for x in _linspace(bx - dx / 2.0, bx + dx / 2.0, step):
+            for y in _linspace(by - dy / 2.0, by + dy / 2.0, step):
+                pts.append((x, y, z))
+    return pts
+
+
+def _sample_pole(pole: Pole, step: float) -> list[tuple[float, float, float]]:
+    """杆件点：圆柱**侧面**。
+
+    不采顶盖：半径 0.15 m 的圆盘在 4 m 高处，只有从很远才看得到，
+    而那个距离上整根杆也就一两个点 —— 加它是白占地图体积。
+    """
+    n_theta = max(3, int(round(2.0 * math.pi * pole.radius / step)))
+    pts = []
+    for j in range(n_theta):                          # 不取 2π，否则与 0 重合
+        th = 2.0 * math.pi * j / n_theta
+        cx, cy = pole.x + pole.radius * math.cos(th), pole.y + pole.radius * math.sin(th)
+        for z in _linspace(0.0, pole.height, step):
+            pts.append((cx, cy, z))
+    return pts
+
+
+def _sample_building(b: Building, step: float) -> list[tuple[float, float, float]]:
+    """建筑点：四面**竖直墙** + 屋顶。
+
+    墙才是 x/y/yaw 的信息来源（竖直面的法向是水平的）；屋顶与地面同类，
+    只贡献 z/roll/pitch。仍然采屋顶，是因为**地图必须描述世界里真有的东西**：
+    世界里的盒子确实有顶面，矮建筑的屋顶在 25 m 外就进入雷达的 +10° 仰角视野
+    （看到 H 米高处需要距离 ≥ (H − 1.6)/tan10°）。
+
+    地图**多于**世界会造成错误匹配，**少于**世界只造成外点 —— 前者危险得多。
+    """
+    hl, hw = b.length / 2.0, b.width / 2.0
+    c, s = math.cos(b.yaw), math.sin(b.yaw)
+
+    def to_world(lx: float, ly: float, lz: float) -> tuple[float, float, float]:
+        return (b.x + lx * c - ly * s, b.y + lx * s + ly * c, lz)
+
+    pts = []
+    xs, ys = _linspace(-hl, hl, step), _linspace(-hw, hw, step)
+    zs = _linspace(0.0, b.height, step)
+    for z in zs:
+        for lx in xs:                                 # 前后两面墙（含四个角柱）
+            pts.append(to_world(lx, -hw, z))
+            pts.append(to_world(lx, hw, z))
+        for ly in ys[1:-1]:                           # 左右两面墙（去掉角，免得重复）
+            pts.append(to_world(-hl, ly, z))
+            pts.append(to_world(hl, ly, z))
+    for lx in xs:                                     # 屋顶
+        for ly in ys:
+            pts.append(to_world(lx, ly, b.height))
+    return pts
+
+
+def render_cloud(p: dict) -> str:
+    """生成 maps/campus_cloud.pcd（ASCII PCD v0.7）。
+
+    ASCII 而不是二进制：本仓库所有生成物都靠 `--check` 做**逐字节**比对，
+    而二进制里的浮点表示不便 review 也不便 diff。坐标用 3 位小数（毫米），
+    远低于雷达 10 mm 的噪声 —— 再多位是在记录不存在的精度。
+    """
+    d = derive(p)
+    net = build_network(p, d)
+    poles, buildings, _ = build_structures(p, d, net)
+    cloud = p["roadside_structures"]["cloud"]
+
+    pts = _sample_road_surface(p, d, net, cloud["road_step_m"])
+    for pole in poles:
+        pts += _sample_pole(pole, cloud["pole_step_m"])
+    for b in buildings:
+        pts += _sample_building(b, cloud["wall_step_m"])
+
+    head = [
+        "# .PCD v0.7 - Point Cloud Data file format",
+        "# 园区先验点云地图 —— 由 scripts/gen_map.py 从 config/campus_map.yaml 生成，勿手改。",
+        "# 用途：ads_localization 的 NDT 配准（P4）。坐标系 = map（Gazebo 世界系），单位 m。",
+        "#",
+        "# ⚠️ 不含路面以外的地面。ground_plane 是无限大的，按 0.5 m 铺满要 18.7 万点，",
+        "#    比其余所有东西加起来还多一个量级，而它只贡献 z/roll/pitch —— 那几个",
+        "#    自由度 IMU 的重力矢量已经给了。草地上的实测点会落进空 voxel 当外点，",
+        "#    这是可接受的：「世界比地图多」只造成外点，「地图比世界多」才会错误匹配。",
+        "VERSION 0.7",
+        "FIELDS x y z",
+        "SIZE 4 4 4",
+        "TYPE F F F",
+        "COUNT 1 1 1",
+        f"WIDTH {len(pts)}",
+        "HEIGHT 1",
+        "VIEWPOINT 0 0 0 1 0 0 0",
+        f"POINTS {len(pts)}",
+        "DATA ascii",
+    ]
+    body = [f"{x:.3f} {y:.3f} {z:.3f}" for x, y, z in pts]
+    return "\n".join(head + body) + "\n"
+
+
+# =============================================================================
+#  第四层之五：导出车道中心线采样基准（给 C++ 实现对账用）
 # =============================================================================
 
 
@@ -900,6 +1251,8 @@ def render_samples(p: dict) -> str:
 OUTPUTS = [
     (XODR_FILE, render_xodr),
     (ROAD_SDF_FILE, render_road_sdf),
+    (STRUCT_SDF_FILE, render_structures_sdf),
+    (CLOUD_FILE, render_cloud),
     (SAMPLES_FILE, render_samples),
 ]
 
@@ -947,6 +1300,12 @@ def main() -> int:
     print(f"  车道宽 {params['lanes']['width_m']} m  "
           f"路面视觉宽 {d['surface_width_m']:.3f} m  "
           f"限速 {params['lanes']['speed_limit_mps']} m/s")
+
+    poles, buildings, dropped = build_structures(params, d, net)
+    # ⚠️ dropped 必须打出来。静默丢弃会让人以为路侧覆盖是完整的，
+    #    而 NDT 在"覆盖有洞"的那一段飘掉时，没人会想到是生成阶段丢的。
+    print(f"  路侧结构 {len(poles)} 根杆 + {len(buildings)} 栋建筑"
+          f"（另有 {dropped} 根杆因离路面太近被过滤）")
     return 0
 
 

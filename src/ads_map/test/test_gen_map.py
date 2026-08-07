@@ -501,6 +501,10 @@ def test_ego_spawn_pose_sits_on_a_lane_centre(params):
 @pytest.mark.parametrize('path,render_name', [
     (gen.XODR_FILE, 'render_xodr'),
     (gen.ROAD_SDF_FILE, 'render_road_sdf'),
+    (gen.STRUCT_SDF_FILE, 'render_structures_sdf'),
+    # 点云地图与上面那个 SDF 必须一起重新生成。只更新一个的症状是
+    # NDT **稳定地收敛到一个错误的位姿** —— 残差小、协方差紧、毫无报警。
+    (gen.CLOUD_FILE, 'render_cloud'),
     # 采样基准也必须随 YAML 重新生成 —— 否则改了地图之后，C++ 侧的对账
     # 用的是旧基准，CP-P1-A 会给出**虚假的通过**。
     (gen.SAMPLES_FILE, 'render_samples'),
@@ -518,3 +522,224 @@ def test_committed_artifacts_are_in_sync(params, path, render_name):
     assert path.read_text(encoding='utf-8') == expected, (
         f'{path.name} 与 config/campus_map.yaml 不同步。\n'
         f'  运行：python3 scripts/gen_map.py')
+
+
+# =============================================================================
+#  7. 路侧立体结构与点云地图（P4 定位的前提）
+#
+#  这一节守的东西与前六节不同：前面守的是「几何算得对不对」，
+#  这里守的是「**世界里有没有足够的东西可以用来定位**」。
+#
+#  它防的故障是：NDT 代码完全正确，配准却在某一段路上飘掉 ——
+#  因为那一段周围只有地面。点云对位姿的约束来自表面法向，
+#  一个平面只约束沿它法向的那一个自由度，于是 x/y/yaw 完全不可观，
+#  代价函数沿这三个方向是平的，配准会「收敛」到一个任意的位姿。
+#
+#  ⚠️ 这类故障**在配准代码里查不出来**，所以判据必须放在地图这一侧。
+# =============================================================================
+
+
+def test_linspace_divides_evenly_without_a_duplicated_endpoint():
+    """
+    Sampling a span never emits two coincident points at the end.
+
+    这条守的是 CLAUDE.md 里记着的一个坑：用 `ceil(span/step)` 再把末点夹到
+    端点时，若 span/step 恰好是整数，浮点上它可能是 80.00000000000001，
+    ceil 就多算一步，于是**最后两个点重合**。在点云里完全看不出来，
+    却会让下游按弧长参数化的代码除以零。
+    """
+    for span, step in ((10.0, 0.5), (8.0, 0.5), (247.699, 0.5), (0.3, 0.1)):
+        pts = gen._linspace(0.0, span, step)
+        assert pts[0] == pytest.approx(0.0, abs=1e-12)
+        assert pts[-1] == pytest.approx(span, abs=1e-12), '末点必须精确落在端点上'
+        gaps = [b - a for a, b in zip(pts, pts[1:])]
+        assert min(gaps) > 0.0, f'span={span} step={step} 出现了重合点'
+        assert max(gaps) - min(gaps) < 1e-12, '必须是等分'
+
+
+def test_building_intruding_on_the_road_is_rejected(params):
+    """
+    A hand-authored building that overlaps the carriageway raises.
+
+    建筑是**人手填的**，冲突意味着填错了，必须拒绝生成 ——
+    症状否则是「车正常行驶却撞上建筑」，而人会去查规划器。
+    与 P3 那个「障碍物放在车道中间导致几何无解」是同一类故障。
+    """
+    bad = yaml.safe_load(yaml.safe_dump(params))
+    # y = -50 是环线下边那条路的参考线，把楼直接盖在路上
+    bad['roadside_structures']['buildings'][0].update({'x_m': 30.0, 'y_m': -50.0})
+    d = gen.derive(bad)
+    with pytest.raises(ValueError, match='距路面只有'):
+        gen.build_structures(bad, d, gen.build_network(bad, d))
+
+
+def test_building_just_inside_the_clearance_is_rejected(params):
+    """
+    The clearance check is exact at the boundary, not merely approximate.
+
+    只验「盖在路正中央被拦住」是不够的 —— 那种情形任何粗糙的检查都能拦。
+    这里把楼放到距路面边缘恰好 0.4 m（判据 0.5）的位置，
+    检查判据真的量在正确的地方。
+    """
+    bad = yaml.safe_load(yaml.safe_dump(params))
+    d = gen.derive(params)
+    half = d['surface_width_m'] / 2.0
+    b = bad['roadside_structures']['buildings'][0]
+    # 楼心 = 路参考线 + 路半宽 + 想要的间隙 + 楼自身半宽
+    b.update({'x_m': 30.0, 'y_m': -50.0 + half + 0.4 + b['width_m'] / 2.0,
+              'yaw_rad': 0.0})
+    dd = gen.derive(bad)
+    with pytest.raises(ValueError, match='0.400'):
+        gen.build_structures(bad, dd, gen.build_network(bad, dd))
+
+
+def test_poles_too_close_to_the_road_are_filtered_and_reported(params):
+    """
+    Rule-generated poles that clash with a road are dropped *and counted*.
+
+    杆件与建筑的处理**故意不同**：杆是按规则生成的，某些位置与另一条路
+    冲突是几何上必然会发生的（路口附近一条路的路侧正好是另一条路的路面），
+    所以过滤而不是报错。
+
+    但**过滤数必须被报告**。静默丢弃会让人以为路侧覆盖是完整的，
+    而 NDT 在「覆盖有洞」的那一段飘掉时，没人会想到是生成阶段丢的
+    —— 这正是 CLAUDE.md 里「No silent caps」那条。
+    """
+    bad = yaml.safe_load(yaml.safe_dump(params))
+    bad['roadside_structures']['poles']['setback_m'] = -1.0   # 退到路面里去
+    d = gen.derive(bad)
+    poles, _, dropped = gen.build_structures(bad, d, gen.build_network(bad, d))
+    assert poles == [], '退进路面的杆一根都不该留下'
+    assert dropped > 0, '被丢弃的数量必须报出来，不能静默'
+
+
+def test_structures_clear_the_road_by_the_configured_margin(params, network):
+    """Every generated structure keeps at least clearance_m from the carriageway."""
+    d = gen.derive(params)
+    poles, buildings, _ = gen.build_structures(params, d, network)
+    keepouts = gen._road_keepouts(params, d, network)
+    half = d['surface_width_m'] / 2.0
+    clearance = params['roadside_structures']['clearance_m']
+
+    for pole in poles:
+        gap = min(math.dist((pole.x, pole.y), k) for k in keepouts) - half - pole.radius
+        assert gap >= clearance, f'{pole.name} 距路面只有 {gap:.3f} m'
+    for b in buildings:
+        gap = min(gen._dist_point_to_obb(kx, ky, b) for kx, ky in keepouts) - half
+        assert gap >= clearance, f'{b.name} 距路面只有 {gap:.3f} m'
+
+
+def test_every_drivable_position_sees_enough_structures(params, network):
+    """
+    No stretch of drivable lane is surrounded by nothing but flat ground.
+
+    **这是本节最重要的一条，也是整个 P4-S1 存在的理由。**
+
+    NDT 要定住 x/y/yaw 需要**竖直表面**。二维平面上，两个不共点的路标
+    就足以唯一确定位姿，但两个没有任何冗余 —— 一根杆被前车遮住就退化。
+    判据取 3 个：留一个冗余。
+
+    有效半径取 30 m 而不是雷达量程 50 m，依据是角分辨率：
+    水平 0.2°/点，50 m 处相邻点间隔 0.175 m，而杆直径只有 0.30 m
+    → 50 m 处每线仅 1.7 个点，形同虚设；20 m 处才有 4.3 点/线。
+    见 config/campus_map.yaml 里 poles.radius_m 的推导。
+
+    这条用例是靠**扫一遍整条路线**才发现问题的：横穿路中段原本只能看见
+    2 根杆、0 栋建筑，盯着地图猜是看不出来的。
+    """
+    effective_range_m = 30.0
+    min_structures = 3
+
+    d = gen.derive(params)
+    poles, buildings, _ = gen.build_structures(params, d, network)
+    lane_width = params['lanes']['width_m']
+
+    barren = []
+    for road in network.roads:
+        if road.junction >= 0:                       # 路口内由相邻路段的结构覆盖
+            continue
+        for lane_id in road.lane_ids:
+            for s in road.sample_stations(2.0):
+                x, y, _ = road.lane_center_at(lane_id, s, lane_width)
+                n = sum(1 for q in poles
+                        if math.dist((x, y), (q.x, q.y)) <= effective_range_m)
+                n += sum(1 for b in buildings
+                         if gen._dist_point_to_obb(x, y, b) <= effective_range_m)
+                if n < min_structures:
+                    barren.append((road.name, s, x, y, n))
+
+    assert not barren, (
+        f'{len(barren)} 个可行驶位置在 {effective_range_m} m 内看到的结构少于 '
+        f'{min_structures} 个，NDT 在那里会退化。最差的几个：\n  '
+        + '\n  '.join(f'{nm} s={s:.1f} ({x:.1f},{y:.1f}) 只有 {n} 个'
+                      for nm, s, x, y, n in sorted(barren, key=lambda r: r[4])[:5]))
+
+
+def test_prior_cloud_is_not_all_ground(params):
+    """
+    The prior map contains vertical structure, not just a horizontal sheet.
+
+    一张全是地面点的点云地图**看起来完全正常** —— 有几万个点、坐标都对、
+    PCD 头也合法 —— 但它对 x/y/yaw 一点约束都没有。这条用例把
+    「地图有内容」变成一个机械判据，而不是靠人记得。
+    """
+    text = gen.render_cloud(params)
+    body = text.split('DATA ascii\n', 1)[1].splitlines()
+    zs = [float(line.split()[2]) for line in body]
+    above = sum(1 for z in zs if z > 0.5)
+    assert above > 0.3 * len(zs), (
+        f'点云里只有 {100 * above / len(zs):.1f}% 的点高于 0.5 m。'
+        '地面点只约束 z/roll/pitch，x/y/yaw 需要竖直表面。')
+
+
+def test_prior_cloud_header_matches_its_body(params):
+    """POINTS/WIDTH in the PCD header equal the number of data rows."""
+    text = gen.render_cloud(params)
+    head, body = text.split('DATA ascii\n', 1)
+    rows = body.splitlines()
+    for key in ('WIDTH', 'POINTS'):
+        declared = int(next(ln for ln in head.splitlines()
+                            if ln.startswith(key)).split()[1])
+        assert declared == len(rows), f'{key} 声明 {declared}，实际 {len(rows)} 行'
+
+
+def test_cloud_and_sdf_describe_the_same_structures(params, network):
+    """
+    The Gazebo model and the NDT prior map are built from one geometry.
+
+    这两份东西一旦漂移，症状是 NDT **稳定地收敛到一个错误的位姿**：
+    残差很小、协方差很紧、看起来一切正常，车却偏着开。
+    这比不收敛危险得多 —— 不收敛会报警，收敛到错处不会。
+
+    做法是查「每根杆的中心周围都能在点云里找到一圈点」。这不是逐字节比对，
+    但它抓得住「改了一边忘了改另一边」这个真实的失效方式。
+
+    ⚠️ 判据按**距离**算，不要按「坐标取整后当键去查表」——
+       后者会栽在**双重取整**上：−33.8496 直接取 1 位小数是 −33.8，
+       但点云文件里存的是 3 位小数 −33.850，再取 1 位就成了 −33.9。
+       两条路径给出不同的键，用例于是红在一个根本不存在的问题上。
+    """
+    tol_m = 0.01                      # 点云存 3 位小数，坐标误差 ≤ 1 mm
+    cell_m = 2.0                      # 空间哈希的格子边长，只为避免 O(杆数 × 点数)
+
+    d = gen.derive(params)
+    poles, _, _ = gen.build_structures(params, d, network)
+    sdf = gen.render_structures_sdf(params)
+    body = gen.render_cloud(params).split('DATA ascii\n', 1)[1].splitlines()
+
+    grid: dict = {}
+    for line in body:
+        x, y, _z = (float(v) for v in line.split())
+        grid.setdefault((int(x // cell_m), int(y // cell_m)), []).append((x, y))
+
+    for pole in poles:
+        assert f'name="{pole.name}_visual"' in sdf, f'{pole.name} 不在 SDF 里'
+        cx, cy = int(pole.x // cell_m), int(pole.y // cell_m)
+        near = [q for i in (-1, 0, 1) for j in (-1, 0, 1)
+                for q in grid.get((cx + i, cy + j), [])]
+        on_surface = [q for q in near
+                      if abs(math.hypot(q[0] - pole.x, q[1] - pole.y)
+                             - pole.radius) < tol_m]
+        assert len(on_surface) >= 20, (
+            f'{pole.name} 在点云里只找到 {len(on_surface)} 个侧面点 —— '
+            'SDF 与点云地图漂移了，或者杆的采样步长被调得太粗')
