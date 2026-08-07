@@ -91,6 +91,12 @@
         </lidar>
       </sensor>
 
+      <!-- ⚠️ IMU 与 NavSat 的 <noise> 用 **type 属性**（`<noise type="gaussian">`），
+           而上面雷达的 <noise> 用 **<type> 子元素**。这两处写法**必须不同** ——
+           不是笔误：lidar.sdf 自带一份 noise 定义（type 是子元素），
+           而 imu.sdf / navsat.sdf 用的是共享的 noise.sdf（type 是属性）。
+           搞反的后果两个方向不对称：IMU 用子元素写法是**硬解析错误**（会明确报错），
+           雷达用属性写法只是警告并被静默归一化。已实测确认，见 CLAUDE.md 陷阱表。 -->
       <sensor name="imu" type="imu">
         <!-- 位姿为全零：IMU 就装在 base_link 原点，见 YAML 里关于杠杆臂的说明。 -->
         <pose>0.0000 0.0000 0.0000 0 0 0</pose>
@@ -98,6 +104,72 @@
         <gz_frame_id>base_link</gz_frame_id>
         <update_rate>100.0</update_rate>
         <always_on>1</always_on>
+        <imu>
+          <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.00087</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.001</bias_stddev>
+              <dynamic_bias_stddev>4.8e-05</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.00087</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.001</bias_stddev>
+              <dynamic_bias_stddev>4.8e-05</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.00087</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.001</bias_stddev>
+              <dynamic_bias_stddev>4.8e-05</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </z>
+          </angular_velocity>
+          <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.02</bias_stddev>
+              <dynamic_bias_stddev>0.0001</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.02</bias_stddev>
+              <dynamic_bias_stddev>0.0001</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.02</bias_stddev>
+              <dynamic_bias_stddev>0.0001</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100</dynamic_bias_correlation_time>
+            </noise>
+          </z>
+          </linear_acceleration>
+        </imu>
       </sensor>
 
       <sensor name="navsat" type="navsat">
@@ -106,6 +178,36 @@
         <gz_frame_id>gnss_link</gz_frame_id>
         <update_rate>10.0</update_rate>
         <always_on>1</always_on>
+        <navsat>
+          <position_sensing>
+            <horizontal>
+              <noise type="gaussian">
+                <mean>0.0</mean>
+                <stddev>1.79662e-05</stddev>
+              </noise>
+            </horizontal>
+            <vertical>
+              <noise type="gaussian">
+                <mean>0.0</mean>
+                <stddev>4</stddev>
+              </noise>
+            </vertical>
+          </position_sensing>
+          <velocity_sensing>
+            <horizontal>
+              <noise type="gaussian">
+                <mean>0.0</mean>
+                <stddev>0.05</stddev>
+              </noise>
+            </horizontal>
+            <vertical>
+              <noise type="gaussian">
+                <mean>0.0</mean>
+                <stddev>0.1</stddev>
+              </noise>
+            </vertical>
+          </velocity_sensing>
+        </navsat>
       </sensor>
     </link>
 
@@ -377,6 +479,46 @@
 
          显式指定 <topic>：默认话题名是 /world/<世界名>/model/<模型名>/joint_state，
          带世界名意味着换个世界跑就要改桥接配置。挂到模型作用域下就与世界解耦了。 -->
+    <!-- 真值位姿发布器 —— SPEC §4.1 的 /ego_pose_gt 的来源（P4 新增）。
+
+         ⚠️ **仅供评测打分与实测脚本使用，算法节点一律禁止订阅。**
+            P4 的全部判据（定位横向误差、航向误差、绕环闭合误差）都要拿它当基准，
+            所以它必须存在；但只要有一个算法节点偷偷订阅了它，
+            整个定位模块的验收就变成了自己跟自己比 —— 而它看起来仍然是绿的。
+            这与 reference_samples.csv 那条警告是同一类风险。
+
+         发布的是**模型相对世界**的位姿。而 Gazebo 世界系就是本项目的 map 系
+         （map→odom 由自车 spawn 位姿推出、odom→base_link 由 Ackermann 给），
+         所以这个量直接就是真值的 map→base_link。
+
+         发布频率取 50 Hz：比控制回路（20 Hz）高一档，
+         保证评测时任意一拍都能找到时间上足够近的真值，又不至于刷屏。
+
+         用 OdometryPublisher 而不是 PosePublisher，有两个具体理由：
+           1. **frame 名可以指定**。PosePublisher 把 header.frame_id 填成父实体名，
+              对模型来说就是**世界名**（实测得到 "campus_loop"）—— 换个世界这个
+              字符串就变了，而下游拿它做 TF 查询会失败。这里能直接写死 map/base_link。
+           2. 顺带给出**真值速度**（twist）。评测时"位置对了但速度估歪了"是一种
+              真实的失效，有真值速度才量得出来。
+
+         ⚠️ 它与车上那个 AckermannSteering 的 /odom **完全不是一回事**：
+            后者是**轮速推算**（会漂移，正是 P4 要修正的对象），
+            这个直接读物理引擎里的真实位姿。两者都叫 odometry，别搞混。
+
+         ⚠️ <tf_topic> 指向一个**没人订阅**的话题：这个插件默认会发
+            odom_frame → robot_base_frame 的 TF，而 map → base_link 若被它直接
+            发出来，TF 树上 base_link 就有了两个父节点（另一个是 odom），
+            tf2 会直接报错。真值只走话题，不进 TF。 -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>map</odom_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <odom_topic>/model/ego_vehicle/pose_gt</odom_topic>
+      <tf_topic>/model/ego_vehicle/pose_gt_tf_unused</tf_topic>
+      <dimensions>3</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>/model/ego_vehicle/joint_state</topic>

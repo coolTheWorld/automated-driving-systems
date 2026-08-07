@@ -457,7 +457,8 @@ vulkaninfo --summary                 # 决定性测试：能否列出 NVIDIA 设
 /imu               sensor_msgs/Imu             base_link 系
 /gnss              sensor_msgs/NavSatFix
 /odom              nav_msgs/Odometry           odom → base_link
-/ego_pose_gt       真值位姿，仅用于早期阶段和评测打分
+/ego_pose_gt       nav_msgs/Odometry           真值位姿+速度，map→base_link
+                   **仅用于评测打分，算法节点禁止订阅**（P4-S1 实现）
 /vehicle_cmd       控制指令（转角 rad + 加速度 m/s²）
 ```
 

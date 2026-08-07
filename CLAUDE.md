@@ -15,6 +15,12 @@ SPEC 的关键小节：§2 ODD、§3.3 设计约束、§4.1 双仿真环境、§
 计划按**垂直切片**组织（每个切片结束时系统多具备一项可亲眼验证的能力），切片之间有**检查点**。
 **检查点处停下来汇报实测数据，不自行决定继续。**
 
+**教学工作区在 [`docs/learning/`](docs/learning/README.md)**（`/teach` 技能维护，跨会话有状态）。
+它**不是项目文档**，是学习这套栈的课程、速查卡与学习记录；与 SPEC 冲突时以 SPEC 为准。
+用户要求讲解时先读它的 `MISSION.md`（学习目标）和 `NOTES.md`（教学偏好与已知坑）。
+⚠️ **若某一课发现仓库文档写错了，不要只在课里纠正** —— 按上面「修错之后必须同步」那条，
+回去改 SPEC / 本文件 / 代码注释 / 长期记忆，否则同一个错误会在几个地方各躺一份。
+
 ### 修错之后必须同步长期记忆
 
 **只要一次修复推翻了某个事实性判断，就要回头检查长期记忆里有没有同样或相关的错误说法，
@@ -158,6 +164,10 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **末态判据在过滤后的样本里取「最后一拍」** | 「终速 0.950 FAIL」，而车其实稳稳停在障碍物前 1.9 m | block 场景的**正确**结局是：停车轨迹执行完 → 规划器发零长度轨迹 → `control_node` 判无效落到 **`NO_PATH`** 降级分支刹停并保持。实测末段 **449/799 拍是 `NO_PATH`**，车正是在这段里从 0.95 刹到 0.000。而 `score()` 把样本过滤成 `TRACKING`/`GOAL_REACHED` 再取 `[-1]`，量到的是**刹车中途**。**「跟踪质量」类的量才该过滤（车没在跟轨迹时问"它偏了多少"没有定义），「安全与末态」类的量必须在整段里算** —— 车在非跟踪状态下照样在动、照样会撞 |
 | **测试的采样步长与被测结构的周期可通约** | 用例**全绿，但什么都没测** —— 故障注入进去也不红 | P3-S2 实测：验「朝向跨 ±π 不能裸插值」的用例按「总长的 1/20」= 0.6 m 步进，而参考线段长恰好 0.5 m，两者在 s=6.0 重合，**而跨 ±π 的那一段偏偏就从 6.0 开始** → 只采到 ratio=0 的端点，端点上朴素插值与正确插值给出**同一个值**。改成与段长不整除的步长（0.037）后注入立刻红。**凡是「沿某个离散结构扫一遍」的用例，步长都不能与它的周期整除** |
 | 采样时 `ceil(span/step)` + 末点夹到端点 | 路径最后**两个点重合**，RViz 里完全看不出来，下游按弧长参数化时除以零 | `span/step` 恰好是整数时，浮点上它可能是 `80.00000000000001`，ceil 多算一步。改成**等分**：`offset = span·i/count`，两端精确、无需夹取。触发它的是 `nearest_lane` 的三分法把 s 细化成 `40.000000000000007` |
+| **`<noise>` 的 `type` 在 IMU/NavSat 与雷达上写法相反** | IMU 写成子元素是**硬解析错误**；雷达写成属性只是警告后被静默归一化 | `lidar.sdf` **自带**一份 noise 定义（`<type>gaussian</type>` 是子元素），而 `imu.sdf`/`navsat.sdf` include 的是共享的 `noise.sdf`（`<noise type="gaussian">` 是属性）。**同一个仓库里两种写法都对，各自的地方**。查法：`gz sdf -p` 看有没有 `not defined in SDF` 警告 |
+| **⚠️ Gazebo 的 GNSS 水平噪声按「度」施加，不是米** | 填 `stddev=2.0`（意为 2 m），实测静止车辆纬度在 31.67/35.15 之间跳 —— 散布 2.0 **度** ≈ 217 km | SDF 规范（`navsat.sdf`）白纸黑字写 "in units of **meters**"，gz-sensors 却直接加在 `math::Angle` 上。**垂直位置和测速都是对的，只有水平位置这一项错**。`gen_vehicle_model.py` 除以 111320 绕过。⚠️ 反向风险：Gazebo 哪天修好，噪声就缩小 11 万倍、GNSS 悄悄变完美而判据全绿 —— 用 `scripts/check_sensor_noise.py` 实测拦 |
+| **`ps ... \| grep -v "Z "` 排僵尸** | 残留检查**恒报有残留**，或反过来把僵尸当活的 | `Zs`（会话首进程的僵尸）里没有 `"Z "` 这个子串。要按 stat 字段**首字母**判：`ps -eo stat=,comm= \| awk '$1 !~ /^Z/'`。与上面 `pgrep -x gz` 那条同源 —— 残留检查本身写错，比没有检查更糟 |
+| **用 `pkill -f "ros2 launch ..."` 收 launch** | 两整组仿真同时在跑，`/ego_pose_gt` 上出现**两种消息类型**，话题频率 87 Hz（实际应 50） | 又是 `-f` 匹配完整命令行那条。实测这样收之后 `ps` 里还剩两个完整进程组（各自带 gz + parameter_bridge + 一堆节点）。一律 `setsid` 起、按 **PGID** 收 |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
@@ -308,11 +318,30 @@ ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明�
 python3 scripts/gen_vehicle_model.py
 python3 scripts/gen_vehicle_model.py --check    # 校验生成物是否与 YAML 同步（CI 用）
 
-# 从 YAML 重新生成地图。改了 campus_map.yaml 必跑 —— 它有**三个**生成物：
+# 从 YAML 重新生成地图。改了 campus_map.yaml 必跑 —— 它有**五个**生成物：
 #   maps/campus.xodr（两环境共用）、models/campus_road/model.sdf（Gazebo 可视）、
+#   models/campus_structures/model.sdf（路侧杆件与建筑，**P4 定位的前提**）、
+#   maps/campus_cloud.pcd（NDT 的先验点云地图，与上一个同源）、
 #   src/ads_map/test/data/reference_samples.csv（给 C++ 做逐点对账的基准）
 python3 scripts/gen_map.py
-python3 scripts/gen_map.py --check              # 三个生成物逐字节比对
+python3 scripts/gen_map.py --check              # 五个生成物逐字节比对
+
+# ⚠️ 后两个生成物为什么必须存在（P4-S1 挖出来的）：
+#    加它们之前，campus_loop 里所有点云的法向都是 (0,0,1)（ground_plane +
+#    0.01 m 厚的路面板，而板厚恰好等于雷达噪声 stddev）。点云对位姿的约束
+#    来自表面法向，一个平面只约束沿它法向的那一个自由度 —— 于是 NDT 只能
+#    定住 z/roll/pitch，**x/y/yaw 完全不可观**，配准会「收敛」到任意位姿。
+#    这与 P3「障碍物放在车道中间几何无解」同类：**是场景设定问题，不是代码问题**，
+#    而症状会是「NDT 怎么调都飘」→ 所有人去查配准代码。
+#    杆件与点云是**同源**的（同一个 build_structures()）—— 两份漂移的症状是
+#    NDT **稳定地收敛到一个错误的位姿**：残差小、协方差紧、毫无报警，
+#    比不收敛危险得多。
+
+# 实测 IMU/GNSS 的噪声是否真的生效（**需要一个正在跑的 Gazebo，车必须静止**）
+python3 scripts/check_sensor_noise.py
+# ⚠️ 它守着一个具体的坑：Gazebo 把 GNSS 水平噪声按「度」施加（见陷阱表）。
+#    gen_vehicle_model.py 为此除以 111320；哪天 Gazebo 修好，那次换算会把
+#    噪声缩小 11 万倍 —— GNSS 悄悄变回完美真值，而 P4 判据会全部变绿。
 
 # 从 YAML 重新生成 P3 验收场景的障碍物。改了 config/obstacles.yaml 必跑。
 # ⚠️ 它不只是生成：会**机械校验 planning.md §6 的可行性不等式**（按规划器的
@@ -362,9 +391,17 @@ docker compose exec -e WORLD_FILE=/workspace/worlds/campus_loop.sdf \
 /imu               sensor_msgs/Imu             base_link 系
 /gnss              sensor_msgs/NavSatFix
 /odom              nav_msgs/Odometry           odom → base_link
-/ego_pose_gt       真值位姿，仅早期阶段和评测打分用
+/ego_pose_gt       nav_msgs/Odometry           真值位姿+速度，map→base_link（P4-S1 实现）
 /vehicle_cmd       控制指令（转角 rad + 加速度 m/s²）
 ```
+
+⚠️ **`/ego_pose_gt` 仅供评测打分与实测脚本使用，算法节点一律禁止订阅。**
+P4 的全部定位判据都拿它当基准，所以它必须存在；但只要有一个算法节点偷偷订阅了它，
+整个定位模块的验收就变成**自己跟自己比** —— 而它看起来仍然是绿的。
+这与 `reference_samples.csv` 那条警告同类：一份「标准答案」流进被考核的一方，
+考试就失去意义。它来自 `OdometryPublisher` 插件（直接读物理引擎的真实位姿），
+**不要与 `/odom` 搞混** —— 后者是 AckermannSteering 的轮速推算，会漂移，
+正是 P4 要修正的对象，而两者都是 `nav_msgs/Odometry` 类型。
 
 **bridge 层的职责就是把仿真器原生话题翻译成上面这组名字。** Gazebo 侧和 CARLA 侧做完全相同的翻译。
 翻译层做对了，上游算法就永远不需要知道数据来自哪个仿真器 —— 云实例断了也能在本地继续干活。

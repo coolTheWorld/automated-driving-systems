@@ -106,6 +106,33 @@
   direction: GZ_TO_ROS
 
 # -----------------------------------------------------------------------------
+# 真值位姿（P4 新增）
+#
+# ⚠️⚠️ **仅供评测打分与实测脚本使用。算法节点一律禁止订阅这个话题。**
+#
+# 它是 SPEC §4.1 里列了很久、一直没实现的 /ego_pose_gt。P4 必须有它，
+# 因为定位的全部判据（横向误差、航向误差、绕环闭合误差）都要拿它当基准。
+#
+# 但**只要有一个算法节点偷偷订阅了它，整个定位模块的验收就变成自己跟自己比**
+# —— 而它看起来仍然是绿的。这与 reference_samples.csv 那条警告同类：
+# 一份"标准答案"一旦流进被考核的一方，考试就失去意义。
+#
+# 来源是 ego_vehicle 上的 OdometryPublisher 插件（由 gen_vehicle_model.py 生成），
+# 它直接读物理引擎里的真实位姿，frame 是 map → base_link。
+#
+# ⚠️ 类型是 nav_msgs/Odometry 而不是 PoseStamped，因为它**顺带给出真值速度**：
+#    评测时「位置对了但速度估歪了」是一种真实的失效，有真值速度才量得出来。
+#
+# ⚠️⚠️ **不要与 /odom 搞混**。/odom 是 AckermannSteering 的**轮速推算**，
+#      会累积漂移，正是 P4 要修正的对象；这一条是真值。两者都是 Odometry 类型。
+# -----------------------------------------------------------------------------
+- ros_topic_name: "/ego_pose_gt"
+  gz_topic_name: "/model/ego_vehicle/pose_gt"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# -----------------------------------------------------------------------------
 # TF：odom → base_link
 #
 # 由 AckermannSteering 插件发出，与上面的 /odom 同源。

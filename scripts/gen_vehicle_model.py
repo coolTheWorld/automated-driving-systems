@@ -130,6 +130,76 @@ def derive(p: dict) -> dict:
     return d
 
 
+def _imu_axis_noise(n: dict, kind: str, unit: str, indent: int) -> str:
+    """三个轴各一份相同的噪声块（IMU 的 x/y/z 在 SDF 里必须分别写）。
+
+    三轴给同一组参数是有意的简化：真实器件三轴略有差异，但那个差异
+    对 ESKF 的结构没有任何影响 —— 它本来就按轴独立建模。
+    让三轴不同只会让 YAML 多出六个没人知道怎么定的数。
+    """
+    pad = " " * indent
+    body = (
+        f'<noise type="gaussian">\n'
+        f'{pad}    <mean>0.0</mean>\n'
+        f'{pad}    <stddev>{n[f"{kind}_stddev_{unit}"]:.6g}</stddev>\n'
+        f'{pad}    <bias_mean>0.0</bias_mean>\n'
+        f'{pad}    <bias_stddev>{n[f"{kind}_bias_stddev_{unit}"]:.6g}</bias_stddev>\n'
+        f'{pad}    <dynamic_bias_stddev>'
+        f'{n[f"{kind}_dynamic_bias_stddev_{unit}"]:.6g}</dynamic_bias_stddev>\n'
+        f'{pad}    <dynamic_bias_correlation_time>'
+        f'{n[f"{kind}_bias_correlation_time_s"]:.6g}</dynamic_bias_correlation_time>\n'
+        f'{pad}  </noise>'
+    )
+    return "\n".join(f"{pad}<{ax}>\n{pad}  {body}\n{pad}</{ax}>" for ax in ("x", "y", "z"))
+
+
+# 一度纬度对应的地面距离，m/deg。用来绕过下面那个 Gazebo 的量纲 bug。
+# 取 111320（WGS84 上随纬度在 110574–111694 之间变化，对噪声模型足够）。
+_M_PER_DEG_LAT = 111320.0
+
+
+def _navsat_noise(n: dict, kind: str, unit: str, indent: int) -> str:
+    """NavSat 的水平/垂直两档噪声。
+
+    水平与垂直分开是有物理依据的，不是凑数：卫星星座全在头顶半球，
+    垂直方向的几何构型天然比水平差，所以垂直精度约为水平的 2 倍。
+
+    ⚠️⚠️ **Gazebo 的量纲 bug：水平位置噪声实际按「度」施加，不是米。**
+
+    SDF 规范（navsat.sdf）白纸黑字写着 "Noise parameters for horizontal
+    position measurement, **in units of meters**"，但 gz-sensors 把它直接加在
+    `math::Angle` 表示的经纬度上，而那个量的单位是度。
+
+    2026-08-07 实测（车静止，真值纬度 31.2304）：填 stddev=2.0 时，
+    量到的纬度在 31.67 / 35.15 之间跳 —— 散布 ≈ 2.0 **度** ≈ 217 km。
+    垂直位置（altitude，普通 double）和测速（m/s）**都是对的**，
+    只有水平位置这一项错。所以这里只换算这一项。
+
+    换算后的实际噪声（本项目纬度 31.23°）：
+        北向 σ = 标称值（1 度纬度 ≈ 111320 m，正是我们除掉的那个数）
+        东向 σ = 标称值 × cos(31.23°) ≈ 0.855 × 标称
+    15% 的各向异性，对一个 σ=2 m 的单点定位模型无关紧要（真实 GNSS 误差
+    本来就是各向异性的），但要知道它在那里。
+
+    ⚠️ **这个 workaround 有个反向风险**：Gazebo 哪天把 bug 修成米，
+       这里就会把噪声缩小 111320 倍 —— GNSS 悄悄变成完美真值，
+       而 P4 的判据会全部变绿。用 scripts/check_sensor_noise.py 定期实测拦它。
+    """
+    pad = " " * indent
+    out = []
+    for axis in ("horizontal", "vertical"):
+        stddev = n[f"{kind}_{axis}_stddev_{unit}"]
+        if kind == "position" and axis == "horizontal":
+            stddev /= _M_PER_DEG_LAT
+        out.append(f'{pad}<{axis}>\n'
+                   f'{pad}  <noise type="gaussian">\n'
+                   f'{pad}    <mean>0.0</mean>\n'
+                   f'{pad}    <stddev>{stddev:.6g}</stddev>\n'
+                   f'{pad}  </noise>\n'
+                   f'{pad}</{axis}>')
+    return "\n".join(out)
+
+
 def render_sdf(p: dict) -> str:
     lim = p["limits"]
     sen = p["sensors"]
@@ -299,6 +369,12 @@ def render_sdf(p: dict) -> str:
         </lidar>
       </sensor>
 
+      <!-- ⚠️ IMU 与 NavSat 的 <noise> 用 **type 属性**（`<noise type="gaussian">`），
+           而上面雷达的 <noise> 用 **<type> 子元素**。这两处写法**必须不同** ——
+           不是笔误：lidar.sdf 自带一份 noise 定义（type 是子元素），
+           而 imu.sdf / navsat.sdf 用的是共享的 noise.sdf（type 是属性）。
+           搞反的后果两个方向不对称：IMU 用子元素写法是**硬解析错误**（会明确报错），
+           雷达用属性写法只是警告并被静默归一化。已实测确认，见 CLAUDE.md 陷阱表。 -->
       <sensor name="imu" type="imu">
         <!-- 位姿为全零：IMU 就装在 base_link 原点，见 YAML 里关于杠杆臂的说明。 -->
         <pose>{imu['mount_x_m']:.4f} {imu['mount_y_m']:.4f} {imu['mount_z_m']:.4f} 0 0 0</pose>
@@ -306,6 +382,14 @@ def render_sdf(p: dict) -> str:
         <gz_frame_id>base_link</gz_frame_id>
         <update_rate>{imu['update_rate_hz']:.1f}</update_rate>
         <always_on>1</always_on>
+        <imu>
+          <angular_velocity>
+{_imu_axis_noise(imu['noise'], 'gyro', 'rad_s', 10)}
+          </angular_velocity>
+          <linear_acceleration>
+{_imu_axis_noise(imu['noise'], 'accel', 'mps2', 10)}
+          </linear_acceleration>
+        </imu>
       </sensor>
 
       <sensor name="navsat" type="navsat">
@@ -314,6 +398,14 @@ def render_sdf(p: dict) -> str:
         <gz_frame_id>gnss_link</gz_frame_id>
         <update_rate>{gnss['update_rate_hz']:.1f}</update_rate>
         <always_on>1</always_on>
+        <navsat>
+          <position_sensing>
+{_navsat_noise(gnss['noise'], 'position', 'm', 12)}
+          </position_sensing>
+          <velocity_sensing>
+{_navsat_noise(gnss['noise'], 'velocity', 'mps', 12)}
+          </velocity_sensing>
+        </navsat>
       </sensor>
     </link>
 {steer_link('front_left_steer_link', wheelbase, half_track)}
@@ -441,6 +533,46 @@ def render_sdf(p: dict) -> str:
 
          显式指定 <topic>：默认话题名是 /world/<世界名>/model/<模型名>/joint_state，
          带世界名意味着换个世界跑就要改桥接配置。挂到模型作用域下就与世界解耦了。 -->
+    <!-- 真值位姿发布器 —— SPEC §4.1 的 /ego_pose_gt 的来源（P4 新增）。
+
+         ⚠️ **仅供评测打分与实测脚本使用，算法节点一律禁止订阅。**
+            P4 的全部判据（定位横向误差、航向误差、绕环闭合误差）都要拿它当基准，
+            所以它必须存在；但只要有一个算法节点偷偷订阅了它，
+            整个定位模块的验收就变成了自己跟自己比 —— 而它看起来仍然是绿的。
+            这与 reference_samples.csv 那条警告是同一类风险。
+
+         发布的是**模型相对世界**的位姿。而 Gazebo 世界系就是本项目的 map 系
+         （map→odom 由自车 spawn 位姿推出、odom→base_link 由 Ackermann 给），
+         所以这个量直接就是真值的 map→base_link。
+
+         发布频率取 50 Hz：比控制回路（20 Hz）高一档，
+         保证评测时任意一拍都能找到时间上足够近的真值，又不至于刷屏。
+
+         用 OdometryPublisher 而不是 PosePublisher，有两个具体理由：
+           1. **frame 名可以指定**。PosePublisher 把 header.frame_id 填成父实体名，
+              对模型来说就是**世界名**（实测得到 "campus_loop"）—— 换个世界这个
+              字符串就变了，而下游拿它做 TF 查询会失败。这里能直接写死 map/base_link。
+           2. 顺带给出**真值速度**（twist）。评测时"位置对了但速度估歪了"是一种
+              真实的失效，有真值速度才量得出来。
+
+         ⚠️ 它与车上那个 AckermannSteering 的 /odom **完全不是一回事**：
+            后者是**轮速推算**（会漂移，正是 P4 要修正的对象），
+            这个直接读物理引擎里的真实位姿。两者都叫 odometry，别搞混。
+
+         ⚠️ <tf_topic> 指向一个**没人订阅**的话题：这个插件默认会发
+            odom_frame → robot_base_frame 的 TF，而 map → base_link 若被它直接
+            发出来，TF 树上 base_link 就有了两个父节点（另一个是 odom），
+            tf2 会直接报错。真值只走话题，不进 TF。 -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>map</odom_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <odom_topic>/model/{p['name']}/pose_gt</odom_topic>
+      <tf_topic>/model/{p['name']}/pose_gt_tf_unused</tf_topic>
+      <dimensions>3</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>/model/{p['name']}/joint_state</topic>
