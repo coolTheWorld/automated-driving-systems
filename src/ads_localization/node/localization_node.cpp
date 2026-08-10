@@ -162,12 +162,48 @@ public:
     ads_localization::NdtGridParams grid_params;
     grid_params.voxel_size_m = declare_parameter<double>("ndt.voxel_size_m", 2.0);
     grid_params.min_points_per_voxel = declare_parameter<int>("ndt.min_points_per_voxel", 6);
+    // 迭代上限。**这是控制单帧耗时的正确杠杆** —— 它砍的是"怎么也收敛不了
+    // 的那些帧"，而不是信息量。
+    //
+    // 实测（2026-08-10，CP-P4-B）：上限 30 时中位 47.7 ms、99% 分位 129.4 ms，
+    // 1.65% 的帧超判据（100 ms）。有 ESKF 的预测位姿作初值时正常帧只要 3–5 次，
+    // 用满 30 次的帧本来也没收敛好。
     ndt_params_.max_iterations = declare_parameter<int>("ndt.max_iterations", 30);
+    // 线搜索折半次数。每折半一次就是一次**全量**打分，所以最坏情况是
+    // max_iterations × 这个数 次全量打分。
+    //
+    // ⚠️ **试过砍到 4，结果更差，别再试**（2026-08-10 实测）：
+    //    耗时没降反升（129 → 165 ms），因为步长被迫变小之后要迭代更多次；
+    //    而且更多帧到不了 epsilon 判据。**这不是一个安全的省时杠杆。**
+    ndt_params_.max_line_search_trials = declare_parameter<int>("ndt.max_line_search_trials", 10);
     ndt_params_.min_normal_diversity = declare_parameter<double>("ndt.min_normal_diversity", 1e-3);
     ndt_params_.min_inlier_ratio = declare_parameter<double>("ndt.min_inlier_ratio", 0.2);
     ndt_params_.covariance_scale = declare_parameter<double>("ndt.covariance_scale", 1.0);
-    // 扫描降采样：每 N 个点取一个。**先量再调** —— CP-P4-B 的耗时判据是 100 ms，
-    // 而本项目一帧 57600 点，每点查 27 个体素。
+    // 扫描降采样：每 N 个点取一个。
+    //
+    // **这个数是量出来的，不是猜的**（2026-08-10，CP-P4-B 首跑）：
+    //   stride=4（14400 点）：中位 47.7 ms、90% 分位 69.4、**1.65% 的帧超 100 ms**
+    //   而 CP-P4-B 的判据是单帧 < 100 ms（10 Hz 实时性）。
+    //
+    // ⚠️ **试过改成 8，结果是负面的，别再试**（2026-08-10 实测）：
+    //   耗时确实降到 78 ms，但**最大横向误差从 0.0664 m 涨到 1.7167 m**，
+    //   而且日志里冒出「NDT 退化（法向散布 0.000743 / 0.000564 / 0.000332）」。
+    //
+    //   根因：**均匀降采样对不同类别的点不等价**。地面点冗余度极高，
+    //   而杆件本来就只有几个点（半径 0.15 m，20 m 处每线才 4.3 个点）。
+    //   按同一个比例扔，扔掉的恰好是**唯一提供 x/y/yaw 约束**的那些 ——
+    //   法向散布于是塌到判据以下，NDT 被拒，退回 GNSS（σ=2 m）。
+    //   实测那一跑里有 199 拍处在 GNSS_ONLY。
+    //
+    //   真正该动的杠杆是**迭代次数**（见下面的 ndt.max_iterations）：
+    //   它只砍尾部，不动信息量。若将来还要再快，正确做法是
+    //   **地面点分割**（地面只贡献 z/roll/pitch，那几个自由度 IMU 的重力
+    //   矢量已经给了），而不是均匀抽稀。
+    //
+    // ⚠️ 静止时只要 11 ms、动起来要 48 ms，差的是**迭代次数**：
+    //    静止时 ESKF 的预测位姿几乎就是答案，3 次就收敛；
+    //    动起来初值差一点，要十几次。所以「耗时」是随工况变的，
+    //    拿静止时的数去估算实时性会低估三四倍。
     scan_stride_ = std::max<int>(1, static_cast<int>(declare_parameter<int>("ndt.scan_stride", 4)));
 
     if (map_path.empty()) {
@@ -348,9 +384,27 @@ private:
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     last_ndt_result_ = result;
 
-    // ⚠️ 退化时**不喂给滤波器**。退化意味着代价函数沿某些方向是平的，
-    //    那几个方向上的位姿是任意的 —— 喂进来会把滤波器带偏，
-    //    而协方差看起来完全正常。
+    // ⚠️⚠️ **退化或没收敛的帧一律不喂给滤波器。**
+    //
+    //    退化：代价函数沿某些方向是平的，那几个方向上的位姿是任意的。
+    //
+    // ⚠️ **但不要顺手加上 `|| !result.converged`** —— 试过，结果更差
+    //    （2026-08-10 实测，横向误差 0.0664 → 1.99 m，899 拍掉进 GNSS_ONLY）。
+    //    车动起来时很多帧到迭代上限才停，位姿其实已经很好；
+    //    `converged` 那个布尔量只说「步长小于 epsilon 了吗」，
+    //    不说「位姿好不好」，拿它当闸门等于把大量好结果扔掉。
+    //
+    // ⚠️ 真正的隐患在另一处，而且更隐蔽：NDT 到了迭代上限仍会返回位姿，
+    //    而它的协方差来自**最终迭代点处的信息阵** —— 那个量反映的是
+    //    「代价函数在这里有多陡」，**不是「离真解有多远」**。
+    //    半收敛的位姿带着毫米级协方差被喂进滤波器，把状态硬拽过去，
+    //    下一帧初值更差…… 正反馈发散。
+    //    实测把 max_iterations 从 30 砍到 15：横向误差 0.0664 m → **462 m**，
+    //    车全程一拍 TRACKING 都没有。**所以迭代上限不能随便砍。**
+    //
+    //    正确的防线是**新息门限（卡方检验）**：位姿观测偏离滤波器预测
+    //    超过若干 σ 就丢弃。那一条尚未实现，见 docs/modules/localization.md
+    //    §10 的边界表。在它之前，max_iterations 必须留够（30）。
     if (result.degenerate) {
       ndt_ok_ = false;
       RCLCPP_WARN_THROTTLE(

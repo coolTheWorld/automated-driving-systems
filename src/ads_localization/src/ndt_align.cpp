@@ -55,6 +55,11 @@ void NdtAlignParams::Validate() const
     translation_epsilon_m, "NdtAlignParams", "translation_epsilon_m");
   ads_common::RequireFinitePositive(rotation_epsilon_rad, "NdtAlignParams", "rotation_epsilon_rad");
   ads_common::RequireFinitePositive(max_step_m, "NdtAlignParams", "max_step_m");
+  if (max_line_search_trials <= 0) {
+    throw std::invalid_argument(
+      "NdtAlignParams::max_line_search_trials 必须为正，收到 " +
+      std::to_string(max_line_search_trials));
+  }
   ads_common::RequireFinitePositive(levenberg_damping, "NdtAlignParams", "levenberg_damping");
   ads_common::RequireFinitePositive(min_normal_diversity, "NdtAlignParams", "min_normal_diversity");
   ads_common::RequireFinitePositive(
@@ -166,7 +171,7 @@ NdtAlignResult AlignNdt(
     bool improved = false;
     Eigen::Isometry3d candidate_pose = result.pose;
     NdtScoreTerms candidate_terms = terms;
-    for (int trial = 0; trial < 10; ++trial) {
+    for (int trial = 0; trial < params.max_line_search_trials; ++trial) {
       candidate_pose = ApplyIncrement(result.pose, limited * scale);
       candidate_terms = ComputeNdtScoreTerms(map, scan_body, candidate_pose);
       if (candidate_terms.score < terms.score) {
@@ -176,8 +181,7 @@ NdtAlignResult AlignNdt(
       scale *= 0.5;
     }
     if (!improved) {
-      // 折半十次仍不下降 —— 已经在极小值附近（或代价函数在这里不连续，
-      // 见 NdtGrid::At 关于「只查一个体素」的说明）。当作收敛。
+      // 折半到最小步长仍不下降 —— 已经在极小值附近。当作收敛。
       result.converged = true;
       break;
     }
