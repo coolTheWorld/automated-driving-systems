@@ -157,6 +157,32 @@ public:
     //    所以滤波器还是要靠自己走完全程。
     initial_yaw_rad_ = declare_parameter<double>("initial_yaw_rad", 0.0);
 
+    // ---- 初始化前先把 GNSS 平均掉 ---------------------------------------
+    //
+    // ⚠️⚠️ **这一条是 CP-P4-B 五轮实测炸出来的，是整个 S4 最关键的一处。**
+    //
+    // 第一版用**单次** GNSS 定位当初值（σ=2 m）。结果是双峰的：同一份配置
+    // 跑五轮，定位横向误差在 0.0664 m 和 78 m 之间跳，差别只是开机那一枪
+    // GNSS 的运气。
+    //
+    // 机理：初值偏 1.6 m 时落在 NDT 收敛域之外（体素 2 m），
+    // NDT 于是**收敛到一个错误的局部极小** —— 而它法向散布正常、
+    // inlier 正常、协方差很紧，**一个警告都不报**。
+    // 滤波器锁死在那个错位姿上，此后一路发散。
+    // 实测第 5 轮：前 973 拍全是 NDT_AIDED，横向误差却稳定在 0.79 m 不收敛。
+    //
+    // 「NDT 稳定地收敛到一个错误的位姿，比不收敛危险得多」——
+    // 这句话写在 ndt.hpp 的开头，而我第一版正是踩了它。
+    //
+    // 修法：GNSS 的位置噪声是**白噪声**（SDF 里只有 stddev，没有 bias 项，
+    // 见 gen_vehicle_model.py 的 _navsat_noise），所以平均 N 次能把 σ 降
+    // √N 倍。取 30（10 Hz 下 3 s）→ σ 从 2 m 降到 0.37 m，稳稳落在收敛域内。
+    // 车在栈起来之后本来就要静止约 30 s 才发目标点，这 3 s 不花任何代价。
+    //
+    // ⚠️ 调小 → 初值方差回升，双峰行为回来；调大 → 起步更慢，
+    //    且若车在此期间已经动了，平均就没有意义（本项目里它不会动）。
+    init_gnss_samples_ = declare_parameter<int>("init_gnss_samples", 30);
+
     // ---- NDT -------------------------------------------------------------
     const std::string map_path = declare_parameter<std::string>("map_pcd_path", "");
     ads_localization::NdtGridParams grid_params;
@@ -204,7 +230,36 @@ public:
     //    静止时 ESKF 的预测位姿几乎就是答案，3 次就收敛；
     //    动起来初值差一点，要十几次。所以「耗时」是随工况变的，
     //    拿静止时的数去估算实时性会低估三四倍。
+    // ⚠️ **按类别降采样，不能一视同仁。**
+    //
+    // 地面点占扫描的大头，而它只贡献 z/roll/pitch —— 那几个自由度 IMU 的
+    // 重力矢量已经给了。结构点（杆件、墙面）才是 x/y/yaw 的唯一来源，
+    // 而杆件本来就只有几个点（半径 0.15 m，20 m 处每线才 4.3 个）。
+    //
+    // 实测教训（2026-08-10）：均匀 stride 从 4 改到 8，耗时 129→78 ms，
+    // 但横向误差 0.0664→1.72 m —— 扔掉的恰好是唯一有信息的那些。
+    //
+    // 结构点取 4、地面点取 24：结构点的密度与那次拿到 0.0664 m 的基线相同，
+    // 而地面点被抽掉 6/7 —— **总点数降下来了，信息量一点没少**。
+    // 这就是「按类别降采样」与「均匀降采样」的全部区别。
     scan_stride_ = std::max<int>(1, static_cast<int>(declare_parameter<int>("ndt.scan_stride", 4)));
+    ground_stride_ =
+      std::max<int>(1, static_cast<int>(declare_parameter<int>("ndt.ground_stride", 24)));
+    // base_link 原点在**地面高度**，所以地面点的 z ≈ 0（路面板 1 cm + 雷达噪声）。
+    // 0.30 m 远高于噪声，又低于任何有意义的结构。
+    ground_height_m_ = declare_parameter<double>("ndt.ground_height_m", 0.30);
+    // 点云比这个还旧就直接丢。
+    //
+    // ⚠️⚠️ **这一条是 CP-P4-B 实测炸出来的，是 S4 最关键的一处防线。**
+    //   NDT 一旦慢过雷达周期（100 ms），单线程执行器就排队积压，
+    //   处理的点云越来越旧 —— 而 NDT 会老老实实把那帧旧扫描配准好，
+    //   返回**它拍摄时刻**的位姿。于是估计越落越远，**全程 NDT_AIDED、
+    //   横向误差只有 3 cm、没有任何报警**，而纵向误差以车速增长。
+    //   实测第 1 轮：车冲过目标 24 m，/localization/pose 的发布率掉到一半。
+    //
+    //   丢掉旧帧之后最坏情况退化成「NDT 更新少了」，由 GNSS 兜住 ——
+    //   那是可以接受的降级；而「用旧帧算出一个自信的错位姿」不可接受。
+    max_cloud_age_s_ = declare_parameter<double>("ndt.max_cloud_age_s", 0.15);
 
     if (map_path.empty()) {
       RCLCPP_WARN(
@@ -258,11 +313,12 @@ private:
   // ---------------------------------------------------------------------
   void TryInitialize()
   {
-    if (eskf_ || !have_gnss_) {
+    if (eskf_ || gnss_sample_count_ < init_gnss_samples_) {
       return;
     }
     ads_localization::NominalState init;
-    init.position_m = last_gnss_local_;
+    // 用**平均值**而不是最后一枪，见构造函数里 init_gnss_samples_ 的说明。
+    init.position_m = gnss_sum_ / static_cast<double>(gnss_sample_count_);
     init.orientation =
       Eigen::Quaterniond(Eigen::AngleAxisd(initial_yaw_rad_, Eigen::Vector3d::UnitZ()));
     eskf_ = std::make_unique<ads_localization::Eskf>(eskf_params_, init);
@@ -309,6 +365,9 @@ private:
     last_gnss_time_ = now();
 
     if (!eskf_) {
+      // 初始化之前只累加，不做别的 —— 车此时还没动，均值才是最好的估计。
+      gnss_sum_ += last_gnss_local_;
+      ++gnss_sample_count_;
       TryInitialize();
       return;
     }
@@ -341,6 +400,18 @@ private:
     if (!eskf_ || !ndt_map_) {
       return;
     }
+    // ---- 陈旧点云直接丢 ---------------------------------------------
+    const double age_s = (now() - rclcpp::Time(msg->header.stamp)).seconds();
+    if (age_s > max_cloud_age_s_) {
+      ++dropped_stale_clouds_;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "点云已经旧了 %.0f ms（上限 %.0f），丢弃。NDT 跟不上雷达周期时"
+        "用旧帧配准会返回一个**自信的错位姿**，比不更新危险得多。累计丢 %ld 帧",
+        age_s * 1e3, max_cloud_age_s_ * 1e3, dropped_stale_clouds_);
+      return;
+    }
+
     // 扫描点在 base_link 系（lidar_preprocessor 已经做过变换）。
     std::vector<Eigen::Vector3d> scan;
     scan.reserve(msg->width * msg->height / static_cast<size_t>(scan_stride_) + 1);
@@ -348,17 +419,30 @@ private:
     sensor_msgs::PointCloud2ConstIterator<float> it_y(*msg, "y");
     sensor_msgs::PointCloud2ConstIterator<float> it_z(*msg, "z");
     int index = 0;
+    int ground_points = 0;
     for (; it_x != it_x.end(); ++it_x, ++it_y, ++it_z, ++index) {
-      if (index % scan_stride_ != 0) {
+      // ⚠️ gpu_lidar 的无回波射线返回 **±inf 不是 NaN**（CLAUDE.md 有专门一条），
+      //    两者都要滤。用比较拦不住 —— 必须先判有限性再做任何比较。
+      if (!std::isfinite(*it_x) || !std::isfinite(*it_y) || !std::isfinite(*it_z)) {
         continue;
       }
-      // ⚠️ gpu_lidar 的无回波射线返回 **±inf 不是 NaN**（CLAUDE.md 有专门一条），
-      //    两者都要滤。用比较拦不住。
-      if (!std::isfinite(*it_x) || !std::isfinite(*it_y) || !std::isfinite(*it_z)) {
+      const bool is_ground = *it_z < ground_height_m_;
+      if (is_ground) {
+        ++ground_points;
+      }
+      // 地面点抽得狠，结构点留得密。
+      //
+      // ⚠️ 地面点**不能全扔**：退化判据看的是匹配上的体素法向散布，
+      //    全扔之后法向只剩水平方向，λ_min（竖直）→ 0，
+      //    NDT 会被自己的退化判据误杀。留一小撮就够撑住那个自由度。
+      if (index % (is_ground ? ground_stride_ : scan_stride_) != 0) {
         continue;
       }
       scan.emplace_back(*it_x, *it_y, *it_z);
     }
+    last_scan_points_ = static_cast<int>(scan.size());
+    last_ground_fraction_ =
+      index > 0 ? static_cast<double>(ground_points) / static_cast<double>(index) : 0.0;
     if (scan.size() < 100) {
       return;
     }
@@ -547,6 +631,9 @@ private:
     add("ndt_normal_diversity", last_ndt_result_.normal_diversity);
     add("ndt_inlier_ratio", last_ndt_result_.inlier_ratio);
     add("ndt_iterations", last_ndt_result_.iterations);
+    add("scan_points", last_scan_points_);
+    add("ground_fraction", last_ground_fraction_);
+    add("dropped_stale_clouds", static_cast<double>(dropped_stale_clouds_));
     array.status.push_back(status);
     diag_pub_->publish(array);
   }
@@ -564,8 +651,17 @@ private:
   double initial_yaw_rad_{0.0};
   double gnss_timeout_s_{2.0};
   int scan_stride_{4};
+  int ground_stride_{24};
+  double ground_height_m_{0.30};
+  double max_cloud_age_s_{0.15};
+  int64_t dropped_stale_clouds_{0};
+  int last_scan_points_{0};
+  double last_ground_fraction_{0.0};
 
   Eigen::Vector3d last_gnss_local_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d gnss_sum_{Eigen::Vector3d::Zero()};
+  int gnss_sample_count_{0};
+  int init_gnss_samples_{30};
   bool have_gnss_{false};
   bool have_odom_{false};
   bool ndt_ok_{false};
