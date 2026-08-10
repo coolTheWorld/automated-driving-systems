@@ -136,6 +136,10 @@ NdtGrid::NdtGrid(const std::vector<Eigen::Vector3d> & points, const NdtGridParam
     voxel.mean = mean;
     voxel.point_count = acc.count;
     voxel.was_regularized = regularized;
+    // 法向 = 最小特征值对应的特征向量。SelfAdjointEigenSolver 的特征值
+    // 按升序排列，所以取第 0 列。**在抬下限之前取** —— 抬完之后
+    // 三个特征值可能相等，特征向量就不再有几何含义了。
+    voxel.normal = solver.eigenvectors().col(0).normalized();
     if (regularized) {
       ++regularized_;
       const Eigen::Matrix3d & vectors = solver.eigenvectors();
@@ -158,6 +162,25 @@ NdtGrid::NdtGrid(const std::vector<Eigen::Vector3d> & points, const NdtGridParam
     throw std::invalid_argument(
       "NdtGrid: 一个体素都没建起来（" + std::to_string(discarded_sparse_) +
       " 个因点数不足被丢弃）。voxel_size_m 是不是太小了？");
+  }
+}
+
+void NdtGrid::CollectNeighbors(
+  const Eigen::Vector3d & point, std::vector<const NdtVoxel *> & out) const
+{
+  const double inv_size = 1.0 / params_.voxel_size_m;
+  const int64_t cx = static_cast<int64_t>(std::floor(point.x() * inv_size));
+  const int64_t cy = static_cast<int64_t>(std::floor(point.y() * inv_size));
+  const int64_t cz = static_cast<int64_t>(std::floor(point.z() * inv_size));
+  for (int64_t dx = -1; dx <= 1; ++dx) {
+    for (int64_t dy = -1; dy <= 1; ++dy) {
+      for (int64_t dz = -1; dz <= 1; ++dz) {
+        const auto it = voxels_.find(EncodeIndex(cx + dx, cy + dy, cz + dz));
+        if (it != voxels_.end()) {
+          out.push_back(&it->second);
+        }
+      }
+    }
   }
 }
 

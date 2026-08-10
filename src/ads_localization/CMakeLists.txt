@@ -32,6 +32,7 @@ find_package(ads_common REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/eskf.cpp
   src/ndt.cpp
+  src/ndt_align.cpp
   src/point_cloud_io.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -87,6 +88,15 @@ if(BUILD_TESTING)
   ament_add_gtest(test_ndt test/test_ndt.cpp)
   target_link_libraries(test_ndt ${PROJECT_NAME} ads_common::ads_common)
   target_compile_definitions(test_ndt PRIVATE
+    ADS_CAMPUS_CLOUD_PCD="${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd")
+
+  # L1：NDT 配准。三类判据 ——
+  #   ① 解析梯度 vs **数值微分**（消除符号错误，那类错误的现象会伪装成"收敛域小"）
+  #   ② 在真实 campus_cloud.pcd 上恢复已知变换
+  #   ③ **纯地面点云必须报退化** ← P4-1 决策一那条主线在配准这一步的落点
+  ament_add_gtest(test_ndt_align test/test_ndt_align.cpp)
+  target_link_libraries(test_ndt_align ${PROJECT_NAME} ads_common::ads_common)
+  target_compile_definitions(test_ndt_align PRIVATE
     ADS_CAMPUS_CLOUD_PCD="${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd")
 
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。
