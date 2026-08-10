@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_localization</name>
+  <version>0.1.0</version>
+  <description>
+    定位：ESKF 融合 IMU / 轮速 / GNSS，NDT 点云配准提供绝对位姿修正（SPEC §3.2）。
+
+    输出是动态的 map → odom 变换，替换掉 P1 起一直在发的那段静态 TF
+    （gazebo_sim.launch.py 里的 map_to_odom_static）。发 map→odom 而不是
+    map→base_link 是 ROS 的标准分工：odom→base_link 由轮速里程计给（高频、平滑、
+    但漂移），定位只负责那段低频的修正量，于是下游拿到的位姿始终连续。
+    直接发 map→base_link 会让 TF 树上 base_link 有两个父节点，tf2 直接报错。
+
+    ⚠️ **本包禁止订阅 /ego_pose_gt。** 那是真值，只给评测脚本用。
+    一份「标准答案」流进被考核的一方，考试就失去意义 —— 而它看起来仍然是绿的。
+
+    ⚠️ 为什么这张地图上必须做 NDT 才达得到 SPEC §1 的 0.3 m：单点定位级的 GNSS
+    水平误差 2 m，ESKF 无论怎么融合都到不了 0.3 m。所以不要因为「定位误差超标」
+    就去调小 config/vehicle_params.yaml 里的 GNSS 噪声 —— 那是把判据改成能通过的
+    样子。见 tasks/plan.md P4-1 决策一。
+
+    按 SPEC §3.3 分层：lib/ 是纯 C++17 无 ROS 依赖的算法（只依赖 Eigen 与
+    ads_common），node/ 是 ROS 包装层（node/ 在 P4-S4 才出现，现在只有 lib/）。
+    数学推导、参数含义与已知边界见 docs/modules/localization.md。
+  </description>
+  <maintainer email="31771510+coolTheWorld@users.noreply.github.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 线性代数。ESKF 要做 15×15 的协方差传播与 Joseph 形式更新。
+
+       ⚠️ 这**不是新引入的依赖**：docker/Dockerfile 第 3 节「C++ 工具链与数学库」
+       从 P0a 起就显式装了 libeigen3-dev，本包只是它的第一个消费者。
+
+       Eigen 是头文件库（INTERFACE target），不产生 DT_NEEDED，
+       所以下面那条 no_ros_dependencies 的机械检查照样成立。 -->
+  <build_depend>eigen3_cmake_module</build_depend>
+  <buildtool_export_depend>eigen3_cmake_module</buildtool_export_depend>
+  <depend>eigen</depend>
+
+  <!-- 数值有限性校验（RequireFinite 三兄弟）。本仓库自己的纯 C++ 公共库。
+       为什么不自己写一个 isfinite 判断：CLAUDE.md 记着两次实测教训 ——
+       用比较（`if (x < limit) reject`）去拦非有限值**一条都拦不住**，
+       因为 NaN 参与任何比较都返回 false。三处做同一件事就该共用一份。 -->
+  <depend>ads_common</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <!-- L1 测试用 gtest：ESKF 全部在合成 IMU 数据上验，脱离 ROS、毫秒级。
+       合成数据的好处是**真值、噪声、零偏全部已知**，可以直接对账；
+       Gazebo 里只有真值位姿，零偏是看不见的。 -->
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

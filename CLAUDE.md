@@ -181,9 +181,10 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有九个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
-`ads_planning`、`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_perception`、`ads_localization`、`ads_prediction` 等）**尚未创建**，
+`src/` 下**目前有十个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`ads_planning`、**`ads_localization`**、`ads_bringup`、`ads_simulation/gazebo_bridge`、
+`ads_teleop`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_perception`、`ads_prediction` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
 
 `ads_planning`（P3，**建设中**）目前有六个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
@@ -216,6 +217,16 @@ P3-S4 从 `ads_control/src` 下沉 —— 它自己的注释写着"本包里有�
 Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1-S4）。
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
+
+`ads_localization`（P4，**建设中**）目前只有一个 lib：**`eskf`**（15 维误差状态卡尔曼滤波，
+中值积分 + GNSS 定位/测速 + 轮速，**CP-P4-A 已达成**）。NDT（S3）与
+`localization_node`（S4）尚未实现。`libads_localization.so` 只链接 Eigen（头文件库，
+不产生 DT_NEEDED），**零 ROS 依赖**，由 CTest 机械保证。
+推导与参数见 [docs/modules/localization.md](docs/modules/localization.md)，**改这个模块前先读它**。
+其中 §6「零偏可观性」最反直觉：**零偏能不能估出来取决于车怎么开**，
+匀速圆周上跑 1000 s 相对误差反而涨到 2.07，而八字形上 400 s 就收敛到 0.078 ——
+看到「零偏估不出来」先确认那条轨迹上它可不可观，不要去调 Q。
+§4.3 另有一条：轮速观测的姿态雅可比在无侧滑时**恒为零**，删掉它漂移反而更小。
 
 `ads_control`（P2 已完成）目前有**两个** lib（`speed_profile` 已于 P3-S4 搬走）：**`stanley`**（前轴换算 + 控制律 +
 转角/转向速率双重限幅）、**`speed_controller`**（速度环 PI + 条件积分抗饱和）。
@@ -272,6 +283,11 @@ colcon test --packages-select ads_common     # 单个包
 ./build/ads_planning/test_collision          # OBB 判交 + 间距，含相切/包含/退化（P3-S3）
 ./build/ads_planning/test_lattice            # 横向采样 + **§6 可行性不等式的两侧**（P3-S3）
 ./build/ads_planning/test_trajectory         # 轨迹装配 + **绕不过去时的停车剖面**（P3-S4）
+./build/ads_localization/test_eskf           # ESKF：闭式解对账 + **CP-P4-A 四条判据**（P4-S2）
+# ⚠️ 零偏可观性取决于**车怎么开**，不取决于滤波器写得好不好。
+#    看到「零偏估不出来」时先跑这个默认不跑的对照，别上来就调 Q：
+./build/ads_localization/test_eskf --gtest_also_run_disabled_tests \
+    --gtest_filter='*BiasObservability*'     # 匀速圆周 vs 八字形，实测相对误差差 20 倍
 
 # L3-G：**不需要 GPU** 的端到端闭环（假车 + map_node + control_node），已进 CI。
 # 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。
@@ -566,6 +582,7 @@ P2 控制 → P3 规划 → P4 定位 → P5 感知。反直觉但正确：先�
 | cppcheck 显示 skipped | 看着有检查其实没跑 | 上游主动拒用 2.13.0（已知性能问题）。**有意保留跳过**，不要设 `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` 去覆盖 |
 | 手写 C++ 的排版 | `colcon test-result` 一次报 91 处 clang_format 失败 | 别靠手写对齐。写完直接跑 `clang-format --style=file:/workspace/.clang-format -i <文件>` |
 | `<tinyxml2.h>` 的 include 位置 | cpplint 报 include_order | 与 `<gtest/gtest.h>` 同理：按 `.h` 后缀被归成 C 系统头，**必须放在 C++ 标准库之前** |
+| **`<Eigen/Core>` 的 include 位置** | 同上，cpplint 报 5 处 include_order | 同一个坑的**第三个实例**：Eigen 的头**没有扩展名**，cpplint 于是也归成 C 系统头。规律是「凡是不长得像 C++ 标准库的，都排在 C++ 标准库之前」 |
 | 按路径加载含 `@dataclass` 的模块 | `AttributeError: 'NoneType' object has no attribute '__dict__'`，报错**完全不提根因** | 必须先 `sys.modules[spec.name] = module` 再 `exec_module`。因为 `from __future__ import annotations` 让注解变成字符串，dataclass 要回 `sys.modules` 里查模块才能解析它们。`test_sim_source.py` 没踩到只是因为 launch 文件里没有 dataclass |
 
 ### 数值精度：同一个格式串套不同量纲是想当然（S2 实测）
