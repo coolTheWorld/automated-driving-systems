@@ -30,7 +30,9 @@ find_package(ads_common REQUIRED)
 # **从本包第一天就在** —— ads_control 的教训是「CMakeLists 里声称有脚本守着，
 # 而那个脚本从没被写出来」，整个 P2 只靠纪律维持。
 add_library(${PROJECT_NAME} SHARED
-  src/eskf.cpp)
+  src/eskf.cpp
+  src/ndt.cpp
+  src/point_cloud_io.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -75,6 +77,17 @@ if(BUILD_TESTING)
   # CP-P4-A 的四条判据就在这里。
   ament_add_gtest(test_eskf test/test_eskf.cpp)
   target_link_libraries(test_eskf ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：NDT 的体素化。判据分两类 ——
+  #   ① 高斯拟合对不对：与解析解比对（已知分布采样出来的点）
+  #   ② **退化情形有没有被处理**：共面点云（协方差 rank 2）、稀疏体素
+  # 第 ② 类是本文件的核心，它守的是 P4 全阶段那条主线在体素尺度上的重现。
+  # 用真实的 maps/campus_cloud.pcd 做端到端体检，路径由 CMake 传进去 ——
+  # 不写死相对路径，那个在 CI 里的工作目录不一定成立。
+  ament_add_gtest(test_ndt test/test_ndt.cpp)
+  target_link_libraries(test_ndt ${PROJECT_NAME} ads_common::ads_common)
+  target_compile_definitions(test_ndt PRIVATE
+    ADS_CAMPUS_CLOUD_PCD="${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd")
 
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
