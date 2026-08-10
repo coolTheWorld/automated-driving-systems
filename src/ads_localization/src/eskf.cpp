@@ -250,6 +250,49 @@ void Eskf::UpdateGnssVelocity(
   ApplyUpdate<3>(residual, jacobian, noise_cov);
 }
 
+void Eskf::UpdatePose(
+  const Eigen::Vector3d & position_m, const Eigen::Quaterniond & orientation,
+  const Eigen::Matrix<double, 6, 6> & covariance)
+{
+  RequireFiniteVector(position_m, "Eskf::UpdatePose", "position_m");
+  ads_common::RequireFinite(orientation.norm(), "Eskf::UpdatePose", "orientation");
+  if (orientation.norm() < 1e-6) {
+    throw std::invalid_argument("Eskf::UpdatePose: orientation 是零四元数");
+  }
+  if (!covariance.allFinite()) {
+    throw std::invalid_argument("Eskf::UpdatePose: 观测协方差含非有限值");
+  }
+
+  Eigen::Quaterniond measured = orientation;
+  measured.normalize();
+
+  // 观测模型：位置直接可观，姿态在**局部误差**约定下也直接可观。
+  Eigen::Matrix<double, 6, kDim> jacobian = Eigen::Matrix<double, 6, kDim>::Zero();
+  jacobian.block<3, 3>(0, kIdxPosition) = Eigen::Matrix3d::Identity();
+  jacobian.block<3, 3>(3, kIdxAttitude) = Eigen::Matrix3d::Identity();
+
+  // 姿态残差 = Log(q̂⁻¹ ⊗ q_meas)。
+  //
+  // ⚠️ **不是四元数相减。** 相减在小角度下看起来也能用，但它不是流形上的差；
+  //    大角度时方向就错了，而现象只是"收敛得慢"。
+  //    这与 ESKF 注入时必须右乘是同一条道理。
+  const Eigen::Quaterniond delta = nominal_.orientation.conjugate() * measured;
+  const Eigen::AngleAxisd delta_axis(delta.normalized());
+  // AngleAxis 的角度在 [0, π]；轴取反可以表示另一半，所以这里不需要额外的
+  // 象限处理 —— 但要保证角度落在 (−π, π]，否则残差会绕远路。
+  double angle = delta_axis.angle();
+  Eigen::Vector3d axis = delta_axis.axis();
+  if (angle > M_PI) {
+    angle -= 2.0 * M_PI;
+  }
+
+  Eigen::Matrix<double, 6, 1> residual;
+  residual.head<3>() = position_m - nominal_.position_m;
+  residual.tail<3>() = axis * angle;
+
+  ApplyUpdate<6>(residual, jacobian, covariance);
+}
+
 void Eskf::UpdateWheelSpeed(double speed_mps, double std_dev_mps)
 {
   ads_common::RequireFinite(speed_mps, "Eskf::UpdateWheelSpeed", "speed_mps");

@@ -978,3 +978,67 @@ TEST(EskfFusion, WheelSpeedAidingHelpsWhenGnssIsLost)
     << "加了轮速之后漂移应当明显变小：纯惯性 " << inertial_only.rms_position_error_m
     << " m，加轮速 " << with_wheel.rms_position_error_m << " m";
 }
+
+// =============================================================================
+//  4. 位姿观测（NDT 的接口）
+// =============================================================================
+
+TEST(EskfPoseUpdate, PullsTheStateTowardsTheMeasuredPose)
+{
+  // NDT 给出的是 6 维位姿。这条验它确实把状态往观测方向拉，
+  // 且姿态残差走的是流形上的 Log 而不是四元数相减。
+  const CircleTruth truth;
+  NominalState init = TruthState(truth, 0.0);
+  init.position_m += Eigen::Vector3d(0.5, -0.3, 0.1);
+  init.orientation =
+    init.orientation * Eigen::Quaterniond(Eigen::AngleAxisd(0.05, Eigen::Vector3d::UnitZ()));
+
+  Eskf eskf(DefaultParams(), init);
+
+  Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity();
+  cov.topLeftCorner<3, 3>() *= 0.02 * 0.02;  // 2 cm，NDT 的量级
+  cov.bottomRightCorner<3, 3>() *= 0.002 * 0.002;
+
+  const Eigen::Vector3d truth_position = truth.Position(0.0);
+  const Eigen::Quaterniond truth_orientation = truth.Orientation(0.0);
+  eskf.UpdatePose(truth_position, truth_orientation, cov);
+
+  // 观测比初值精确得多（2 cm vs 初始 2 m），所以更新后应当基本贴到观测上。
+  EXPECT_LT((eskf.state().position_m - truth_position).norm(), 0.02) << "位置没有被拉到观测上";
+  EXPECT_LT(eskf.state().orientation.angularDistance(truth_orientation), 0.002)
+    << "姿态没有被拉到观测上";
+}
+
+TEST(EskfPoseUpdate, HandlesLargeAttitudeResidualsOnTheManifold)
+{
+  // 姿态残差写成四元数相减时，小角度下"看起来也能用"，
+  // 大角度才露馅。这条用 120° 的残差把它钉住。
+  NominalState init;
+  Eskf eskf(DefaultParams(), init);
+
+  const Eigen::Quaterniond measured(Eigen::AngleAxisd(2.0 * M_PI / 3.0, Eigen::Vector3d::UnitZ()));
+  Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity() * 1e-6;
+  eskf.UpdatePose(Eigen::Vector3d::Zero(), measured, cov);
+
+  EXPECT_LT(eskf.state().orientation.angularDistance(measured), 0.01)
+    << "120° 的姿态残差没有被正确处理 —— 残差是不是写成了四元数相减？";
+}
+
+TEST(EskfPoseUpdate, RejectsIllegalInput)
+{
+  Eskf eskf(DefaultParams(), NominalState{});
+  const Eigen::Matrix<double, 6, 6> ok = Eigen::Matrix<double, 6, 6>::Identity();
+
+  EXPECT_THROW(
+    eskf.UpdatePose(Eigen::Vector3d(std::nan(""), 0, 0), Eigen::Quaterniond::Identity(), ok),
+    std::invalid_argument);
+  EXPECT_THROW(
+    eskf.UpdatePose(Eigen::Vector3d::Zero(), Eigen::Quaterniond(0, 0, 0, 0), ok),
+    std::invalid_argument);
+
+  Eigen::Matrix<double, 6, 6> bad = ok;
+  bad(0, 0) = std::numeric_limits<double>::infinity();
+  EXPECT_THROW(
+    eskf.UpdatePose(Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(), bad),
+    std::invalid_argument);
+}

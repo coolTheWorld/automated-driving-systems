@@ -182,6 +182,25 @@ public:
   void UpdateGnssVelocity(
     const Eigen::Vector3d & velocity_mps, const Eigen::Vector3d & std_dev_mps);
 
+  /// 位姿观测（6 维：位置 + 姿态），供 **NDT 配准结果**喂回滤波器。
+  ///
+  /// @param position_m   map 系位置。
+  /// @param orientation  body → map 的姿态。
+  /// @param covariance   6×6 观测协方差，**顺序 = 位置 xyz、姿态 xyz**
+  ///                     （与 NdtAlignResult::covariance 一致）。
+  ///
+  /// 姿态残差是 `Log(q̂⁻¹ ⊗ q_meas)` —— **不是四元数相减**。
+  /// 相减在小角度下"看起来也能用"，但它不是流形上的差，
+  /// 大角度时会给出错误的方向，而现象只是"收敛得慢"。
+  ///
+  /// ⚠️ NDT 报 degenerate 时**不要调用这个函数**。退化意味着代价函数沿某些
+  ///    方向是平的，那几个方向上的位姿是任意的 —— 喂进来会把滤波器带偏，
+  ///    而协方差看起来完全正常。判断该由调用方（localization_node）做，
+  ///    因为只有它知道那次配准的上下文。
+  void UpdatePose(
+    const Eigen::Vector3d & position_m, const Eigen::Quaterniond & orientation,
+    const Eigen::Matrix<double, 6, 6> & covariance);
+
   /// 轮速观测：车体纵向速度（body 系 x 分量，1 维）。
   ///
   /// 为什么只取 x 而不是三维：轮速计只测沿车轮滚动方向的速度。
