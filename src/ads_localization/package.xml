@@ -46,6 +46,17 @@
        因为 NaN 参与任何比较都返回 false。三处做同一件事就该共用一份。 -->
   <depend>ads_common</depend>
 
+  <!-- 以下全部只服务于 node/localization_node.cpp（ROS 包装层）。
+       lib/ 那一半（libads_localization.so）一个都不链接 —— 由 CMakeLists 里
+       target_link_libraries 的作用域 + no_ros_dependencies 这道 CTest 机械保证。 -->
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <!-- clang-format 取代默认的 uncrustify，见 .clang-format 顶部说明 -->

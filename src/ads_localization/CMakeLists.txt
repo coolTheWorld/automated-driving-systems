@@ -61,6 +61,32 @@ ament_export_include_directories(include)
 ament_export_dependencies(eigen3_cmake_module Eigen3 ads_common)
 
 # -----------------------------------------------------------------------------
+# 节点：ROS 包装层（P4-S4）
+# -----------------------------------------------------------------------------
+# 这一层**只做翻译**：ROS 消息 ↔ lib 的调用。定位算法一行都不在这里。
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+
+add_executable(localization_node node/localization_node.cpp)
+target_link_libraries(localization_node ${PROJECT_NAME})
+ament_target_dependencies(localization_node
+  rclcpp sensor_msgs nav_msgs geometry_msgs diagnostic_msgs tf2 tf2_ros)
+
+install(TARGETS localization_node
+  DESTINATION lib/${PROJECT_NAME})
+
+# 车辆参数装一份到本包 share（理由同 ads_control：ROS 包安装后必须自包含，
+# 不能依赖"工作区恰好挂在 /workspace"这种只在本容器成立的假设）。
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/vehicle_params.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
+
+# -----------------------------------------------------------------------------
 # L1 单元测试
 # -----------------------------------------------------------------------------
 if(BUILD_TESTING)

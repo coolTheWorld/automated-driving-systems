@@ -100,6 +100,13 @@ def _map_to_odom_from_spawn_pose(context, *args, **kwargs):
     :param context: launch 运行时上下文
     :return: 要执行的 launch 动作列表
     """
+    # ⚠️ P4-S4 起这段静态 TF 是**可关的**：localization:=true 时由
+    #    localization_node 发动态的 map→odom。两者同时发的症状是 TF 树上
+    #    同一段变换有两个发布者，tf2 会按时间戳挑一个 —— 位姿于是随机地
+    #    在真值与估计之间跳，而**没有任何报错**。
+    if LaunchConfiguration('localization').perform(context).lower() in ('true', '1'):
+        return []
+
     world_name = LaunchConfiguration('world').perform(context)
     x, y, z, roll, pitch, yaw = _ego_spawn_pose(_resolve_world_file(world_name))
     return [
@@ -315,6 +322,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='是否开 RViz2'),
+        DeclareLaunchArgument(
+            'localization', default_value='false',
+            description=('true 时由 ads_localization 发动态 map→odom，'
+                         '并**不再**发那条来自 spawn 位姿的静态 TF（P4-S4）')),
         DeclareLaunchArgument(
             'obstacles', default_value='none',
             description=('P3 验收场景的静态障碍物：none / avoid / block。'

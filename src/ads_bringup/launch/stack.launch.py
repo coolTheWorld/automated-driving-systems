@@ -108,6 +108,7 @@ def _resolve_sim_source(context, *args, **kwargs):
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
                 'obstacles': LaunchConfiguration('obstacles'),
+                'localization': LaunchConfiguration('localization'),
             }.items(),
         ),
     ]
@@ -207,6 +208,94 @@ def control_node_params() -> dict:
     }
 
 
+def _load_gazebo_launch_module():
+    """
+    Import gazebo_sim.launch.py by path so we can reuse its world parsing.
+
+    为什么复用而不是再写一份 XML 解析：自车 spawn 朝向是 localization_node 的
+    冷启动航向先验。**在 launch 里写死那个数就是给「换个世界忘了改」留一个
+    必然会踩的坑**（CLAUDE.md 在 map→odom 那条上已经记过一次）。
+
+    ⚠️ 按路径加载模块时必须先塞进 sys.modules 再 exec —— 见
+       src/ads_map/test/test_gen_map.py 里那段说明（dataclass + 字符串注解）。
+       这里没有 dataclass，但保持同一个写法免得下次有人照抄踩坑。
+    """
+    import importlib.util
+    import sys
+
+    path = (Path(get_package_share_directory('gazebo_bridge')) / 'launch' /
+            'gazebo_sim.launch.py')
+    spec = importlib.util.spec_from_file_location('gazebo_sim_launch', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _localization_nodes(context, *args, **kwargs):
+    """
+    Build the P4 localization node, or nothing when the switch is off.
+
+    :param context: launch 运行时上下文
+    :return: 要执行的 launch 动作列表
+    """
+    if LaunchConfiguration('localization').perform(context).lower() not in ('true', '1'):
+        return []
+
+    map_yaml = Path(get_package_share_directory('ads_map')) / 'config' / 'campus_map.yaml'
+    if not map_yaml.is_file():
+        # 装到 share 之外的兜底：源码树里的那一份。
+        map_yaml = Path(__file__).resolve().parents[3] / 'config' / 'campus_map.yaml'
+    campus = yaml.safe_load(map_yaml.read_text(encoding='utf-8'))
+    geo = campus['geo_origin']
+
+    vehicle_yaml = (Path(get_package_share_directory('ads_localization')) / 'config' /
+                    'vehicle_params.yaml')
+    vehicle = yaml.safe_load(vehicle_yaml.read_text(encoding='utf-8'))
+    imu_noise = vehicle['sensors']['imu']['noise']
+    gnss_noise = vehicle['sensors']['gnss']['noise']
+
+    # 冷启动的航向先验：从**世界文件**读自车 spawn 朝向，不写死。
+    gazebo_launch = _load_gazebo_launch_module()
+    world_name = LaunchConfiguration('world').perform(context)
+    spawn = gazebo_launch._ego_spawn_pose(gazebo_launch._resolve_world_file(world_name))
+    initial_yaw_rad = float(spawn[5])
+
+    # NDT 的先验点云地图。与 models/campus_structures 同源（scripts/gen_map.py）。
+    cloud_pcd = Path(__file__).resolve().parents[3] / 'maps' / 'campus_cloud.pcd'
+
+    return [
+        Node(
+            package='ads_localization',
+            executable='localization_node',
+            name='localization_node',
+            parameters=[{
+                # ⚠️ 大地原点必须与世界文件的 <spherical_coordinates> 一致。
+                #    不一致的症状是定位稳定地偏一个常量，而没有任何模块报错。
+                'geo_origin.latitude_deg': float(geo['latitude_deg']),
+                'geo_origin.longitude_deg': float(geo['longitude_deg']),
+                'geo_origin.elevation_m': float(geo['elevation_m']),
+                # ESKF 的过程噪声与传感器噪声同源 —— 两处各填一遍就会漂移，
+                # 而漂移的症状是滤波器过度自信或过度保守，都不报错。
+                'eskf.gyro_noise_rad_s': float(imu_noise['gyro_stddev_rad_s']),
+                'eskf.accel_noise_mps2': float(imu_noise['accel_stddev_mps2']),
+                'eskf.gyro_bias_rw_rad_s': float(imu_noise['gyro_dynamic_bias_stddev_rad_s']),
+                'eskf.accel_bias_rw_mps2': float(imu_noise['accel_dynamic_bias_stddev_mps2']),
+                'eskf.init_gyro_bias_std_rad_s': float(imu_noise['gyro_bias_stddev_rad_s']),
+                'eskf.init_accel_bias_std_mps2': float(imu_noise['accel_bias_stddev_mps2']),
+                # ⚠️ GNSS 的 σ 用 YAML 里的**米**，不是 SDF 里那个除过 111320 的数
+                #    （Gazebo 把水平噪声按度施加，见 CLAUDE.md 陷阱表）。
+                'gnss.horizontal_std_m': float(gnss_noise['position_horizontal_stddev_m']),
+                'gnss.vertical_std_m': float(gnss_noise['position_vertical_stddev_m']),
+                'initial_yaw_rad': initial_yaw_rad,
+                'map_pcd_path': str(cloud_pcd),
+                'use_sim_time': True,
+            }],
+            output='screen',
+        ),
+    ]
+
+
 def generate_launch_description():
     """装配全栈：仿真数据源 + 算法节点（P1 地图、P2 控制）."""
     return LaunchDescription([
@@ -237,7 +326,15 @@ def generate_launch_description():
                          '**默认 none** —— 那是 CP-P2-B 的回归基线，'
                          '世界必须与 P2 时一模一样')),
 
+        DeclareLaunchArgument(
+            'localization', default_value='false',
+            description=('P4：true 时起 localization_node，由它发动态 map→odom，'
+                         '同时**关掉**仿真侧那条来自 spawn 位姿的静态 TF。\n'
+                         '默认 false —— 那是 CP-P2-B / CP-P3-B 的回归基线，'
+                         '它们的实测值全部建立在真值 TF 上。')),
+
         OpaqueFunction(function=_resolve_sim_source),
+        OpaqueFunction(function=_localization_nodes),
 
         # ---------------------------------------------------------------------
         # 算法节点挂在这里
