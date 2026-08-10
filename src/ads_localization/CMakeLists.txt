@@ -31,6 +31,7 @@ find_package(ads_common REQUIRED)
 # 而那个脚本从没被写出来」，整个 P2 只靠纪律维持。
 add_library(${PROJECT_NAME} SHARED
   src/eskf.cpp
+  src/geodetic.cpp
   src/ndt.cpp
   src/ndt_align.cpp
   src/point_cloud_io.cpp)
@@ -98,6 +99,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_ndt_align ${PROJECT_NAME} ads_common::ads_common)
   target_compile_definitions(test_ndt_align PRIVATE
     ADS_CAMPUS_CLOUD_PCD="${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd")
+
+  # L1：经纬高 ↔ map 系换算。核心判据是**与 gz-math 逐点对账** ——
+  # Gazebo 生成 NavSat 读数用的正是它，所以那是一份独立的标准答案。
+  # 只做往返一致性是不够的：同步地错着也是互逆的，而用错地球模型
+  # 在 ±100 m 上就是 0.5 m 的系统偏差，判据只有 0.3 m。
+  ament_add_gtest(test_geodetic test/test_geodetic.cpp)
+  target_link_libraries(test_geodetic ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
