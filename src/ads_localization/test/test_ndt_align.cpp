@@ -596,3 +596,66 @@ TEST(ComparePosesTest, PassesNonFiniteInputStraightThroughSoTheCallerMustCheck)
   EXPECT_TRUE(std::isfinite(ComparePoses(a, MakePose({1.0, 2.0, 3.0}, 0.5)).translation_m));
   EXPECT_TRUE(std::isfinite(ComparePoses(a, MakePose({1.0, 2.0, 3.0}, 0.5)).rotation_rad));
 }
+
+// ---------------------------------------------------------------------------
+//  诊断：bootstrap（粗→精）的收敛域到底有多大（P5-S1 出口回归时加）
+// ---------------------------------------------------------------------------
+//  ⚠️ **默认不跑**（DISABLED_ 前缀），与 test_eskf 的 BiasObservability 同一个
+//     套路：它不是判据，是一把尺子，用来回答一个具体的问题而不是守一条线。
+//
+//  为什么需要它：CP-P4-B 实测 **5 轮里失败 1 轮**（横向 52 m，NDT 退化 56 次），
+//  而失败轮的初值偏差（水平 0.62 m / 竖直 0.44 m）与成功轮**没有明显区别** ——
+//  m3 的竖直偏差 0.78 m 比它还大却成功了，m4 的竖直偏差与它完全相同也成功了。
+//
+//  所以「初值偏太多」这个假设需要被量化地检验，而不是靠 Gazebo 里 20% 概率
+//  的随机失败去猜。这个用例在**离线、可重复**的条件下把收敛域画出来。
+//
+//  跑法：
+//    ./build/ads_localization/test_ndt_align --gtest_also_run_disabled_tests \
+//        --gtest_filter='*BootstrapConvergenceBasin*'
+// ---------------------------------------------------------------------------
+TEST(NdtAlignDiagnostics, DISABLED_BootstrapConvergenceBasin)
+{
+  const std::vector<Eigen::Vector3d> map_points =
+    ads_localization::LoadPcdAscii(ADS_CAMPUS_CLOUD_PCD);
+  const NdtGrid fine(map_points, NdtGridParams{});
+  NdtGridParams coarse_params;
+  coarse_params.voxel_size_m = 6.0;
+  coarse_params.eigenvalue_ratio_floor = 0.05;
+  const NdtGrid coarse(map_points, coarse_params);
+
+  // 自车 spawn 位姿 —— CP-P4-B 失败就发生在这里，车还静止着。
+  const Eigen::Isometry3d truth = MakePose({30.0, -51.75, 0.0}, 0.0);
+  const std::vector<Eigen::Vector3d> scan = CarveScan(map_points, truth, 30.0);
+
+  printf(
+    "[          ] 起点 (30, -51.75) 处 %zu 个扫描点；精网格 %zu 体素 / 粗网格 %zu 体素\n",
+    scan.size(), fine.size(), coarse.size());
+  printf(
+    "[          ] %8s %8s | %10s %10s | %10s %10s\n", "水平偏", "竖直偏", "只用精网格", "(退化?)",
+    "粗→精", "(退化?)");
+
+  // 覆盖 CP-P4-B 实测到的初值范围。失败轮是 (0.62, 0.44)，
+  // 成功轮里最大的是 m3 的 (0.38, 0.78)。所以两个方向都要扫过那一带。
+  for (const double horizontal : {0.2, 0.4, 0.62, 0.8, 1.0, 1.5}) {
+    for (const double vertical : {0.0, 0.44, 0.78}) {
+      // 方向取 (−0.36, +0.50) 的单位化 —— 与失败轮同向，免得挑一个恰好好走的方向。
+      const Eigen::Vector3d direction = Eigen::Vector3d(-0.36, 0.50, 0.0).normalized();
+      const Eigen::Isometry3d lost = MakePose(
+        truth.translation() + horizontal * direction + Eigen::Vector3d(0.0, 0.0, vertical), 0.0);
+
+      const NdtAlignResult only_fine = AlignNdt(fine, scan, lost, NdtAlignParams{});
+      const double fine_error = (only_fine.pose.translation() - truth.translation()).norm();
+
+      const NdtAlignResult coarse_step = AlignNdt(coarse, scan, lost, NdtAlignParams{});
+      const NdtAlignResult refined = AlignNdt(fine, scan, coarse_step.pose, NdtAlignParams{});
+      const double both_error = (refined.pose.translation() - truth.translation()).norm();
+
+      printf(
+        "[          ] %8.2f %8.2f | %10.3f %10d | %10.3f %10d\n", horizontal, vertical, fine_error,
+        static_cast<int>(only_fine.degenerate), both_error, static_cast<int>(refined.degenerate));
+    }
+  }
+  printf("[          ] 「退化?」列为 1 表示那一次配准被退化判据拒掉。\n");
+  SUCCEED();
+}
