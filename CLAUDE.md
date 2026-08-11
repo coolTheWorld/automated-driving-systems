@@ -196,6 +196,11 @@ SPEC §5 列出的其余包（`ads_perception`、`ads_prediction` 等）**尚未
 **`trajectory`**（几何 + 速度装配 + **绕不过去时的停车剖面**）。
 `node/planning_node.cpp` 已跑通，在 `stack.launch.py` 和 L3-G 里都接上了。
 
+⚠️ **P4-S4 起 `map→odom` 由 `localization_node` 动态发布**（`localization:=true` 时），
+仿真侧那条来自 spawn 位姿的静态 TF 同时关掉 —— **两者不能同时发**，
+否则同一段变换有两个发布者，tf2 按时间戳挑一个，位姿随机地在真值与估计之间跳，
+**而没有任何报错**。默认仍是 `false`（CP-P2-B/CP-P3-B 的回归基线建立在真值 TF 上）。
+
 ⚠️ **P3-S4 起数据流变了**：`map_node → /route/path → planning_node →
 /planning/trajectory → control_node`。`control_node` **不再订阅 `/route/path`、
 也不再自己算速度剖面**。改动涉及它们时别照旧图施工。
@@ -219,9 +224,11 @@ Dijkstra 路由，纯 C++ 无 ROS）和 `node/map_node.cpp`（ROS 包装层，P1
 `libads_map.so` 只链接 `libtinyxml2` 和 `libads_common`，**零 ROS 依赖** ——
 这条由 `scripts/verify_map.sh` 的 `ldd` 检查机械保证，不靠纪律。
 
-`ads_localization`（P4，**建设中**）目前有三个 lib：**`eskf`**（15 维误差状态卡尔曼滤波，
-中值积分 + GNSS 定位/测速 + 轮速，**CP-P4-A 已达成**）、**`ndt`**（体素高斯地图）、
-**`ndt_align`**（6 自由度配准 + 退化检测）。`localization_node`（S4）尚未实现。
+`ads_localization`（**P4 已验收**）有四个 lib：**`eskf`**（15 维误差状态卡尔曼滤波，
+中值积分 + GNSS 定位/测速 + 轮速 + 位姿观测，**CP-P4-A 达成**）、
+**`geodetic`**（经纬高 → map 系，公式与 gz-math 逐点对账）、**`ndt`**（体素高斯地图）、
+**`ndt_align`**（6 自由度配准 + 退化检测）；`node/localization_node.cpp` 发布动态
+`map→odom`，**CP-P4-B 七条判据连跑两轮全过**（横向 0.129/0.087 m，判据 0.30）。
 ⚠️ NDT 有两条实测结论极反直觉：**必须求和 3×3×3 邻域体素**（只用包含点的那一个时
 代价函数是锯齿状的，牛顿步方向完全正确却一步走不动）、**退化检测必须看法向散布
 而不是信息阵条件数**（纯地面上信息阵报出 σ_x = 8.7 mm，条件数只差 3 倍；
@@ -314,6 +321,15 @@ ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=avoid
 python3 scripts/record_obstacle_run.py --scenario avoid --out /tmp/p3_avoid.csv
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false obstacles:=block
 python3 scripts/record_obstacle_run.py --scenario block --out /tmp/p3_block.csv
+# CP-P4-B：**关掉真值 TF**，全程用估计位姿。两个记录器同时跑 ——
+#   record_control_run   驱动（发目标点）+ CP-P2-B 的 8 条
+#   record_localization_run  只监听，记定位误差（对 /ego_pose_gt）
+# ⚠️ **必须连跑至少两轮** —— 实测有一轮拿到 0.0664 m，下一轮同配置得到 78 m。
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false localization:=true
+python3 scripts/record_localization_run.py --duration-s 55 --out /tmp/loc.csv &
+python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/ctrl.csv
+# ⚠️ record_control_run 在 localization:=true 下量的是「**估计位姿**相对路径」——
+#    定位整体偏移时控制看起来完美而车实际偏了。它单独不成立，必须配定位判据看。
 # 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
 python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
 

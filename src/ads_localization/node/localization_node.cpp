@@ -577,7 +577,7 @@ private:
     //
     //    正确的防线是**新息门限（卡方检验）**：位姿观测偏离滤波器预测
     //    超过若干 σ 就丢弃。那一条尚未实现，见 docs/modules/localization.md
-    //    §10 的边界表。在它之前，max_iterations 必须留够（30）。
+    //    §11 的边界表。在它之前，max_iterations 必须留够（30）。
     if (result.degenerate) {
       ndt_ok_ = false;
       ++consecutive_ndt_failures_;
