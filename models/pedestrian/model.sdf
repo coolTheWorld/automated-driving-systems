@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!-- 由 scripts/gen_dynamic_actors.py 从 config/dynamic_actors.yaml 生成 —— **不要手改**。
+
+     行人。它是**一个盒子**，不是 Gazebo 的 <actor> —— 三条实测理由写在
+     config/dynamic_actors.yaml 顶部，最硬的一条是：不带 skin 的 actor 会让
+     SceneBroadcaster 在发布位姿时 segfault（2026-08-11 对照实验）。
+
+     ⚠️ 代价不只是观感：真人形的点云比盒子**更稀疏、更不规则**（四肢分开、
+        中间有空隙），欧式聚类有可能把一个人分成两簇。盒子不会出现这个失效
+        模式，所以本阶段的检测率判据是**偏乐观的**。那一条等 P8 的 CARLA。
+
+     ⚠️ 原点在**底面中心**（z=0），不是几何中心。与 NPC 车「原点在后轴中心
+        地面」同一个精神：所有目标的原点都贴地，真值换算只有一条竖直偏移。 -->
+<sdf version="1.9">
+  <model name="pedestrian">
+    <link name="pedestrian_base">
+      <!-- ⚠️ **关掉重力。** 这一条是实测逼出来的（2026-08-11 探针）：
+           VelocityControl 只设置线速度，物理引擎仍在算重力与接触力，于是
+             · NPC 车以 −0.0098 m/s **恒速下沉**（穿透地面，5 s 沉 5 cm）；
+             · 行人**直接翻倒卡死** —— 0.4×0.4 的底面配 1.7 m 高，
+               高宽比 4.25，碰上任何接触扰动都站不住。实测它走了 1.44 m
+               就躺下不动了，z 从 0 变成 0.20（躺倒后的半宽）。
+           两个症状看起来毫不相干，根因是同一个。
+           关掉重力之后模型不压在地面上，接触力消失，纯由 cmd_vel 驱动 ——
+           这正是「道具」该有的行为：它是感知的**目标**，不是物理交互对象。
+      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。 -->
+      <gravity>false</gravity>
+      <inertial>
+        <pose>0 0 0.85 0 0 0</pose>
+        <mass>70</mass>
+        <inertia><ixx>17.7917</ixx><iyy>17.7917</iyy><izz>1.86667</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="body">
+        <pose>0 0 0.85 0 0 0</pose>
+        <geometry><box><size>0.4 0.4 1.7</size></box></geometry>
+        <material><ambient>0.8 0.4 0.1 1</ambient><diffuse>0.8 0.4 0.1 1</diffuse></material>
+      </visual>
+      <collision name="body">
+        <pose>0 0 0.85 0 0 0</pose>
+        <geometry><box><size>0.4 0.4 1.7</size></box></geometry>
+      </collision>
+    </link>
+
+    <!-- 驱动：订阅 gz.msgs.Twist，直接设置模型速度。
+         ⚠️ 它是**运动学**的 —— 绕过力与轮胎，指令速度立刻生效。
+            这对道具正合适：NPC 是感知的**目标**，不是被测对象。
+            真车的动力学延迟属于 ads_control 的问题，P2 已经量过了
+            （转向执行机构 τ=0.294 s），不该在这里重复一遍。
+         ⚠️ 轮子不会转（模型里根本没有转动关节）。对点云无影响 ——
+            轮子在原地也是那个形状，而感知看的是形状不是运动模糊。 -->
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/model/pedestrian/cmd_vel</topic>
+    </plugin>
+
+    <!-- 真值：与自车的 /ego_pose_gt 走**完全相同**的插件与约定。
+         一套真值机制而不是两套，是把 actor 换成 model 的主要收益之一
+         （见 dynamic_actors.yaml 顶部）。
+         ⚠️ <tf_topic> 指向一个没人订阅的话题：这个插件默认会发
+            odom_frame → robot_base_frame 的 TF，而那会让 TF 树上多出
+            一个 map 的子节点，与自车的 base_link 重名冲突。真值只走话题。 -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>map</odom_frame>
+      <robot_base_frame>pedestrian_base</robot_base_frame>
+      <odom_topic>/model/pedestrian/pose_gt</odom_topic>
+      <tf_topic>/model/pedestrian/pose_gt_tf_unused</tf_topic>
+      <dimensions>3</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+  </model>
+</sdf>

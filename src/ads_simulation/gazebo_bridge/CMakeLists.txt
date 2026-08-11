@@ -52,7 +52,18 @@ ament_target_dependencies(obstacle_truth
   tf2
   tf2_geometry_msgs)
 
-install(TARGETS lidar_preprocessor vehicle_cmd_bridge obstacle_truth
+# P5-S1：让动态目标沿航点走。**仿真道具，不是算法** —— 它订阅真值是合法的，
+# 判断标准是「输出会不会进到被评测的链路里」，见节点文件头。
+find_package(ads_common REQUIRED)
+add_executable(npc_controller
+  src/npc_controller_node.cpp)
+ament_target_dependencies(npc_controller
+  rclcpp
+  geometry_msgs
+  nav_msgs)
+target_link_libraries(npc_controller ads_common::ads_common)
+
+install(TARGETS lidar_preprocessor vehicle_cmd_bridge obstacle_truth npc_controller
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY config launch

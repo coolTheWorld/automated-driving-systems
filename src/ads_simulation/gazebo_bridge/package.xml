@@ -22,6 +22,9 @@
   <depend>ads_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>
+  <!-- npc_controller 用 angle_diff：朝向误差跨 ±π 时直接相减会算出 2π，
+       车会朝反方向猛转一圈。P1 就为此把它下沉到公共包了。 -->
+  <depend>ads_common</depend>
 
   <!-- 运行期才需要的：桥接进程、机器人描述发布、以及 URDF/RViz 配置的来源 -->
   <exec_depend>ros_gz_bridge</exec_depend>
