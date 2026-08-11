@@ -216,6 +216,42 @@ NdtScoreTerms ComputeNdtScoreTerms(
   const NdtGrid & map, const std::vector<Eigen::Vector3d> & scan_body,
   const Eigen::Isometry3d & pose);
 
+/// 两个位姿之差的大小：平移的欧氏距离 + 相对旋转的转角。
+struct PoseDelta
+{
+  double translation_m{0.0};
+  /// 相对旋转 `aᵀb` 的转角，恒在 `[0, π]`。
+  double rotation_rad{0.0};
+};
+
+/// 求两个位姿的差量 —— **新息门限的原料**。
+///
+/// 用途：把 NDT 的输出与滤波器的预测（也就是配准初值）比一比。差得离谱说明
+/// NDT 锁到了错误的局部极小，那一帧必须丢掉。
+///
+/// ⚠️ **为什么需要这个门限**：NDT 到迭代上限仍会返回位姿，而它的协方差来自
+/// 最终迭代点处的信息阵 —— 那个量反映「代价函数在这里有多陡」，
+/// **不是「离真解有多远」**。半收敛的位姿带着毫米级协方差被喂进滤波器，
+/// 把状态硬拽过去，下一帧初值更差…… 正反馈发散。
+/// 实测（2026-08-10）：把 `max_iterations` 从 30 砍到 15，横向误差
+/// 0.0664 m → **462 m**。也就是说在这个门限出现之前，挡住这个失效模式的
+/// 是「迭代上限填得够大」这一个数 —— 一个看起来像调参旋钮的安全关键值。
+///
+/// ⚠️ 转角用 `acos((tr(R)−1)/2)` 而不是四元数分量：后者在接近 π 时符号会翻，
+/// 给出一个接近 0 的假差值 —— 而「转了 180°」恰恰是最该被拦下的那种错误。
+/// 数值上 `(tr(R)−1)/2` 可能因舍入略微越出 `[−1, 1]`，所以先夹再 acos。
+///
+/// @param a 位姿甲（本项目里是滤波器预测 / 配准初值）。
+/// @param b 位姿乙（本项目里是 NDT 的输出）。
+/// @return 平移距离（m）与转角（rad）。**输入含非有限值时原样返回非有限值**，
+///         由调用方用 `isfinite` 拦 —— 见下。
+///
+/// ⚠️ 调用方**必须显式判有限性**，不能只写 `if (d.translation_m > limit) reject`。
+/// `NaN` 参与任何比较都返回 `false`，于是那行代码对 NaN 恒为假、**原样放行**。
+/// 这个坑本仓库已经咬过两次（`vehicle_cmd_bridge` 的指令限幅、
+/// `ads_control` 的路径点距校验），所以这里写在接口注释里。
+PoseDelta ComparePoses(const Eigen::Isometry3d & a, const Eigen::Isometry3d & b);
+
 }  // namespace ads_localization
 
 #endif  // ADS_LOCALIZATION__NDT_ALIGN_HPP_

@@ -255,4 +255,28 @@ NdtAlignResult AlignNdt(
   return result;
 }
 
+PoseDelta ComparePoses(const Eigen::Isometry3d & a, const Eigen::Isometry3d & b)
+{
+  PoseDelta delta;
+  delta.translation_m = (b.translation() - a.translation()).norm();
+
+  // 相对旋转 R = Aᵀ B，其转角 θ 满足 tr(R) = 1 + 2cos θ。
+  //
+  // ⚠️ 不用四元数的 w 分量反解：q 与 −q 表示同一个旋转，接近 π 时 w 变号，
+  //    朴素地取 2·acos(|w|) 能给出正确值，但取 2·acos(w) 会给出接近 0 的
+  //    **假差值** —— 而「转了 180°」正是最该被拦下的那种错误。
+  //    走迹在数值上更省心：它对符号约定不敏感。
+  const double trace = (a.linear().transpose() * b.linear()).trace();
+  // 舍入会让 (tr−1)/2 略微越出 [−1, 1]，acos 于是返回 NaN ——
+  // 而 NaN 会**放行**门限（它参与任何比较都是 false）。先夹再 acos。
+  const double cos_theta = std::clamp(0.5 * (trace - 1.0), -1.0, 1.0);
+  delta.rotation_rad = std::acos(cos_theta);
+
+  // ⚠️ **非有限的输入原样传出去，不在这里替换成 0 或大数。**
+  //    替换成 0 等于悄悄放行，替换成大数等于替调用方做了策略决定。
+  //    std::clamp 对 NaN 返回 NaN（它内部也是比较），所以上面那行不会掩盖它；
+  //    平移那一项的 norm() 同理。调用方必须 isfinite（见头文件的警告）。
+  return delta;
+}
+
 }  // namespace ads_localization

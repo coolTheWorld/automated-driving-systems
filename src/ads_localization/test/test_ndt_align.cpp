@@ -35,6 +35,7 @@
 #include <Eigen/Geometry>
 
 #include <cmath>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -47,11 +48,13 @@ namespace
 {
 
 using ads_localization::AlignNdt;
+using ads_localization::ComparePoses;
 using ads_localization::ComputeNdtScoreTerms;
 using ads_localization::NdtAlignParams;
 using ads_localization::NdtAlignResult;
 using ads_localization::NdtGrid;
 using ads_localization::NdtGridParams;
+using ads_localization::PoseDelta;
 
 Eigen::Isometry3d MakePose(const Eigen::Vector3d & translation, double yaw_rad)
 {
@@ -509,4 +512,87 @@ TEST(NdtAlign, CoarseGridRecoversFromOutsideTheFineConvergenceBasin)
   // 这条把「粗只是拿来定初值」这件事钉住。
   EXPECT_GT((coarse_step.pose.translation() - truth.translation()).norm(), recovered_error)
     << "粗配准的精度不该好过精配准 —— 那说明两级参数配反了";
+}
+
+// ---------------------------------------------------------------------------
+//  ComparePoses —— 新息门限的原料（S5）
+// ---------------------------------------------------------------------------
+//  它本身只有几行，但那几行里藏着两个本仓库反复咬人的坑，所以值得有用例：
+//    ① 接近 π 的转角不能用四元数分量反解（符号翻转 → 假的小差值）
+//    ② 非有限值必须原样传出去，不能被 clamp 悄悄抹平
+// ---------------------------------------------------------------------------
+
+TEST(ComparePosesTest, MeasuresTranslationAndRotationSeparately)
+{
+  const Eigen::Isometry3d a = MakePose({10.0, 20.0, 0.0}, 0.10);
+  const Eigen::Isometry3d b = MakePose({10.3, 20.4, 0.0}, 0.10);
+
+  const PoseDelta delta = ComparePoses(a, b);
+  EXPECT_NEAR(delta.translation_m, 0.5, 1e-12) << "3-4-5 直角三角形";
+  EXPECT_NEAR(delta.rotation_rad, 0.0, 1e-12) << "只平移不该报出转角";
+
+  // 只转不平移
+  const PoseDelta rotation_only = ComparePoses(a, MakePose({10.0, 20.0, 0.0}, 0.10 + 0.35));
+  EXPECT_NEAR(rotation_only.translation_m, 0.0, 1e-12);
+  EXPECT_NEAR(rotation_only.rotation_rad, 0.35, 1e-9);
+}
+
+TEST(ComparePosesTest, ReportsNearHalfTurnAsNearPiNotNearZero)
+{
+  // ⚠️ 这条是本组用例的核心。
+  //    四元数里 q 与 −q 是同一个旋转，转角接近 π 时 w 会变号 ——
+  //    朴素地写 2·acos(w) 会给出接近 0 的**假差值**，于是「车头掉了个个儿」
+  //    这种最该被拦下的错误，反而是门限最先放行的那一个。
+  const Eigen::Isometry3d a = MakePose({0.0, 0.0, 0.0}, 0.0);
+  for (const double yaw_rad : {3.10, 3.13, M_PI, -3.13, -3.10}) {
+    const PoseDelta delta = ComparePoses(a, MakePose({0.0, 0.0, 0.0}, yaw_rad));
+    EXPECT_NEAR(delta.rotation_rad, std::abs(yaw_rad), 1e-6)
+      << "yaw=" << yaw_rad << " 被报成了 " << delta.rotation_rad;
+    EXPECT_GT(delta.rotation_rad, 3.0) << "接近半圈却报了个小角度 —— 符号翻转的典型症状";
+  }
+}
+
+TEST(ComparePosesTest, RotationIsSymmetricAndBoundedByPi)
+{
+  std::mt19937 rng(4242);
+  std::uniform_real_distribution<double> angle(-M_PI, M_PI);
+  for (int i = 0; i < 200; ++i) {
+    const Eigen::Isometry3d a = MakePose({0.0, 0.0, 0.0}, angle(rng));
+    const Eigen::Isometry3d b = MakePose({0.0, 0.0, 0.0}, angle(rng));
+    const PoseDelta forward = ComparePoses(a, b);
+    const PoseDelta backward = ComparePoses(b, a);
+    ASSERT_TRUE(std::isfinite(forward.rotation_rad)) << "第 " << i << " 次抽样出了 NaN";
+    // 恒在 [0, π]。越界的话门限的阈值就没法用弧度直觉去定了。
+    EXPECT_GE(forward.rotation_rad, 0.0);
+    EXPECT_LE(forward.rotation_rad, M_PI + 1e-12);
+    EXPECT_NEAR(forward.rotation_rad, backward.rotation_rad, 1e-9) << "差量应当对称";
+  }
+}
+
+TEST(ComparePosesTest, PassesNonFiniteInputStraightThroughSoTheCallerMustCheck)
+{
+  // ⚠️ 这条守的是 CLAUDE.md 里那条「用比较去拦非有限值，一条都拦不住」。
+  //    NaN 参与任何比较都返回 false，所以 `if (d > limit) reject` 对 NaN
+  //    **恒为假、原样放行**。本函数的契约是「非有限值原样传出去」，
+  //    调用方必须显式 isfinite —— 如果哪天有人在这里加个"保护性"的
+  //    clamp 把 NaN 变成 0，门限就会静默地放行一个 NaN 位姿。
+  const Eigen::Isometry3d a = MakePose({0.0, 0.0, 0.0}, 0.0);
+
+  Eigen::Isometry3d nan_translation = a;
+  nan_translation.translation().x() = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(std::isfinite(ComparePoses(a, nan_translation).translation_m));
+
+  Eigen::Isometry3d inf_translation = a;
+  inf_translation.translation().z() = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(std::isfinite(ComparePoses(a, inf_translation).translation_m))
+    << "±inf 也要拦 —— gpu_lidar 的无回波射线返回的正是 inf 而不是 NaN";
+
+  Eigen::Isometry3d nan_rotation = a;
+  nan_rotation.linear()(1, 1) = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(std::isfinite(ComparePoses(a, nan_rotation).rotation_rad))
+    << "clamp 把 NaN 抹平了？那门限会静默放行";
+
+  // 反过来：正常输入必须是有限的（否则上面三条断言可以靠"永远非有限"作弊通过）
+  EXPECT_TRUE(std::isfinite(ComparePoses(a, MakePose({1.0, 2.0, 3.0}, 0.5)).translation_m));
+  EXPECT_TRUE(std::isfinite(ComparePoses(a, MakePose({1.0, 2.0, 3.0}, 0.5)).rotation_rad));
 }

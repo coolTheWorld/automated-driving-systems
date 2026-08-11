@@ -37,9 +37,10 @@ L3-G（SPEC §8）：**不需要 Gazebo、不需要 GPU、能进 CI** 的定位�
 
 | 注入 | 结果 | 说明 |
 |---|---|---|
-| 冷启动航向先验错 90° | **红** | 断言 ④（map→odom 偏起点 5.358 m）。NDT 靠粗网格恢复了一部分，但没回到位 |
+| 冷启动航向先验错 90° | **红** | 断言 ⑤（map→odom 偏起点 5.358 m）。NDT 靠粗网格恢复了一部分，但没回到位 |
 | NDT 全帧判退化（等于关掉 NDT） | **红** | 断言 ①，状态序列全是 GNSS_ONLY |
-| 多一个静态 map→odom 发布者 | **红** | 断言 ③。⚠️ 加这条断言**之前**它是绿的，见下 |
+| 多一个静态 map→odom 发布者 | **红** | 断言 ④。⚠️ 加这条断言**之前**它是绿的，见下 |
+| 新息门限阈值调到 0.5 mm | **红** | 断言 ①。证明门限确实接上了：每帧都被拒 → 全程 GNSS_ONLY。（它先撞上 ① 而不是 ③，因为 ① 排在前面） |
 | 节点侧杆臂清零 | **绿 —— 抓不到** | 见下 |
 
 两条「抓不到」的实测结论，比抓到的更值得记：
@@ -232,7 +233,16 @@ class TestLocalizationClosedLoop(unittest.TestCase):
         dropped = int(float(self.diagnostics[-1]['dropped_stale_clouds']))
         self.assertEqual(dropped, 0, f'丢了 {dropped} 帧陈旧点云 —— NDT 没跟上雷达周期')
 
-        # ---- ③ map→odom 只许有**一个**发布者 ----
+        # ---- ③ 新息门限不许误杀好帧 ----
+        # 这一条不是「门限有没有生效」，而是「阈值有没有定得太紧」。
+        # 太紧的代价是好帧被丢 → 掉进 GNSS_ONLY（σ=2 m）→ 定位变差，
+        # 而日志里只有一条 3 s 一次的节流告警，很容易被当成噪声忽略。
+        rejected = int(float(self.diagnostics[-1]['ndt_rejected_innovation']))
+        self.assertEqual(
+            rejected, 0,
+            f'新息门限拒了 {rejected} 帧 —— 要么真锁错了，要么阈值太紧在误杀好帧')
+
+        # ---- ④ map→odom 只许有**一个**发布者 ----
         # SPEC §3.3。这条**必须机械地查**，不能指望从数值上看出来 ——
         # 实测（本文件的故障注入 C）：再挂一个静态 map→odom，末段位置误差
         # 只从 0.012 m 变成 0.043 m，所有数值判据照样全绿。
@@ -246,7 +256,7 @@ class TestLocalizationClosedLoop(unittest.TestCase):
             '/tf_static 上出现了 map→odom —— 这一段归 localization_node 动态发，'
             '多一个静态发布者不会报错，但哪一份生效取决于启动顺序')
 
-        # ---- ④ map→odom 必须约等于自车起点 ----
+        # ---- ⑤ map→odom 必须约等于自车起点 ----
         # 假传感器的 odom 原点钉在起点且不漂，所以这一段的真值是常量。
         # **这是"发的是不是正确那一段"的直接检验** —— 错发成 map→base_link
         # 的话这里会读到一个随车移动的值（几十米）。
@@ -257,7 +267,7 @@ class TestLocalizationClosedLoop(unittest.TestCase):
             offset_m, 1.0,
             f'map→odom 偏离自车起点 {offset_m:.3f} m —— 发的是 map→odom 还是 map→base_link？')
 
-        # ---- ⑤ 误差不能发散 ----
+        # ---- ⑥ 误差不能发散 ----
         # 判据取**末段 30 个样本**（约 3 s）。开头那几秒一定是差的：
         # 初值来自 30 帧 GNSS 的平均（σ 2 m / √30 ≈ 0.37 m），NDT 要几帧才收进去。
         # 拿全程平均去判等于把初始化的瞬态算进稳态指标里。
@@ -288,6 +298,7 @@ class TestLocalizationClosedLoop(unittest.TestCase):
             f'最大航向误差 {max_heading_error_deg:.3f}°，'
             f'map→odom 偏离起点 {offset_m:.3f} m，'
             f'NDT 单帧 {float(self.diagnostics[-1]["ndt_time_ms"]):.1f} ms，'
+            f'新息峰值 {float(self.diagnostics[-1]["ndt_innovation_max_m"]):.4f} m，'
             f'扫描 {int(float(self.diagnostics[-1]["scan_points"]))} 点，'
             f'起点朝向 {START_YAW_RAD:.2f} rad')
 

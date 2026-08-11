@@ -320,6 +320,42 @@ public:
     //    车在这几帧里是静止的，粗配准那点开销白送。
     bootstrap_coarse_frames_ = declare_parameter<int>("ndt.bootstrap_coarse_frames", 5);
 
+    // ---- 新息门限：NDT 的输出离滤波器预测太远就丢掉（S5）-----------------
+    //
+    // 这是**固定阈值**的版本，不是严格的卡方检验。区别与理由：
+    //   严格卡方要算 d² = yᵀS⁻¹y，其中 S = HPHᵀ + R，而 R 就是 NDT 的输出
+    //   协方差 —— 它现在 `covariance_scale = 1.0` **未标定**（见
+    //   docs/modules/localization.md §9.5）。R 偏小则好帧被误杀，偏大则坏帧
+    //   照样放行，于是卡方分布表里那些数（6 自由度 95% 分位 12.59）**没有意义**。
+    //   在标定之前先装一个阈值随便填的保险丝，比不装更糟 ——
+    //   它会让人以为有防线，而没人知道它挡在哪里。
+    //
+    // 固定阈值不需要标定，因为好帧与坏帧之间隔着一个数量级以上的空档。
+    // **阈值来自实测，不是拍脑袋**（Gazebo 全栈闭环，2026-08-10，三轮）：
+    //
+    //   正常新息  中位数 0.027 m，90 分位 0.11–0.16 m
+    //   每轮峰值  1.18 / 0.61 / 0.56 m ← 分母取最差的 1.18
+    //   灾难性锁错 **28 m**（开机锁错）、**462 m**（迭代上限砍到 15）
+    //
+    // 取 3.0 m：对最差的好帧留 2.5 倍余量，距最轻的坏帧还有 9.3 倍。
+    // ⚠️ 一度想取 1.5 m，那样对 1.18 m 只剩 **1.27 倍** —— 换一轮就可能误杀。
+    //    误杀不是无害的：那一帧掉进 GNSS_ONLY（σ=2 m），而日志里只有一条
+    //    3 s 一次的节流告警，很容易被当成噪声。
+    //
+    // ⚠️⚠️ **它是「防灾难」不是「保精度」。** 3 m 的锁错本身早就违反了
+    //    SPEC §1 的 0.3 m，这个门限拦不住它 —— 它拦的是随后那个正反馈：
+    //    错位姿 → 下一帧初值更差 → 错得更多 → 28 m → 462 m。
+    //    「0.5 m 量级的锁错」要靠**标定过协方差的严格卡方**，
+    //    那一条列为 P8（CARLA 验收）的前置条件，见 tasks/todo.md。
+    //
+    // 峰值的来源也实测过：最大那次开机 z 初值偏 −1.12 m（GNSS 高程 σ=4 m），
+    // 而 z 恰好是 NDT 最强、GNSS 最弱的方向，于是 NDT 一上来就要拉回一米多。
+    // **那是系统在正常工作，不是锁错** —— 这也是不能把阈值定太紧的直接理由。
+    max_innovation_m_ = declare_parameter<double>("ndt.max_innovation_m", 3.0);
+    // 转角实测最大 0.51°，10° 留 19 倍余量。它主要防的是走廊类重复几何下
+    // 的 180° 翻转 —— 那种错误一旦发生就是半圈量级，不需要更紧的阈值。
+    max_innovation_rad_ = declare_parameter<double>("ndt.max_innovation_rad", 0.175);  // 10°
+
     if (map_path.empty()) {
       RCLCPP_WARN(
         get_logger(),
@@ -521,6 +557,13 @@ private:
     guess.linear() = eskf_->state().orientation.toRotationMatrix();
     guess.translation() = eskf_->state().position_m;
 
+    // ⚠️ 新息门限要比的是「NDT 输出 vs **滤波器预测**」，而下面 `guess` 会被
+    //    粗配准的结果覆盖掉，所以必须**在那之前**留一份。
+    //    拿覆盖后的 guess 去比，恢复时量到的是「精配准离粗配准多远」——
+    //    那是另一个问题，而且恰好总是很小，于是门限在最该出手的时候失效。
+    const Eigen::Isometry3d filter_prediction = guess;
+    bool used_coarse = false;
+
     const auto started = std::chrono::steady_clock::now();
     ads_localization::NdtAlignResult result;
     try {
@@ -536,6 +579,7 @@ private:
         const auto coarse = ads_localization::AlignNdt(*ndt_coarse_map_, scan, guess, ndt_params_);
         if (!coarse.degenerate) {
           guess = coarse.pose;
+          used_coarse = true;
           ++recovery_attempts_;
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 3000,
@@ -587,6 +631,50 @@ private:
         result.normal_diversity, 100.0 * result.inlier_ratio, consecutive_ndt_failures_);
       return;
     }
+    // ---- 新息门限（S5）---------------------------------------------------
+    const ads_localization::PoseDelta innovation =
+      ads_localization::ComparePoses(filter_prediction, result.pose);
+    last_innovation_m_ = innovation.translation_m;
+    last_innovation_rad_ = innovation.rotation_rad;
+    // 记住峰值。**只诊断不判决** —— 但没有它就没法回答「门限还剩多少余量」。
+    // 这条是 gen_map 数值精度那次的教训：只断言通过的话，余量从两位数倍
+    // 缩到 1.5 倍也没人知道，直到某天突然变红而没人记得判据是怎么来的。
+    // 恢复中的帧不计入：那一跳按定义就是大的，混进来峰值就没有意义了。
+    if (!used_coarse && std::isfinite(innovation.translation_m)) {
+      max_innovation_seen_m_ = std::max(max_innovation_seen_m_, innovation.translation_m);
+    }
+
+    // ⚠️ **恢复中的帧豁免门限，这是逃生口，不是漏洞。**
+    //    粗→精只在开机头几帧或连续失败之后才跑，那时的全部目的就是
+    //    「从一个已知很差的位姿跳回正确的地方」—— 那一跳按定义就是大的。
+    //    没有这个豁免，一旦滤波器漂了，正确的 NDT 结果反而会被门限一直拒，
+    //    **永久锁死在错误状态里**。这是固定门限最典型的自伤方式。
+    if (!used_coarse) {
+      // ⚠️ 必须先判有限性再比较。`NaN > limit` 恒为 false，也就是说
+      //    只写下面那两个比较的话，一个 NaN 位姿会被**原样放行**。
+      //    本仓库已经在 vehicle_cmd_bridge 和 ads_control 上各咬过一次。
+      const bool finite =
+        std::isfinite(innovation.translation_m) && std::isfinite(innovation.rotation_rad);
+      if (
+        !finite || innovation.translation_m > max_innovation_m_ ||
+        innovation.rotation_rad > max_innovation_rad_) {
+        ndt_ok_ = false;
+        ++consecutive_ndt_failures_;
+        ++rejected_innovation_;
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 3000,
+          "NDT 新息过大（%.3f m / %.2f°，上限 %.2f m / %.2f°），本帧丢弃。"
+          "NDT 到迭代上限也会返回位姿，而它的协方差说的是「这里有多陡」不是"
+          "「离真解有多远」—— 半收敛的位姿带着毫米级协方差会把滤波器拽跑。"
+          "累计丢 %ld 帧，连续 %d 帧",
+          innovation.translation_m, innovation.rotation_rad * 180.0 / M_PI, max_innovation_m_,
+          max_innovation_rad_ * 180.0 / M_PI, rejected_innovation_, consecutive_ndt_failures_ + 1);
+        // 连续被拒会累加到 consecutive_ndt_failures_，达到 recovery_after_failures_
+        // 之后自动触发粗→精重定位 —— 逃生口是现成的，这里什么都不用做。
+        return;
+      }
+    }
+
     ndt_ok_ = true;
     consecutive_ndt_failures_ = 0;
     try {
@@ -727,6 +815,12 @@ private:
     add("dropped_stale_clouds", static_cast<double>(dropped_stale_clouds_));
     add("ndt_recovery_attempts", static_cast<double>(recovery_attempts_));
     add("consecutive_ndt_failures", consecutive_ndt_failures_);
+    // 新息门限的三个量。**正常运行时 rejected_innovation 必须是 0** ——
+    // 不是 0 说明要么真锁错了、要么阈值定得太紧在误杀好帧，两者都要查。
+    add("ndt_innovation_m", last_innovation_m_);
+    add("ndt_innovation_deg", last_innovation_rad_ * 180.0 / M_PI);
+    add("ndt_rejected_innovation", static_cast<double>(rejected_innovation_));
+    add("ndt_innovation_max_m", max_innovation_seen_m_);
     array.status.push_back(status);
     diag_pub_->publish(array);
   }
@@ -741,6 +835,12 @@ private:
   std::unique_ptr<ads_localization::NdtGrid> ndt_coarse_map_;
   int consecutive_ndt_failures_{0};
   int recovery_after_failures_{3};
+  double max_innovation_m_{3.0};
+  double max_innovation_rad_{0.175};
+  double last_innovation_m_{0.0};
+  double last_innovation_rad_{0.0};
+  double max_innovation_seen_m_{0.0};
+  int64_t rejected_innovation_{0};
   int bootstrap_coarse_frames_{5};
   int64_t ndt_frames_{0};
   int64_t recovery_attempts_{0};
