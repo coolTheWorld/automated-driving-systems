@@ -224,7 +224,23 @@ public:
     ndt_params_.max_line_search_trials = declare_parameter<int>("ndt.max_line_search_trials", 10);
     ndt_params_.min_normal_diversity = declare_parameter<double>("ndt.min_normal_diversity", 1e-3);
     ndt_params_.min_inlier_ratio = declare_parameter<double>("ndt.min_inlier_ratio", 0.2);
-    ndt_params_.covariance_scale = declare_parameter<double>("ndt.covariance_scale", 1.0);
+    // ⚠️ **已标定**（2026-08-11，NEES 实测，见 scripts/calibrate_ndt_covariance.py）。
+    //    AlignNdt 输出的是 scale × H⁻¹，而 H 只与真实协方差**成正比**，比例未知。
+    //    标定方法：NEES = eᵀΣ⁻¹e 对真值，理论期望 = 自由度 6；
+    //    实测中位数 4.331 / 5.175（两轮，各 324 / 367 个样本）⟹ scale ≈ 0.72 / 0.86。
+    //    取 0.8。
+    //
+    // ⚠️ **用中位数反解，不用均值**：NEES 分布是重尾的 —— 实测均值 10.5 / 11.8，
+    //    而 95 分位高达 48 / 52（理论值的 8 倍）。少数「半收敛却带着毫米级协方差」
+    //    的帧主导了均值，拿均值标会把 scale 推大一倍，让 NDT 整体失去话语权。
+    //
+    // ⚠️ **那条重尾没有被这次标定解决** —— 它是「NDT 报告成功但其实锁偏了」的
+    //    直接证据，要靠**严格卡方新息门限**拦（P8 前置第 2 条，仍未做）。
+    //    标定只是让它有了可用的前提。
+    //
+    // 调大 → NDT 说了不算，位姿被 GNSS（σ=2 m）拉着走；
+    // 调小 → 滤波器过度相信 NDT，锁偏时会被硬拽过去。
+    ndt_params_.covariance_scale = declare_parameter<double>("ndt.covariance_scale", 0.8);
     // 扫描降采样：每 N 个点取一个。
     //
     // **这个数是量出来的，不是猜的**（2026-08-10，CP-P4-B 首跑）：
@@ -383,6 +399,13 @@ public:
       "/localization/pose", rclcpp::QoS(10));
     diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
       "/localization/diagnostics", rclcpp::QoS(10));
+    // ⚠️ **诊断输出，不是算法接口。** 发的是 NDT 的**原始**输出位姿与协方差，
+    //    在它被喂进滤波器**之前**。存在的唯一理由是标定 covariance_scale：
+    //    要算 NEES 就必须拿到「这一帧 NDT 自己说它有多准」和「它实际差多少」，
+    //    而 /localization/pose 是**滤波后**的，那一层已经把 NDT 和 GNSS 混在一起了。
+    //    ⚠️ 算法节点不许订阅它 —— 它没有经过任何门限，是原料不是产品。
+    ndt_pose_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "/localization/ndt_pose", rclcpp::QoS(10));
 
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       "/imu", rclcpp::SensorDataQoS(),
@@ -677,12 +700,40 @@ private:
 
     ndt_ok_ = true;
     consecutive_ndt_failures_ = 0;
+    PublishNdtPose(result, msg->header.stamp);
     try {
       eskf_->UpdatePose(
         result.pose.translation(), Eigen::Quaterniond(result.pose.linear()), result.covariance);
     } catch (const std::exception & e) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "位姿更新失败：%s", e.what());
     }
+  }
+
+  /// 把 NDT 的**原始**输出发出去（标定用，见发布者声明处的警告）。
+  void PublishNdtPose(
+    const ads_localization::NdtAlignResult & result, const builtin_interfaces::msg::Time & stamp)
+  {
+    geometry_msgs::msg::PoseWithCovarianceStamped msg;
+    // ⚠️ 用**点云自己的时间戳**，不是 now()。标定要把它与真值按时间对齐，
+    //    而 now() 比点云晚一个 NDT 的耗时（实测 40 ms，车 4 m/s 就是 16 cm）——
+    //    那会被算成 NDT 的误差，把标定结果系统性地推大。
+    msg.header.stamp = stamp;
+    msg.header.frame_id = map_frame_;
+    msg.pose.pose.position.x = result.pose.translation().x();
+    msg.pose.pose.position.y = result.pose.translation().y();
+    msg.pose.pose.position.z = result.pose.translation().z();
+    const Eigen::Quaterniond q(result.pose.linear());
+    msg.pose.pose.orientation.w = q.w();
+    msg.pose.pose.orientation.x = q.x();
+    msg.pose.pose.orientation.y = q.y();
+    msg.pose.pose.orientation.z = q.z();
+    // NDT 的 6×6 是 (δt, δθ) 排布，与 ROS 的 (x,y,z,rx,ry,rz) 顺序一致，直接搬。
+    for (int i = 0; i < 6; ++i) {
+      for (int j = 0; j < 6; ++j) {
+        msg.pose.covariance[i * 6 + j] = result.covariance(i, j);
+      }
+    }
+    ndt_pose_pub_->publish(msg);
   }
 
   // ---------------------------------------------------------------------
@@ -879,6 +930,8 @@ private:
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_pub_;
+  /// NDT 原始输出，**只给标定脚本**。见发布者声明处的警告。
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr ndt_pose_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gnss_sub_;
