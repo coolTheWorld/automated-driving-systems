@@ -159,9 +159,20 @@ if(BUILD_TESTING)
   # 不是仿真数据源），所以 launch 里没法用 package/executable 的方式找到它。
   find_package(ament_cmake_ros REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
+  #
+  # ⚠️ **每个 launch 测试必须独占一个 ROS_DOMAIN_ID。**
+  #    colcon 是**按包并行**跑测试的（包内的 ctest 才是串行）。P4-S5 加了
+  #    ads_localization 的定位闭环之后，它和本包的两个闭环会同时在跑，
+  #    而默认 domain 0 下**所有话题、所有 TF 都是共享的** ——
+  #    实测症状：定位闭环断言「/tf_static 上不许有 map→odom」失败，
+  #    因为它读到的是**本包**这个测试起的那个 static_transform_publisher；
+  #    本包的闭环同时也被对方的 /odom 和 TF 污染。
+  #    两边都红，而两边的代码都没问题。
   add_launch_test(test/test_closed_loop.py
     TIMEOUT 120
-    ENV FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>)
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=41)
 
   # L3-G + 静态障碍物：**P3 唯一能进 CI 的绕障验收**。
   # obstacle_truth 只从参数发布、不需要 Gazebo，所以整条链路能在 CI 里跑。
@@ -169,7 +180,9 @@ if(BUILD_TESTING)
   # 拿轨迹点算的话车会一头顶上去而判据还显示"很安全"。
   add_launch_test(test/test_closed_loop_obstacle.py
     TIMEOUT 120
-    ENV FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>)
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=42)
 
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #

@@ -133,6 +133,37 @@ if(BUILD_TESTING)
   ament_add_gtest(test_geodetic test/test_geodetic.cpp)
   target_link_libraries(test_geodetic ${PROJECT_NAME} ads_common::ads_common)
 
+  # ---------------------------------------------------------------------------
+  # L3-G：不需要 GPU 的定位闭环（假传感器 + localization_node）
+  # ---------------------------------------------------------------------------
+  # 假传感器**不 install**：它是测试夹具，不是仿真数据源，不该出现在
+  # SIM_SOURCES 里，也不该被人误当仿真器用（理由见文件头）。
+  # launch_testing 通过 $<TARGET_FILE:> 直接拿绝对路径，不需要 install。
+  find_package(rosgraph_msgs REQUIRED)
+  add_executable(fake_sensors test/fake_sensors_node.cpp)
+  target_link_libraries(fake_sensors ${PROJECT_NAME})
+  ament_target_dependencies(fake_sensors
+    rclcpp sensor_msgs nav_msgs geometry_msgs rosgraph_msgs tf2 tf2_ros)
+
+  # 两个源码树里的文件走 ENV 传进去，不走 package share：
+  #   - campus_cloud.pcd 是地图生成物，几 MB，装进每个包是浪费；
+  #   - campus_map.yaml 归 ads_map，而本包**有意不依赖它**（SPEC §3.3）。
+  # 与 test_ndt 用 ADS_CAMPUS_CLOUD_PCD 编译宏是同一套做法。
+  find_package(ament_cmake_ros REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_closed_loop_localization.py
+    TIMEOUT 180
+    ENV
+      FAKE_SENSORS_EXECUTABLE=$<TARGET_FILE:fake_sensors>
+      ADS_CAMPUS_CLOUD_PCD=${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd
+      ADS_CAMPUS_MAP_YAML=${CMAKE_CURRENT_SOURCE_DIR}/../../config/campus_map.yaml
+      # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行，本测试会与 ads_control
+      #    的两个闭环同时在跑，默认 domain 0 下话题和 TF 全是共享的。
+      #    实测：不隔离时本测试的「/tf_static 上不许有 map→odom」会读到
+      #    ads_control 那个测试起的 static_transform_publisher，两边一起红。
+      #    分配表：ads_control 41 / 42，ads_localization 43。
+      ROS_DOMAIN_ID=43)
+
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
   add_test(NAME no_ros_dependencies

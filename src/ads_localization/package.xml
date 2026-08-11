@@ -65,6 +65,12 @@
        合成数据的好处是**真值、噪声、零偏全部已知**，可以直接对账；
        Gazebo 里只有真值位姿，零偏是看不见的。 -->
   <test_depend>ament_cmake_gtest</test_depend>
+  <!-- L3-G：不需要 GPU 的定位闭环（假传感器 + localization_node）。
+       用 test_depend 而不是 depend —— 假传感器只在测试时存在，
+       给 lib/ 引入 rosgraph_msgs 这种依赖会破坏「零 ROS 依赖」那条机械校验。 -->
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

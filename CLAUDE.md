@@ -169,6 +169,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **⚠️ Gazebo 的 GNSS 水平噪声按「度」施加，不是米** | 填 `stddev=2.0`（意为 2 m），实测静止车辆纬度在 31.67/35.15 之间跳 —— 散布 2.0 **度** ≈ 217 km | SDF 规范（`navsat.sdf`）白纸黑字写 "in units of **meters**"，gz-sensors 却直接加在 `math::Angle` 上。**垂直位置和测速都是对的，只有水平位置这一项错**。`gen_vehicle_model.py` 除以 111320 绕过。⚠️ 反向风险：Gazebo 哪天修好，噪声就缩小 11 万倍、GNSS 悄悄变完美而判据全绿 —— 用 `scripts/check_sensor_noise.py` 实测拦 |
 | **`ps ... \| grep -v "Z "` 排僵尸** | 残留检查**恒报有残留**，或反过来把僵尸当活的 | `Zs`（会话首进程的僵尸）里没有 `"Z "` 这个子串。要按 stat 字段**首字母**判：`ps -eo stat=,comm= \| awk '$1 !~ /^Z/'`。与上面 `pgrep -x gz` 那条同源 —— 残留检查本身写错，比没有检查更糟 |
 | **用 `pkill -f "ros2 launch ..."` 收 launch** | 两整组仿真同时在跑，`/ego_pose_gt` 上出现**两种消息类型**，话题频率 87 Hz（实际应 50） | 又是 `-f` 匹配完整命令行那条。实测这样收之后 `ps` 里还剩两个完整进程组（各自带 gz + parameter_bridge + 一堆节点）。一律 `setsid` 起、按 **PGID** 收 |
+| **两个 launch 测试共用默认 ROS_DOMAIN_ID** | 两个包的闭环测试**同时**变红，而两边的代码都没问题 | colcon 是**按包并行**跑测试的（包内 ctest 才串行）。P4-S5 加了 `ads_localization` 的定位闭环之后，它与 `ads_control` 的两个闭环同时在跑，默认 domain 0 下**话题和 TF 全共享**：定位侧的「`/tf_static` 上不许有 `map→odom`」读到的是**对方**起的 `static_transform_publisher`，控制侧的 `/odom` 与 TF 同时被本方污染。修法是每个 `add_launch_test` 用 `ENV ROS_DOMAIN_ID=` 独占一个域（现分配 41/42/43）。⚠️ 加**第二个**带 launch 测试的包时才会暴露，此前一直是绿的 |
 | **收尾函数按进程名算 PGID，把自己也收了** | 多场景脚本**跑完第一个就没了下文**，退出码还是 0 | 清理函数匹配了 `python3` 去算 PGID，而 `record_*.py` 正是脚本**自己进程组里的前台子进程** —— 于是 `kill -TERM -- -<自己的PGID>`。与 `pkill -f "gz sim"` 同源：**清理命令自己先被杀**。修法：`MYPGID=$(ps -o pgid= -p $$)`，收尾时跳过它。⚠️ 它还会留下上一场的整组仿真，所以**起跑前的残留守卫必须有** —— 实测正是那道守卫拦下了随后两次会被污染的测量 |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
@@ -197,9 +198,12 @@ SPEC §5 列出的其余包（`ads_perception`、`ads_prediction` 等）**尚未
 `node/planning_node.cpp` 已跑通，在 `stack.launch.py` 和 L3-G 里都接上了。
 
 ⚠️ **P4-S4 起 `map→odom` 由 `localization_node` 动态发布**（`localization:=true` 时），
-仿真侧那条来自 spawn 位姿的静态 TF 同时关掉 —— **两者不能同时发**，
-否则同一段变换有两个发布者，tf2 按时间戳挑一个，位姿随机地在真值与估计之间跳，
-**而没有任何报错**。默认仍是 `false`（CP-P2-B/CP-P3-B 的回归基线建立在真值 TF 上）。
+仿真侧那条来自 spawn 位姿的静态 TF 同时关掉 —— **两者不能同时发**。
+⚠️ 同时发**不报错，而且数值上不一定看得出来**（L3-G 故障注入实测：多挂一个静态的之后
+末段位置误差只从 0.012 m 变成 0.043 m，判据全绿）。危险在于**哪一份生效取决于启动顺序**：
+tf2 在某个 frame 第一次被写入时就定死它用静态缓存还是时间缓存。
+所以 `test_closed_loop_localization.py` **机械地查 `/tf_static` 上有没有 `map→odom`**。
+默认仍是 `false`（CP-P2-B/CP-P3-B 的回归基线建立在真值 TF 上）。
 
 ⚠️ **P3-S4 起数据流变了**：`map_node → /route/path → planning_node →
 /planning/trajectory → control_node`。`control_node` **不再订阅 `/route/path`、
@@ -279,7 +283,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 414 tests，约 20 s）
+colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 732 tests，约 35 s）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
@@ -305,6 +309,17 @@ colcon test --packages-select ads_common     # 单个包
 # 验的是节点接线（话题/QoS/TF/参数/时序），**不是控制律也不是真物理**。
 # 它抓得住 /route/path 那个 QoS bug —— 退回 volatile 立刻红。
 colcon test --packages-select ads_control --ctest-args -R test_closed_loop
+# L3-G 定位：**不需要 GPU** 的定位闭环（假传感器 + localization_node），已进 CI。
+# 假传感器从先验点云 campus_cloud.pcd 里抠扫描，所以世界与地图**同源** ——
+# 没有模型失配、没有遮挡、没有运动畸变。它验的是接线，**不是精度**。
+# 判据只到「链路通、末态 NDT_AIDED、误差没发散（0.60 m）」，收紧到 CP-P4-B
+# 的 0.30 m 得到的不是更强的保证，而是一个在 CI 上随机变红的测试。
+colcon test --packages-select ads_localization --ctest-args -R test_closed_loop_localization
+# ⚠️ 它有两个**实测抓不到**的东西，写在文件头的故障注入表里：
+#    ① 杆臂补偿（NDT 一锁上 GNSS 就没权重了，0.5 m 偏差被压进噪声）
+#    ② 多一个 map→odom 发布者的**数值症状**（误差只从 0.012 → 0.043 m）
+#    —— 所以后者是**机械地查 /tf_static**，不是看误差。
+
 # 其中 test_closed_loop_obstacle 是 **P3 唯一能进 CI 的绕障验收**：
 # obstacle_truth 只从参数发布、不需要 Gazebo，所以整条
 # 「假车 + map_node + obstacle_truth + planning_node + control_node」链路能在 CI 里跑。
