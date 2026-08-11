@@ -456,3 +456,57 @@ TEST(NdtAlignDiagnostics, DISABLED_CompareInformationOfGoodAndDegenerateCases)
     "【纯地面】",
     ComputeNdtScoreTerms(flat_map, flat_scan, Eigen::Isometry3d::Identity()).information);
 }
+
+// =============================================================================
+//  4. 粗到精：失锁之后怎么回来
+// =============================================================================
+
+TEST(NdtAlign, CoarseGridRecoversFromOutsideTheFineConvergenceBasin)
+{
+  // **精配准的收敛域被高斯的「薄」限死了。**
+  //
+  // 2 m 体素 + 特征值下限 0.01 → σ_n = 0.058 m。初值偏 1.5 m 时，
+  // 结构体素的马氏距离平方是 (1.5/0.058)² ≈ 669，权重 exp(−334) ≈ 0 ——
+  // 结构项直接消失，法向散布只剩地面的 +z，NDT 被**自己的退化判据**拒掉，
+  // 再也回不来。CP-P4-B 实测就是栽在这里（法向散布 1.4e-06）。
+  //
+  // 粗网格要同时放大**两个**量才有用：体素 6 m **且**下限 0.05
+  // → σ_n ≈ 0.39 m，收敛域约 1 m。只放大体素而不放宽下限，高斯还是同样地薄。
+  const std::vector<Eigen::Vector3d> map_points =
+    ads_localization::LoadPcdAscii(ADS_CAMPUS_CLOUD_PCD);
+  const NdtGrid fine(map_points, NdtGridParams{});
+
+  NdtGridParams coarse_params;
+  coarse_params.voxel_size_m = 6.0;
+  coarse_params.eigenvalue_ratio_floor = 0.05;
+  const NdtGrid coarse(map_points, coarse_params);
+
+  const Eigen::Isometry3d truth = MakePose({30.0, -51.75, 0.0}, 0.0);
+  const std::vector<Eigen::Vector3d> scan = CarveScan(map_points, truth, 30.0);
+
+  // 偏 1.5 m —— 落在精配准收敛域之外，但在粗配准之内。
+  const Eigen::Isometry3d lost =
+    MakePose(truth.translation() + Eigen::Vector3d(1.5, -1.0, 0.0), 0.0);
+
+  const NdtAlignResult fine_only = AlignNdt(fine, scan, lost, NdtAlignParams{});
+  const double fine_error = (fine_only.pose.translation() - truth.translation()).norm();
+
+  // 粗 → 精
+  const NdtAlignResult coarse_step = AlignNdt(coarse, scan, lost, NdtAlignParams{});
+  const NdtAlignResult recovered = AlignNdt(fine, scan, coarse_step.pose, NdtAlignParams{});
+  const double recovered_error = (recovered.pose.translation() - truth.translation()).norm();
+
+  printf(
+    "[          ] 初值偏 %.2f m：只用精网格 → %.3f m（退化 %d）；"
+    "粗→精 → %.3f m（粗一步后 %.3f m）\n",
+    (lost.translation() - truth.translation()).norm(), fine_error,
+    static_cast<int>(fine_only.degenerate), recovered_error,
+    (coarse_step.pose.translation() - truth.translation()).norm());
+
+  EXPECT_FALSE(recovered.degenerate) << "粗→精之后不该再报退化";
+  EXPECT_LT(recovered_error, 0.20) << "粗→精没能把位姿拉回真值";
+  // 粗配准本身**不该**被直接当结果用 —— 它的精度不够（体素 6 m）。
+  // 这条把「粗只是拿来定初值」这件事钉住。
+  EXPECT_GT((coarse_step.pose.translation() - truth.translation()).norm(), recovered_error)
+    << "粗配准的精度不该好过精配准 —— 那说明两级参数配反了";
+}

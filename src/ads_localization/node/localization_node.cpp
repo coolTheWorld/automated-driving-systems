@@ -151,6 +151,26 @@ public:
     gnss_vertical_std_m_ = declare_parameter<double>("gnss.vertical_std_m", 4.0);
     wheel_speed_std_mps_ = declare_parameter<double>("wheel.speed_std_mps", 0.05);
 
+    // ---- GNSS 天线的杆臂 -------------------------------------------------
+    //
+    // ⚠️⚠️ **GNSS 报的是天线的位置，不是 base_link 的位置。**
+    //
+    // 本车天线装在 (0.5, 0, 1.6)（config/vehicle_params.yaml 的 sensors.gnss），
+    // 所以直接把 GNSS 当 base_link 用会引入一个**系统性**偏差：
+    //   竖直 1.6 m —— 常量，会把 NDT 的初值顶出收敛域；
+    //   水平 0.5 m —— **随车头方向旋转**，于是它是一个随航向变化的偏差，
+    //                 看起来像"定位在某些朝向上偏得多一些"。
+    //
+    // 这个偏差不会让滤波器发散，只会让它稳定地偏一点 —— 于是所有人去调 Q，
+    // 而错在一次坐标变换里。CP-P4-B 实测正是栽在这里：连续两轮的初始 z
+    // 都是 1.58 / 1.59，与天线高度 1.6 严丝合缝。
+    //
+    //     p_base = p_天线 − R · r_天线
+    lever_arm_body_ = Eigen::Vector3d(
+      declare_parameter<double>("gnss.lever_arm_x_m", 0.0),
+      declare_parameter<double>("gnss.lever_arm_y_m", 0.0),
+      declare_parameter<double>("gnss.lever_arm_z_m", 0.0));
+
     // ---- 冷启动的航向先验 ------------------------------------------------
     // ⚠️ **在途初始对准未实现。** 真车靠双天线 GNSS 或运动对准拿这个量。
     //    这里给一个粗略先验，位置初值仍来自带 2 m 噪声的 GNSS，
@@ -261,6 +281,45 @@ public:
     //   那是可以接受的降级；而「用旧帧算出一个自信的错位姿」不可接受。
     max_cloud_age_s_ = declare_parameter<double>("ndt.max_cloud_age_s", 0.15);
 
+    // ---- 粗配准网格：失锁之后把初值拉回收敛域 ---------------------------
+    //
+    // ⚠️⚠️ **这是 CP-P4-B 实测暴露的最后一个失效模式。**
+    //
+    // 精配准的收敛域被高斯的"薄"限死了：2 m 体素、特征值下限 0.01
+    // → σ_n = 0.058 m。横向误差到 0.3 m 时，结构体素的马氏距离平方是
+    // (0.3/0.058)² = 26.8，权重 exp(−13.4) ≈ 1.5e-6 —— **结构项直接消失**，
+    // 法向散布只剩地面的 +z（实测 1.4e-06），NDT 于是被**自己的退化判据**
+    // 拒掉，误差继续长，**再也回不来**。
+    //
+    // 粗网格要同时放大**两个**量才有用：
+    //   体素 6 m       → σ_max ≈ 1.7 m
+    //   特征值下限 0.05 → σ_n = 1.7 × √0.05 ≈ 0.39 m，收敛域约 1 m
+    // 只放大体素而不放宽下限，高斯还是同样地薄，白搭。
+    //
+    // 内存代价：体素数约为精网格的 1/27，可忽略。
+    // 时间代价：**只在失锁时跑**，稳态不花钱。
+    ads_localization::NdtGridParams coarse_params;
+    coarse_params.voxel_size_m = declare_parameter<double>("ndt.coarse_voxel_size_m", 6.0);
+    coarse_params.eigenvalue_ratio_floor =
+      declare_parameter<double>("ndt.coarse_eigenvalue_ratio_floor", 0.05);
+    coarse_params.min_points_per_voxel = grid_params.min_points_per_voxel;
+    // 连续几帧被拒才启动恢复。取 3（0.3 s）—— 太小会在正常抖动时白跑粗配准，
+    // 太大则失锁之后要等更久，而误差在这期间一直在长。
+    recovery_after_failures_ = declare_parameter<int>("ndt.recovery_after_failures", 3);
+    // 开机后头几帧**无条件**走粗→精。
+    //
+    // ⚠️⚠️ **「连续 N 帧被拒」这个触发条件抓不到开机锁错** ——
+    //    锁错的定义就是「NDT 报告成功」，它不会连续失败。
+    //    实测第 2 轮：55 帧被拒但从未连续 3 帧，恢复一次都没触发，而定位错了 28 m。
+    //
+    //    最脆弱的时刻是**开机第一帧**：那时初值只有 GNSS 的平均值
+    //    （σ=0.37 m，2σ 就是 0.74 m），而精配准的收敛域只有约 0.3 m
+    //    （受 σ_n = 0.058 m 的薄高斯限制）。一旦第一帧锁错，
+    //    之后每一帧都从那个错位姿附近重新收敛，**再也回不来**。
+    //
+    //    车在这几帧里是静止的，粗配准那点开销白送。
+    bootstrap_coarse_frames_ = declare_parameter<int>("ndt.bootstrap_coarse_frames", 5);
+
     if (map_path.empty()) {
       RCLCPP_WARN(
         get_logger(),
@@ -361,6 +420,15 @@ private:
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "GNSS 无效：%s", e.what());
       return;
     }
+    // 杆臂补偿：把天线位置换算回 base_link。
+    // 初始化之前还没有姿态估计，用航向先验代替 —— 车此时静止，
+    // 那个先验就是它的真实朝向（误差只有先验本身的误差）。
+    const Eigen::Matrix3d rotation =
+      eskf_ ? eskf_->state().orientation.toRotationMatrix()
+            : Eigen::Matrix3d(
+                Eigen::AngleAxisd(initial_yaw_rad_, Eigen::Vector3d::UnitZ()).toRotationMatrix());
+    last_gnss_local_ -= rotation * lever_arm_body_;
+
     have_gnss_ = true;
     last_gnss_time_ = now();
 
@@ -456,10 +524,30 @@ private:
     const auto started = std::chrono::steady_clock::now();
     ads_localization::NdtAlignResult result;
     try {
+      // ---- 失锁恢复：先用粗网格把初值拉回精配准的收敛域 ----------------
+      //
+      // 只在连续被拒若干帧之后才跑。粗配准的结果**只当初值**，
+      // 绝不直接喂给滤波器 —— 它的精度不够（体素 6 m），
+      // 而一个不够准却带着协方差的观测正是把滤波器带偏的方式。
+      const bool bootstrapping = ndt_frames_ < bootstrap_coarse_frames_;
+      if (
+        ndt_coarse_map_ &&
+        (bootstrapping || consecutive_ndt_failures_ >= recovery_after_failures_)) {
+        const auto coarse = ads_localization::AlignNdt(*ndt_coarse_map_, scan, guess, ndt_params_);
+        if (!coarse.degenerate) {
+          guess = coarse.pose;
+          ++recovery_attempts_;
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 3000,
+            "NDT 已连续 %d 帧被拒，用粗网格重定初值（累计 %ld 次）", consecutive_ndt_failures_,
+            recovery_attempts_);
+        }
+      }
       result = ads_localization::AlignNdt(*ndt_map_, scan, guess, ndt_params_);
     } catch (const std::exception & e) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "NDT 失败：%s", e.what());
       ndt_ok_ = false;
+      ++consecutive_ndt_failures_;
       return;
     }
     // 耗时用**墙钟**量，不是仿真钟 —— 这是「算法跑得够不够快」，
@@ -467,6 +555,7 @@ private:
     last_ndt_ms_ =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     last_ndt_result_ = result;
+    ++ndt_frames_;
 
     // ⚠️⚠️ **退化或没收敛的帧一律不喂给滤波器。**
     //
@@ -491,13 +580,15 @@ private:
     //    §10 的边界表。在它之前，max_iterations 必须留够（30）。
     if (result.degenerate) {
       ndt_ok_ = false;
+      ++consecutive_ndt_failures_;
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 3000,
-        "NDT 退化（法向散布 %.3g，inlier %.1f%%），本帧不用于更新", result.normal_diversity,
-        100.0 * result.inlier_ratio);
+        "NDT 退化（法向散布 %.3g，inlier %.1f%%），本帧不用于更新；连续 %d 帧",
+        result.normal_diversity, 100.0 * result.inlier_ratio, consecutive_ndt_failures_);
       return;
     }
     ndt_ok_ = true;
+    consecutive_ndt_failures_ = 0;
     try {
       eskf_->UpdatePose(
         result.pose.translation(), Eigen::Quaterniond(result.pose.linear()), result.covariance);
@@ -634,6 +725,8 @@ private:
     add("scan_points", last_scan_points_);
     add("ground_fraction", last_ground_fraction_);
     add("dropped_stale_clouds", static_cast<double>(dropped_stale_clouds_));
+    add("ndt_recovery_attempts", static_cast<double>(recovery_attempts_));
+    add("consecutive_ndt_failures", consecutive_ndt_failures_);
     array.status.push_back(status);
     diag_pub_->publish(array);
   }
@@ -644,11 +737,20 @@ private:
   ads_localization::NdtAlignParams ndt_params_;
   std::unique_ptr<ads_localization::Eskf> eskf_;
   std::unique_ptr<ads_localization::NdtGrid> ndt_map_;
+  /// 粗网格：只在失锁恢复时用，见构造函数里的说明。
+  std::unique_ptr<ads_localization::NdtGrid> ndt_coarse_map_;
+  int consecutive_ndt_failures_{0};
+  int recovery_after_failures_{3};
+  int bootstrap_coarse_frames_{5};
+  int64_t ndt_frames_{0};
+  int64_t recovery_attempts_{0};
 
   double gnss_horizontal_std_m_{2.0};
   double gnss_vertical_std_m_{4.0};
   double wheel_speed_std_mps_{0.05};
   double initial_yaw_rad_{0.0};
+  /// GNSS 天线相对 base_link 的安装位置（body 系）。见构造函数里的说明。
+  Eigen::Vector3d lever_arm_body_{Eigen::Vector3d::Zero()};
   double gnss_timeout_s_{2.0};
   int scan_stride_{4};
   int ground_stride_{24};

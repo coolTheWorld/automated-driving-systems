@@ -253,7 +253,8 @@ def _localization_nodes(context, *args, **kwargs):
                     'vehicle_params.yaml')
     vehicle = yaml.safe_load(vehicle_yaml.read_text(encoding='utf-8'))
     imu_noise = vehicle['sensors']['imu']['noise']
-    gnss_noise = vehicle['sensors']['gnss']['noise']
+    gnss_cfg = vehicle['sensors']['gnss']
+    gnss_noise = gnss_cfg['noise']
 
     # 冷启动的航向先验：从**世界文件**读自车 spawn 朝向，不写死。
     gazebo_launch = _load_gazebo_launch_module()
@@ -287,6 +288,12 @@ def _localization_nodes(context, *args, **kwargs):
                 #    （Gazebo 把水平噪声按度施加，见 CLAUDE.md 陷阱表）。
                 'gnss.horizontal_std_m': float(gnss_noise['position_horizontal_stddev_m']),
                 'gnss.vertical_std_m': float(gnss_noise['position_vertical_stddev_m']),
+                # ⚠️ 杆臂：GNSS 报的是**天线**的位置。不减掉它就是一个系统性
+                #    偏差 —— 竖直 1.6 m 常量、水平 0.5 m 随航向旋转。
+                #    它不会让滤波器发散，只会让它稳定地偏一点。
+                'gnss.lever_arm_x_m': float(gnss_cfg['mount_x_m']),
+                'gnss.lever_arm_y_m': float(gnss_cfg['mount_y_m']),
+                'gnss.lever_arm_z_m': float(gnss_cfg['mount_z_m']),
                 'initial_yaw_rad': initial_yaw_rad,
                 'map_pcd_path': str(cloud_pcd),
                 'use_sim_time': True,
