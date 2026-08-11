@@ -49,6 +49,7 @@ add_executable(obstacle_truth
 ament_target_dependencies(obstacle_truth
   rclcpp
   ads_msgs
+  nav_msgs        # P5-S1：动态目标的真值来自 /model/<name>/pose_gt
   tf2
   tf2_geometry_msgs)
 
@@ -83,6 +84,9 @@ install(FILES
   # 而 Gazebo 侧的模型由 scripts/gen_obstacles.py 从同一个文件生成 ——
   # 于是「车看到的」与「车会撞上的」根本不存在第二份数据。
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/obstacles.yaml
+  # P5-S1：动态目标场景。同一条规矩 —— 真值发布器与 gen_dynamic_actors.py
+  # 读的是同一个文件，所以不存在第二份数据。
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../config/dynamic_actors.yaml
   DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)

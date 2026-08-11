@@ -108,6 +108,7 @@ def _resolve_sim_source(context, *args, **kwargs):
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
                 'obstacles': LaunchConfiguration('obstacles'),
+                'dynamic': LaunchConfiguration('dynamic'),
                 'localization': LaunchConfiguration('localization'),
             }.items(),
         ),
@@ -333,6 +334,12 @@ def generate_launch_description():
                          '**默认 none** —— 那是 CP-P2-B 的回归基线，'
                          '世界必须与 P2 时一模一样')),
 
+        DeclareLaunchArgument(
+            'dynamic', default_value='none',
+            description=('P5 感知场景的动态目标：none / oncoming / cross / both。'
+                         '默认 none —— 三个检查点的回归基线要求世界里没有会动的东西。'
+                         '与 obstacles 互相独立，可自由组合'),
+        ),
         DeclareLaunchArgument(
             'localization', default_value='false',
             description=('P4：true 时起 localization_node，由它发动态 map→odom，'

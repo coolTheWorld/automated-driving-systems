@@ -24,6 +24,7 @@
 #  这个分层就是 SPEC §4.1「切换仿真源 = 换一个 launch 参数」的落地方式。
 # =============================================================================
 
+import math
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -38,6 +39,19 @@ import yaml
 
 # 自车在世界文件里的模型名。世界文件的 <include><name> 用的就是它。
 EGO_MODEL_NAME = 'ego_vehicle'
+
+
+# ads_msgs/Obstacle 的 CLASSIFICATION_* 常量。
+# ⚠️ 写在这里而不是让 YAML 直接填数字：数字对不上时症状是「行人被标成车辆」，
+#    而 P6 预测会按 classification 选运动模型（车走车道跟随、人走恒速椭圆），
+#    选错的后果是预测轨迹荒谬 —— 而那时人会去查预测模块。
+_CLASSIFICATION = {
+    'unknown': 0,
+    'pedestrian': 1,
+    'bicycle': 2,
+    'vehicle': 3,
+    'static': 4,
+}
 
 
 def _resolve_world_file(world_name: str) -> Path:
@@ -204,6 +218,76 @@ def vehicle_limit_params(vehicle_params: dict) -> dict:
     }
 
 
+def _dynamic_actor_specs(context) -> list[dict]:
+    """
+    Resolve which dynamic actors are on stage and everything launch needs about them.
+
+    ⚠️ **动态目标不进 worlds/campus_loop.sdf**，与静态障碍物同一条规矩：
+       那个世界是 CP-P2-B / CP-P3-B / CP-P4-B **三个**检查点的回归基线。
+       往里加一辆会动的车，点云、NDT 的 inlier、规划的碰撞检查全都会变。
+
+    :param context: launch 上下文
+    :return: 每个出场目标的一组字典；dynamic:=none 时为空列表
+    """
+    scenario = LaunchConfiguration('dynamic').perform(context)
+    if scenario == 'none':
+        return []
+
+    config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                   / 'dynamic_actors.yaml')
+    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+    if scenario not in config['scenarios']:
+        raise RuntimeError(
+            f'dynamic:={scenario} 在 {config_path} 里没有定义。'
+            f'可选：none、{"、".join(config["scenarios"])}')
+
+    vehicle_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                    / 'vehicle_params.yaml')
+    vehicle_geo = yaml.safe_load(vehicle_path.read_text(encoding='utf-8'))['geometry']
+
+    specs = []
+    for name in config['scenarios'][scenario]['actors']:
+        actor = config['actors'][name]
+        waypoints = [(float(x), float(y)) for x, y in actor['waypoints']]
+
+        if name == 'npc_car':
+            # ⚠️ 尺寸从 vehicle_params 读，与 gen_dynamic_actors.py **同一个源头**。
+            length = float(vehicle_geo['length_m'])
+            width = float(vehicle_geo['width_m'])
+            height = float(vehicle_geo['height_m'])
+            # 模型原点在**后轴中心地面**（与自车同一个约定），
+            # 包围盒中心在它前方 length/2 − rear_overhang。
+            # 这与 gen_vehicle_model.derive() 里的 chassis_center_x 是同一个式子 ——
+            # 那边建模型、这边发真值，两处必须一致，否则真值会恒定偏一个常量。
+            offset_x = length / 2.0 - float(vehicle_geo['rear_overhang_m'])
+        else:
+            length = float(actor['length_m'])
+            width = float(actor['width_m'])
+            height = float(actor['height_m'])
+            # 行人的模型原点在**底面中心**，所以纵向不偏。
+            offset_x = 0.0
+
+        # 车头朝向第二个航点。⚠️ 必须给对：cmd_vel 是**车体系**，
+        #    spawn 时朝向反了的话第一拍会原地掉头（控制器会纠正，但点云里
+        #    开头几帧的朝向是错的，而那几帧正好在判据窗口里）。
+        heading_rad = math.atan2(waypoints[1][1] - waypoints[0][1],
+                                 waypoints[1][0] - waypoints[0][0])
+
+        specs.append({
+            'name': name,
+            'waypoints': waypoints,
+            'speed_mps': float(actor['speed_mps']),
+            'length_m': length,
+            'width_m': width,
+            'height_m': height,
+            'offset_x_m': offset_x,
+            'offset_z_m': height / 2.0,
+            'classification': _CLASSIFICATION[actor['classification']],
+            'spawn': (waypoints[0][0], waypoints[0][1], heading_rad),
+        })
+    return specs
+
+
 def _obstacle_actions(context, *args, **kwargs):
     """
     Spawn the obstacle model and start the ground-truth publisher for a scenario.
@@ -220,61 +304,132 @@ def _obstacle_actions(context, *args, **kwargs):
     :return: 该场景对应的 launch 动作列表；obstacles:=none 时为空
     """
     scenario = LaunchConfiguration('obstacles').perform(context)
-    if scenario == 'none':
+    actors = _dynamic_actor_specs(context)
+
+    # ⚠️ **不能在 obstacles:=none 时直接返回。** P5-S1 起真值发布器还负责
+    #    动态目标，而 `dynamic:=both obstacles:=none` 是一个合法且常用的组合
+    #    （感知的验收场景不需要静态锥桶）。早退的话那一跑没有任何真值，
+    #    而判据会因为「没有基准」而无法计算 —— 现场表现是脚本报空数据。
+    if scenario == 'none' and not actors:
         return []
 
-    config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
-                   / 'obstacles.yaml')
-    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
-    if scenario not in config['scenarios']:
-        raise RuntimeError(
-            f'obstacles:={scenario} 在 {config_path} 里没有定义。'
-            f'可选：none、{"、".join(config["scenarios"])}')
-
-    lane = config['lane']
-    spec = config['scenarios'][scenario]
-
-    # 车道坐标 → 世界坐标。与 gen_obstacles.py 里的换算**必须一致**，
-    # 否则真值和 Gazebo 模型会差一个偏移 —— 而那正是本节要避免的漂移。
-    # 两处都只支持 heading = 0（南侧直道），生成器会显式拒绝其他值。
     center_x, center_y, yaw, length, width, height = [], [], [], [], [], []
-    for obstacle in spec['obstacles']:
-        center_x.append(float(obstacle['along_x_m']))
-        center_y.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
-        yaw.append(float(lane['heading_rad']))
-        length.append(float(obstacle['length_m']))
-        width.append(float(obstacle['width_m']))
-        height.append(float(obstacle['height_m']))
+    if scenario != 'none':
+        config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                       / 'obstacles.yaml')
+        config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+        if scenario not in config['scenarios']:
+            raise RuntimeError(
+                f'obstacles:={scenario} 在 {config_path} 里没有定义。'
+                f'可选：none、{"、".join(config["scenarios"])}')
 
-    return [
-        # 把障碍物模型 spawn 进已经在跑的 Gazebo。
-        # 用 ros_gz_sim create 而不是生成一个"带障碍物的世界"，理由见上面的第一条 ⚠️。
-        Node(
-            package='ros_gz_sim',
-            executable='create',
-            name=f'spawn_obstacles_{scenario}',
-            arguments=['-file', f'model://campus_obstacles_{scenario}',
-                       '-name', f'campus_obstacles_{scenario}'],
-            parameters=[{'use_sim_time': True}],
-            output='screen',
-        ),
-        Node(
-            package='gazebo_bridge',
-            executable='obstacle_truth',
-            name='obstacle_truth',
+        lane = config['lane']
+        spec = config['scenarios'][scenario]
+
+        # 车道坐标 → 世界坐标。与 gen_obstacles.py 里的换算**必须一致**，
+        # 否则真值和 Gazebo 模型会差一个偏移 —— 而那正是本节要避免的漂移。
+        # 两处都只支持 heading = 0（南侧直道），生成器会显式拒绝其他值。
+        for obstacle in spec['obstacles']:
+            center_x.append(float(obstacle['along_x_m']))
+            center_y.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
+            yaw.append(float(lane['heading_rad']))
+            length.append(float(obstacle['length_m']))
+            width.append(float(obstacle['width_m']))
+            height.append(float(obstacle['height_m']))
+
+    actions = []
+    if scenario != 'none':
+        actions.append(
+            # 把障碍物模型 spawn 进已经在跑的 Gazebo。
+            # 用 ros_gz_sim create 而不是生成一个"带障碍物的世界"，理由见上面的第一条 ⚠️。
+            Node(
+                package='ros_gz_sim',
+                executable='create',
+                name=f'spawn_obstacles_{scenario}',
+                arguments=['-file', f'model://campus_obstacles_{scenario}',
+                           '-name', f'campus_obstacles_{scenario}'],
+                parameters=[{'use_sim_time': True}],
+                output='screen',
+            ))
+
+    # ---- 动态目标：spawn、桥接、驱动（P5-S1）--------------------------------
+    for actor in actors:
+        sx, sy, syaw = actor['spawn']
+        actions.append(Node(
+            package='ros_gz_sim', executable='create',
+            name=f'spawn_{actor["name"]}',
+            arguments=['-file', f'model://{actor["name"]}', '-name', actor['name'],
+                       '-x', str(sx), '-y', str(sy), '-z', '0', '-Y', str(syaw)],
+            parameters=[{'use_sim_time': True}], output='screen',
+        ))
+        # 桥接。⚠️ **单独一个 bridge，不并进 bridge_topics.yaml** ——
+        #    那张表是所有场景共用的，往里加两个只在 dynamic 非 none 时才存在的
+        #    话题，等于让 CP-P2-B 的基线跑也多出两个空订阅。
+        actions.append(Node(
+            package='ros_gz_bridge', executable='parameter_bridge',
+            name=f'bridge_{actor["name"]}',
+            arguments=[
+                # 真值：GZ → ROS（`[`）
+                f'/model/{actor["name"]}/pose_gt@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                # 速度指令：ROS → GZ（`]`）
+                f'/model/{actor["name"]}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+            ],
+            parameters=[{'use_sim_time': True}], output='screen',
+        ))
+        actions.append(Node(
+            package='gazebo_bridge', executable='npc_controller',
+            name=f'npc_controller_{actor["name"]}',
             parameters=[{
-                'obstacles.center_x_m': center_x,
-                'obstacles.center_y_m': center_y,
-                'obstacles.yaw_rad': yaw,
-                'obstacles.length_m': length,
-                'obstacles.width_m': width,
-                'obstacles.height_m': height,
-                'frame_id': 'map',
+                'model_name': actor['name'],
+                'waypoints_x_m': [w[0] for w in actor['waypoints']],
+                'waypoints_y_m': [w[1] for w in actor['waypoints']],
+                'speed_mps': actor['speed_mps'],
+                # ⚠️ 用**墙钟**定时器（节点里是 create_wall_timer）——
+                #    它是仿真道具，不是算法时序，不受 SPEC §5 那条约束。
                 'use_sim_time': True,
             }],
             output='screen',
-        ),
-    ]
+        ))
+
+    # ---- 真值发布器：静态 + 动态合在一个节点里发 ----------------------------
+    #
+    # ⚠️ **空列表参数不能传给 launch**（2026-08-11 实测）：
+    #    ROS 2 launch 对 `[]` 推断不出元素类型，报
+    #    `Expected 'value' to be one of [float, int, str, bool, bytes], but got '()'`。
+    #    而 `obstacles:=none dynamic:=both` 恰恰会让前六个数组是空的。
+    #    所以空的就**不传**，让节点用它自己的默认值（也是空 vector）——
+    #    节点那边的长度一致性校验对「全空」是通过的。
+    truth_params = {'frame_id': 'map', 'use_sim_time': True}
+    static_arrays = {
+        'obstacles.center_x_m': center_x,
+        'obstacles.center_y_m': center_y,
+        'obstacles.yaw_rad': yaw,
+        'obstacles.length_m': length,
+        'obstacles.width_m': width,
+        'obstacles.height_m': height,
+    }
+    dynamic_arrays = {
+        'dynamic.names': [a['name'] for a in actors],
+        'dynamic.length_m': [a['length_m'] for a in actors],
+        'dynamic.width_m': [a['width_m'] for a in actors],
+        'dynamic.height_m': [a['height_m'] for a in actors],
+        'dynamic.offset_x_m': [a['offset_x_m'] for a in actors],
+        'dynamic.offset_z_m': [a['offset_z_m'] for a in actors],
+        'dynamic.classification': [a['classification'] for a in actors],
+    }
+    for arrays in (static_arrays, dynamic_arrays):
+        for key, value in arrays.items():
+            if value:
+                truth_params[key] = value
+
+    actions.append(Node(
+        package='gazebo_bridge',
+        executable='obstacle_truth',
+        name='obstacle_truth',
+        parameters=[truth_params],
+        output='screen',
+    ))
+    return actions
 
 
 def generate_launch_description():
@@ -331,6 +486,13 @@ def generate_launch_description():
             description=('P3 验收场景的静态障碍物：none / avoid / block。'
                          '**默认 none** —— 那是 CP-P2-B 的回归基线，'
                          '世界必须与 P2 时一模一样')),
+        DeclareLaunchArgument(
+            'dynamic', default_value='none',
+            description=('P5 感知场景的**动态**目标：none / oncoming / cross / both。'
+                         '**默认 none** —— 与 obstacles 同一条规矩：'
+                         'CP-P2-B / CP-P3-B / CP-P4-B 三个检查点的回归基线'
+                         '要求世界里没有会动的东西。两个开关**互相独立**，'
+                         '可以自由组合（CP-P5-B 第 9 条跑 obstacles:=avoid dynamic:=none）')),
 
         # ---------------------------------------------------------------------
         # 1. Gazebo
