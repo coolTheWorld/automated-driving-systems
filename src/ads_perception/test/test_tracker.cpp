@@ -429,24 +429,101 @@ TEST(Tracker, CompletesTheBoxAwayFromTheSensor)
   EXPECT_NEAR(tracker.CompletedCenter(full, track, kSensor).x(), 20.0, 1e-12);
 }
 
-TEST(Tracker, RefusesToMergeExtentsWhenTheAxisFlipped)
+// ⚠️⚠️ 下面两条的场景**必须按「近边固定」构造**，不能图省事把中心钉住。
+//    第一版把中心固定在 20 m 再改尺寸 —— 那等于宣称物体朝传感器方向也长大了，
+//    观测本身不自洽。后果是重锚算出的位置与观测差 2.15 m、**被卡方门限拒掉**，
+//    于是"航迹尺寸没变"这个断言**因为这一帧根本没被采纳而通过**。
+//    这是本文件第三次踩同一个陷阱（前两次见文件头）。判据要量的是"合并对不对"，
+//    不是"这一帧被拒了没有"。
+//
+//    真实几何：目标近边不动在 N，
+//      只看得见正面（进深 d）→ 中心在 N + d/2，L-Shape 报 (1.8 × d) @ 90°
+//      侧面露出来（长 4.4）  → 中心在 N + 2.2，L-Shape 报 (4.4 × 1.8) @ 0°
+namespace
 {
-  // ⚠️ 这条守的是 L-Shape 会把较大的范围叫 `length`：正对时拟出 1.77×0.08，
-  //    于是"长轴"指的其实是车**宽**，轴向整个翻了 90°。
-  //    不判轴向就合并的话，会沿错误的轴把盒子外扩 1.3 m。
+constexpr double kNearEdgeX = 19.95;  // 目标近边，固定
+constexpr double kFaceDepth = 0.1;    // 只看得见正面时的进深
+}  // namespace
+
+TEST(Tracker, ResolvesTheAxisFlipInsteadOfGivingUp)
+{
+  // ⚠️ **这条用例换过一次判据，原因值得记。**
+  //    第一版叫 RefusesToMergeExtentsWhenTheAxisFlipped，断言"轴向翻转时
+  //    丢掉尺寸记忆"。那是**权宜**：当时怕沿错误的轴外扩 1.3 m，就一刀切地
+  //    放弃。代价是目标由远及近、侧面刚露出来的那一帧既不补全也不重锚，
+  //    新息含整跳 ⟹ 判不进门 ⟹ **ID 跳变**（实测 17–22 m 反复切）。
+  //
+  //    正确的做法不是放弃，是**换个说法**：`a×b @ ψ` 与 `b×a @ ψ+90°`
+  //    是同一个盒子。AlignedDetection 做这件事，于是记忆照样能合并，
+  //    而且合并在**对的轴**上。
+  Tracker tracker;
+  for (int frame = 0; frame < 4; ++frame) {
+    tracker.Update({MakePartial(kNearEdgeX + 2.2, 0.0, 4.4, 1.8, /*yaw=*/0.0)}, kDt, kSensor);
+  }
+  ASSERT_NEAR(tracker.tracks()[0].length_m, 4.4, 1e-9);
+  const int hits_before = tracker.tracks()[0].hits;
+
+  // 目标退远，只剩正面：可见范围 1.8（横向）× 0.1（进深），
+  // 而 L-Shape 会把较大的 1.8 叫 length ⟹ 轴向报成 90°。
+  tracker.Update(
+    {MakePartial(kNearEdgeX + 0.5 * kFaceDepth, 0.0, 1.8, kFaceDepth, /*yaw=*/M_PI / 2.0)}, kDt,
+    kSensor);
+  const Track & track = tracker.tracks()[0];
+  printf(
+    "[          ] 轴向报成 90° 之后：尺寸 %.3f × %.3f，航迹 %zu 条，命中 %d → %d\n", track.length_m,
+    track.width_m, tracker.tracks().size(), hits_before, track.hits);
+  // ⚠️ 先确认这一帧**真的被采纳了** —— 否则下面的断言毫无意义。
+  ASSERT_EQ(tracker.tracks().size(), 1U) << "这一帧被拒了，另起了一条航迹";
+  ASSERT_EQ(track.hits, hits_before + 1) << "这一帧没被关联上，断言测不到合并";
+  EXPECT_NEAR(track.length_m, 4.4, 1e-9) << "把轴向翻转当成了目标变小";
+  EXPECT_NEAR(track.width_m, 1.8, 1e-9);
+}
+
+TEST(Tracker, NormalizesStoredExtentsSoLengthIsAlwaysTheLongAxis)
+{
+  // ⚠️ 归一化不是洁癖，它有一个具体的下游：ClassifyBySize 拿 `length` 去比
+  //    vehicle_min_length = 2.5。远处只看得见车头时记忆是 1.8 × 0.1，
+  //    等侧面露出来"宽"长到 4.4 —— 不交换的话 length 仍是 1.8，
+  //    一辆量得完全正确的车会被判成 UNKNOWN。
+  //    ResolveHeading 同样假定 yaw 是长轴。
+  Tracker tracker;
+  for (int frame = 0; frame < 4; ++frame) {
+    tracker.Update(
+      {MakePartial(kNearEdgeX + 0.5 * kFaceDepth, 0.0, 1.8, kFaceDepth, /*yaw=*/M_PI / 2.0)}, kDt,
+      kSensor);
+  }
+  ASSERT_NEAR(tracker.tracks()[0].length_m, 1.8, 1e-9);
+  const int hits_before = tracker.tracks()[0].hits;
+
+  // 侧面露出来：近边没动，中心因此从 N+0.05 挪到 N+2.2 —— 那是**重新锚定**。
+  tracker.Update({MakePartial(kNearEdgeX + 2.2, 0.0, 4.4, 1.8, /*yaw=*/0.0)}, kDt, kSensor);
+  const Track & track = tracker.tracks()[0];
+  printf(
+    "[          ] 侧面露出后：尺寸 %.3f × %.3f，轴向 %.3f rad，位置 x=%.3f（应 %.2f）\n",
+    track.length_m, track.width_m, track.yaw_rad, track.position().x(), kNearEdgeX + 2.2);
+  ASSERT_EQ(tracker.tracks().size(), 1U) << "这一帧被拒了，另起了一条航迹";
+  ASSERT_EQ(track.hits, hits_before + 1) << "这一帧没被关联上";
+  EXPECT_GE(track.length_m, track.width_m) << "length 不再是长轴 —— 分类会把车判成 UNKNOWN";
+  EXPECT_NEAR(track.length_m, 4.4, 1e-9);
+  EXPECT_NEAR(track.width_m, 1.8, 1e-9);
+  EXPECT_TRUE(tracker.AxesConsistent(track.yaw_rad, 0.0)) << "轴向没跟着长宽一起换";
+  // 位置必须落到**整车中心**上，而不是可见正面的中心。
+  EXPECT_NEAR(track.position().x(), kNearEdgeX + 2.2, 0.3) << "重新锚定没生效";
+}
+
+TEST(Tracker, StillDropsTheMemoryWhenTheTargetGenuinelyTurns)
+{
+  // 换算只化解 90° 的**命名**翻转；目标**真的**转了 30° 时两条轴对不上，
+  // 记忆必须丢掉重来 —— 否则会把转弯前的尺寸按转弯后的轴外扩。
   Tracker tracker;
   for (int frame = 0; frame < 4; ++frame) {
     tracker.Update({MakePartial(20.0, 0.0, 4.4, 1.8, /*yaw=*/0.0)}, kDt, kSensor);
   }
-  ASSERT_NEAR(tracker.tracks()[0].length_m, 4.4, 1e-9);
-
-  // 轴向翻 90°，尺寸塌成"只剩正面"。记忆必须被丢弃而不是沿新轴外扩。
-  tracker.Update({MakePartial(20.0, 0.0, 1.8, 0.1, /*yaw=*/M_PI / 2.0)}, kDt, kSensor);
+  tracker.Update({MakePartial(20.0, 0.0, 2.0, 1.8, /*yaw=*/0.52)}, kDt, kSensor);  // 30°
   printf(
-    "[          ] 轴向翻 90° 之后，航迹尺寸 = %.3f × %.3f（应当是当帧的 1.8 × 0.1）\n",
+    "[          ] 目标真的转了 30° 之后，航迹尺寸 = %.3f × %.3f（应当是当帧的 2.0 × 1.8）\n",
     tracker.tracks()[0].length_m, tracker.tracks()[0].width_m);
-  EXPECT_NEAR(tracker.tracks()[0].length_m, 1.8, 1e-9) << "轴向翻转时仍然合并了尺寸";
-  EXPECT_NEAR(tracker.tracks()[0].width_m, 0.1, 1e-9);
+  EXPECT_NEAR(tracker.tracks()[0].length_m, 2.0, 1e-9) << "目标转弯时仍然沿旧轴合并了尺寸";
 }
 
 TEST(Tracker, TreatsAxisAndItsOppositeAsTheSameAxis)

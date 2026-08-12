@@ -77,6 +77,11 @@ EGO_LANE_CENTER_Y_M = -51.75
 # 阈值取得很松（真值恒等于 0），只为抓灾难性的道具失效，不为抓精度：
 #   离地 0.10 m —— 比雷达噪声 σ=1 cm 大一个量级，不会误报；
 #   倾斜 2.0°  —— 实测那次飞行 20 s 内涨到 33.7°，2° 在 1.4 s 内就会触发。
+# 判「同一个目标上有没有重复航迹」的半径，m。
+# 取 1.0：远小于本场景里两个真值目标的间距（1.75 m），所以数出来的
+# 一定是同一个目标上的重复，而不是邻居。
+DUPLICATE_RADIUS_M = 1.0
+
 STIMULUS_MAX_LIFT_M = 0.10
 STIMULUS_MAX_TILT_DEG = 2.0
 
@@ -238,7 +243,25 @@ class PerceptionScorer(Node):
                 # ⚠️ 这个量**物理上看得见**（近边正是雷达打到的那一面），
                 #    而「中心」在正对时看不见。刹车距离依赖的也是这个。
                 'near_edge_err_m': '',
+                # 同一个真值目标附近还有几个感知目标（>0 表示**重复航迹**）。
+                # ⚠️ 重复航迹本身就是缺陷：规划会把一个目标当成两个障碍物。
+                #    它也是 ID 切换的直接来源 —— 两条航迹都在，
+                #    配对逐帧在它们之间摇摆，看起来像"ID 在跳"。
+                'extra_within_match_m': '',
+                'second_match_dist_m': '',
             }
+            # 落在配对半径内的**全部**感知目标（不只最近那个）
+            nearby = sorted(
+                math.hypot(o.pose.position.x - gx, o.pose.position.y - gy)
+                for o in msg.obstacles)
+            # ⚠️ 判"重复"要用**紧半径**，不能用配对半径。配对半径 2.5 m 比
+            #    车与行人的真实间距（1.75 m）还大 —— 用它数出来的"重复"里
+            #    绝大多数是**另一个目标**，实测第二近者中位 2.10 m 正是那个间距。
+            #    判据的适用范围又一次没圈准，只是这次代价只有一次跑。
+            nearby = [d for d in nearby if d < DUPLICATE_RADIUS_M]
+            row['extra_within_match_m'] = max(0, len(nearby) - 1)
+            if len(nearby) >= 2:
+                row['second_match_dist_m'] = f'{nearby[1]:.3f}'
             if best is not None:
                 matched_perceived.add(best)
                 obstacle = msg.obstacles[best]
@@ -434,6 +457,13 @@ def main() -> int:
         rclpy.shutdown()
         return 2
     print(f'{stimulus_line} ✓')
+    dup = [r for r in node.rows if r.get('extra_within_match_m')]
+    if dup:
+        seconds = sorted(float(r['second_match_dist_m']) for r in dup if r['second_match_dist_m'])
+        print(f'重复航迹：{len(dup)} / {len(node.rows)} 帧次的真值目标 '
+              f'{DUPLICATE_RADIUS_M} m 内有 2 个以上感知目标'
+              + (f'；第二近者距离 中位 {seconds[len(seconds) // 2]:.2f} m、'
+                 f'最大 {seconds[-1]:.2f} m' if seconds else ''))
 
     passed = node.score()
     node.destroy_node()

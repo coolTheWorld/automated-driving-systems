@@ -93,6 +93,36 @@ bool Tracker::AxesConsistent(double detection_yaw_rad, double track_yaw_rad) con
   return difference <= params_.extent_memory_max_axis_diff_rad;
 }
 
+Detection Tracker::AlignedDetection(const Detection & detection, const Track & track) const
+{
+  // ⚠️ **L-Shape 的「长/宽」命名与目标本身无关。** 它把两个范围排序，
+  //    较大的那个叫 length（见 lshape_fit.cpp 的末尾几行）。于是对向车
+  //    正对时可见范围是 1.80 × 0.08，"长轴"指的其实是**车宽**，
+  //    轴向相对目标真实的长轴整个翻了 90°。
+  //
+  //    一个 a × b 的盒子（轴向 ψ）与一个 b × a 的盒子（轴向 ψ+90°）
+  //    **是同一个盒子**。所以这里不是"猜"，是把检测改写成与航迹同一种说法。
+  //
+  // ⚠️ 不做这一步的后果是具体的：目标由远及近、侧面刚露出来的那一帧轴向翻转，
+  //    AxesConsistent 判否 ⟹ 既不补全也不重锚 ⟹ 新息里混着一整跳
+  //    ⟹ 判不进卡方门限 ⟹ 另起一条航迹。实测 ID 在 17–22 m 反复切换。
+  double difference = ads_common::angle_diff(detection.yaw_rad, track.yaw_rad);
+  // 轴向的等价类是 π：先折到 (−π/2, π/2]。
+  if (difference > M_PI / 2.0) {
+    difference -= M_PI;
+  } else if (difference <= -M_PI / 2.0) {
+    difference += M_PI;
+  }
+  if (std::abs(difference) <= M_PI / 4.0) {
+    return detection;  // 已经是同一种说法
+  }
+  // 更接近 90°：换个说法。**只改描述，盒子一点没动。**
+  Detection aligned = detection;
+  aligned.yaw_rad = detection.yaw_rad + (difference > 0.0 ? -M_PI / 2.0 : M_PI / 2.0);
+  std::swap(aligned.length_m, aligned.width_m);
+  return aligned;
+}
+
 Eigen::Vector2d Tracker::AnchorOffset(
   double yaw_rad, double deficit_long_m, double deficit_lat_m, const Eigen::Vector2d & box_center,
   const Eigen::Vector2d & sensor_position)
@@ -115,20 +145,21 @@ Eigen::Vector2d Tracker::AnchorOffset(
 Eigen::Vector2d Tracker::CompletedCenter(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
-  if (!AxesConsistent(detection.yaw_rad, track.yaw_rad)) {
+  const Detection aligned = AlignedDetection(detection, track);
+  if (!AxesConsistent(aligned.yaw_rad, track.yaw_rad)) {
     return detection.position;
   }
   // 观测**小于**记忆：看不见的那截藏在背离传感器的一侧，把中心补回去。
-  return detection.position + AnchorOffset(
-                                detection.yaw_rad, track.length_m - detection.length_m,
-                                track.width_m - detection.width_m, detection.position,
-                                sensor_position);
+  return aligned.position + AnchorOffset(
+                              aligned.yaw_rad, track.length_m - aligned.length_m,
+                              track.width_m - aligned.width_m, aligned.position, sensor_position);
 }
 
 Eigen::Vector2d Tracker::TrackAnchorShift(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
-  if (!AxesConsistent(detection.yaw_rad, track.yaw_rad)) {
+  const Detection aligned = AlignedDetection(detection, track);
+  if (!AxesConsistent(aligned.yaw_rad, track.yaw_rad)) {
     return Eigen::Vector2d::Zero();
   }
   // 观测**大于**记忆：目标露出了更多，说明航迹此前那个位置是按**更小的盒子**
@@ -140,8 +171,8 @@ Eigen::Vector2d Tracker::TrackAnchorShift(
   //    0.1 s 一帧 = **4.4 m/s 假速度**（实测峰值 4.641，真值 4.0）。
   //    只做 CompletedCenter 时速度判据在 0.967 / 1.109 之间抖（判据 1.0）。
   return AnchorOffset(
-    detection.yaw_rad, detection.length_m - track.length_m, detection.width_m - track.width_m,
-    detection.position, sensor_position);
+    aligned.yaw_rad, aligned.length_m - track.length_m, aligned.width_m - track.width_m,
+    aligned.position, sensor_position);
 }
 
 void Tracker::Associate(
@@ -200,7 +231,8 @@ void Tracker::ApplyUpdate(
   // ⚠️ 顺序要紧：补全与轴向判断都要用**更新前**的 track（它才有记忆里的尺寸
   //    与上一帧的轴向）。先把 yaw/尺寸写回去的话，补全量恒为零，整节失效
   //    —— 而且不会报错，只是安静地退回旧行为。
-  const bool axes_consistent = AxesConsistent(detection.yaw_rad, track->yaw_rad);
+  const Detection aligned = AlignedDetection(detection, *track);
+  const bool axes_consistent = AxesConsistent(aligned.yaw_rad, track->yaw_rad);
   const Eigen::Vector2d measurement = CompletedCenter(detection, *track, sensor_position);
   // 重新锚定：只挪**位置**，不动速度也不动协方差 —— 这是一次坐标改写，
   // 不是一次观测。改协方差等于宣称"我对位置更不确定了"，而事实相反。
@@ -228,17 +260,29 @@ void Tracker::ApplyUpdate(
   track->covariance =
     factor * track->covariance * factor.transpose() + gain * measurement_noise * gain.transpose();
 
-  track->yaw_rad = detection.yaw_rad;
+  track->yaw_rad = aligned.yaw_rad;
   if (axes_consistent) {
     // 记住已观测到的最大值：**"我至少看到过这么大"是一个物理上单调的事实**，
     // 而"这一帧看到多少"随遮挡起伏。上限见 max_extent_m 的注释。
-    track->length_m = std::min(params_.max_extent_m, std::max(track->length_m, detection.length_m));
-    track->width_m = std::min(params_.max_extent_m, std::max(track->width_m, detection.width_m));
+    track->length_m = std::min(params_.max_extent_m, std::max(track->length_m, aligned.length_m));
+    track->width_m = std::min(params_.max_extent_m, std::max(track->width_m, aligned.width_m));
+    // ⚠️ 归一化成 length ≥ width，**必须做**：合并之后"宽"可能已经超过"长"
+    //    （远处只看得见车头 ⟹ 记忆是 1.8 × 0.1，等侧面露出来"宽"长到 4.4）。
+    //    不归一化的话 ClassifyBySize 拿 length = 1.8 去比 vehicle_min_length = 2.5
+    //    ⟹ 一辆量得完全正确的车被判成 UNKNOWN。ResolveHeading 同样假定
+    //    yaw 是长轴 —— 不换的话 180° 消歧会绕着**车宽**那条轴做，必然错。
+    //    位置此前已经锚定好了，这里只是换个说法，盒子没动。
+    if (track->width_m > track->length_m) {
+      std::swap(track->length_m, track->width_m);
+      track->yaw_rad = ads_common::normalize_angle(track->yaw_rad + M_PI / 2.0);
+    }
   } else {
-    // 轴向翻了 ⟹ 记忆里的"长"和当帧的"长"根本不是同一条轴，合并会沿错误的
-    // 轴外扩。此时**丢掉记忆重新开始**，而不是硬凑 —— 宁可退回旧行为。
-    track->length_m = detection.length_m;
-    track->width_m = detection.width_m;
+    // 换算之后仍然差 20° 以上 ⟹ 目标是**真的转了**（或者拟合坏了），
+    // 记忆里的尺寸不再对应同一条轴。此时丢掉记忆重新开始，宁可退回旧行为。
+    // ⚠️ 注意这里已经**不是**在处理 90° 翻转了 —— 那一档由 AlignedDetection
+    //    化解掉了。留着这条分支是给"目标真的在转弯"用的。
+    track->length_m = aligned.length_m;
+    track->width_m = aligned.width_m;
   }
   track->height_m = detection.height_m;
   ++track->hits;
