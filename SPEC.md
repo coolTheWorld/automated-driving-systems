@@ -1,7 +1,7 @@
 # SPEC — 园区/工业场景自动驾驶系统
 
 > 状态：**基线已确认，可开工**（P0 起进入实施）
-> 创建日期：2026-07-30　|　最后更新：2026-07-30（ROS 版本改为 Jazzy，CARLA 升至 0.9.16）
+> 创建日期：2026-07-30　|　最后更新：2026-08-12（话题名对账、P5 行、测试体系标注；上一版 2026-07-30）
 > 目标读者：项目开发者（无人驾驶初学者）+ 未来接手的工程师/AI Agent
 
 ---
@@ -93,20 +93,20 @@
 ┌───────────────┐    ┌──────────────┐                        │
 │  ads_map      │    │ ads_localiz. │                        │
 │  OpenDRIVE    │───▶│ NDT + EKF    │                        │
-│  车道图/路由   │    │ → /ego_pose  │                        │
+│  车道图/路由   │    │ → /localization/pose │                        │
 └───────┬───────┘    └──────┬───────┘                        │
         │                   │                                │
         │            ┌──────▼────────┐                       │
         │            │ ads_perception│                       │
         │            │ 点云滤波→聚类  │                       │
         │            │ →检测→跟踪     │                       │
-        │            │ → /objects    │                       │
+        │            │ → /perception/obstacles │                       │
         │            └──────┬────────┘                       │
         │                   │                                │
         │            ┌──────▼────────┐                       │
         │            │ ads_prediction│                       │
         │            │ 意图+轨迹预测  │                       │
-        │            │ → /predicted  │                       │
+        │            │ → /prediction/trajectories │                       │
         │            └──────┬────────┘                       │
         │                   │                                │
         └──────────┬────────┘                                │
@@ -593,13 +593,16 @@ ros2 launch ads_bringup stack.launch.py sim:=bag bag:=logs/xxx   # 离线回放
 # 注意：切换仿真源只改 sim 参数，算法节点配置完全不变
 
 # ---------- 场景测试 ----------
-ros2 launch ads_bringup scenario.launch.py sim:=gazebo scenario:=S05   # 跑单个场景
-./scripts/run_all_scenarios.sh gazebo                  # L3-G 全场景（CI 用）
-./scripts/run_all_scenarios.sh carla                   # L3-C 全场景（验收用）
+# ⚠️ 以下三条是 P8 才建的场景测试体系，**当前不存在**（2026-08-12 对账标注——
+#    此前没有任何未实现标记，读者会以为能跑）。当前的闭环验收走
+#    scripts/record_*_run.py 一族，见 CLAUDE.md「闭环实测」。
+ros2 launch ads_bringup scenario.launch.py sim:=gazebo scenario:=S05   # 【P8】跑单个场景
+./scripts/run_all_scenarios.sh gazebo                  # 【P8】L3-G 全场景（CI 用）
+./scripts/run_all_scenarios.sh carla                   # 【P8】L3-C 全场景（验收用）
 ./scripts/check_sim_consistency.sh                     # 两环境一致性测试
 
 # ---------- 调试 ----------
-ros2 topic list / ros2 topic hz /objects / ros2 topic echo /ego_pose
+ros2 topic list / ros2 topic hz /perception/obstacles / ros2 topic echo /localization/pose
 ros2 node info /planning_node
 ros2 run rqt_graph rqt_graph                           # 看节点连接图
 rviz2 -d src/ads_visualization/rviz/default.rviz
@@ -667,6 +670,9 @@ double compute_steering(double cross_track_error_m,
 - 几何：多边形碰撞检测的边界情况（相切、包含、退化）
 
 **覆盖率目标：算法库（`lib/`）行覆盖 > 80%**
+（⚠️ 2026-08-12 对账标注：这是**目标值，当前没有任何机制在量它** ——
+仓库里无 gcov/lcov 配置，CI 无覆盖率步骤。按本项目自己的纪律，
+一条没人量的判据比没有判据更危险，所以在此明示；机制建于 P8。）
 
 ### L2 模块测试（launch_testing，秒级）
 
@@ -838,8 +844,8 @@ Windows 宿主为 **AMD Radeon 780M**（RDNA3 核显，UMA 共享内存，无 CU
 | **P1** | A | `ads_common` + `ads_map`：坐标变换、OpenDRIVE 解析、路由 | RViz 中显示车道图和 A→B 全局路径 |
 | **P2** ✅ | A | `ads_control`：Stanley + 速度剖面 + 速度环 PI（**已完成** 2026-08-03） | 车辆沿预设路径自动行驶：**560 m 含路口弯的路线，最大横向误差 0.080 m、终点停车误差 0.327 m**（CP-P2-B 8/8） |
 | **P3** ✅ | A | `ads_planning` 运动规划：Frenet 采样（**已完成** 2026-08-04） | 遇静态障碍物自动绕行**或停住**：贴边锥桶侧向间距 **0.532 m**（判据 > 0.5）、车道中心锥桶几何无解时停住且报不可行、无障碍物回归 CP-P2-B **8/8**（CP-P3-B 3 场景） |
-| **P4** ✅ | A | `ads_localization`：ESKF + NDT（**已完成** 2026-08-10） | 关闭真值定位，用传感器自主定位行驶：**横向误差 0.129 / 0.087 m**（判据 0.30）、航向 0.46° / 0.68°（判据 2.0）、NDT 单帧 37.5 / 44.3 ms（判据 100），且估计位姿下 CP-P2-B 仍 **8/8**（CP-P4-B 连跑两轮 7/7） |
-| **P5** | A→B | `ads_perception`：点云检测 + 跟踪 | RViz 中显示动态障碍物框和轨迹。⚠️ **A、B 两半分两次交付**：P5 本身只做 Gazebo（本机无法跑 CARLA，且本表下方的注就是这个顺序），CARLA 那一半随 P0b 一起、并入 P8 云端验收 |
+| **P4** ✅ | A | `ads_localization`：ESKF + NDT（**已完成** 2026-08-10） | 关闭真值定位，用传感器自主定位行驶：**横向误差 0.129 / 0.087 m**（判据 0.30）、航向 0.46° / 0.68°（判据 2.0）、NDT 单帧 37.5 / 44.3 ms（判据 100），且估计位姿下 CP-P2-B 仍 **8/8**（CP-P4-B 连跑两轮 7/7；2026-08-12 复检修复失锁恢复死代码后**六轮全过**，横向 0.094–0.111 m） |
+| **P5** ✅ | A→B | `ads_perception`：点云检测 + 跟踪（**Gazebo 半已完成** 2026-08-12） | 关闭真值障碍物，规划器吃真感知仍绕/停达标（CP-P5-B 九组 + 复检后扩窗协议：检测率 100%、近边误差 0.115–0.131 m（判据 0.5）、遮挡后 ID 保持实测通过、单帧 5 ms）。⚠️ CARLA 那一半随 P0b 并入 P8；近距交会欠分割幻影挂 P6 前置（见 tasks/todo.md） |
 | **P6** | A | `ads_prediction`：轨迹预测 | 显示他车未来 3 s 预测轨迹 |
 | **P7** | A | `ads_planning` 行为决策：行为树 | 跟车、让行、路口通行 |
 | **P8** | A+B | 场景测试体系 + CI | L3-G 进 CI 自动跑；L3-C 云端验收通过 |

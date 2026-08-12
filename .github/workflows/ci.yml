@@ -5,14 +5,14 @@
 #
 #  1. GitHub Actions 的免费 runner 没有 GPU，跑 Gazebo 只能软件渲染（llvmpipe），
 #     RTF 会掉到 0.1 以下，任何带时间判据的测试都不可信。
-#  2. **现阶段根本没有 L3 场景测试可跑。** S5 只做了 L1 样板，L3 要等 P2 有了
-#     「规划→控制→车动起来」的闭环才有意义。
+#  2. ~~现阶段没有 L3~~ **L3-G 不需要 GPU**，已随 colcon test 进本流水线，
+#     并有第四道存在性守卫盯着它「确实跑了」。（2026-08-12 更新，原注释烂尾）
 #
 #  所以现在跑的是"不需要仿真器就能验证的一切"：构建、lint、L1 单元测试、
 #  生成物同步检查。这四项覆盖了绝大多数回归，且全程分钟级。
 #
-#  ⚠️ 等 P2 有了 L3-G 场景测试，要把它加进来 —— CLAUDE.md 里说的
-#  「本地 Gazebo 能进 CI 是双环境方案最被低估的收益」指的就是那一步。
+#  CLAUDE.md 说的「本地 Gazebo 能进 CI 是双环境方案最被低估的收益」已经兑现：
+#  六个 launch 测试（四个 L3-G 闭环 + 两个行为测试）都在这里跑。
 #  CARLA 永远进不了 CI（要 GPU、20 GB 镜像、跑不确定）。
 #
 #  ## 为什么用项目自己的 Dockerfile 而不是 action-ros-ci 之类的社区 action
@@ -87,7 +87,7 @@ jobs:
             python3 scripts/gen_vehicle_model.py --check
 
       # ---------------------------------------------------------------------
-      # 同理，地图也有三个生成物：maps/campus.xodr（两环境共用的车道语义）、
+      # 同理，地图有五个生成物（P4 加了路侧结构与先验点云）：maps/campus.xodr（两环境共用的车道语义）、
       # models/campus_road/model.sdf（Gazebo 里看到的路面）、
       # src/ads_map/test/data/reference_samples.csv（C++ 逐点对账的基准）。
       #
@@ -114,6 +114,9 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
             ads-dev:jazzy \
             python3 scripts/gen_obstacles.py --check
+            # 第四个生成器（P5 动态目标模型）。自称"CI 用"却漏接，直到
+            # 2026-08-12 复检 —— npc/行人模型漂移会静默改变 P5 判据的被测场景。
+            python3 scripts/gen_dynamic_actors.py --check
 
       - name: 构建工作空间
         run: |
@@ -176,8 +179,21 @@ jobs:
               # **两个** L3-G：无障碍物的（回归基线）和带障碍物的（P3 唯一能进 CI
               # 的绕障验收）。后者尤其值得守 —— 它多依赖一个 obstacle_truth 节点
               # 和一份 obstacles.yaml，任何一环缺了最省事的失败方式仍然是"没生成结果文件"。
-              for NAME in test_closed_loop test_closed_loop_obstacle; do
-                L3G="build/ads_control/test_results/ads_control/test_${NAME}.py.xunit.xml"
+              # ⚠️ 2026-08-12 复检补全：此前只守 ads_control 的两个 ——
+              # P4/P5 的 L3-G「已进 CI」但恰好处在本守卫自己论证过的
+              # 无守卫暴露面上（launch 测试最省事的失败方式是没生成结果文件）。
+              # gazebo_bridge 看门狗与 ads_control 坏输入健壮性是复检后新增的
+              # 行为测试，一并守上。
+              for PAIR in \
+                  ads_control/test_closed_loop \
+                  ads_control/test_closed_loop_obstacle \
+                  ads_control/test_odom_robustness \
+                  ads_localization/test_closed_loop_localization \
+                  ads_perception/test_closed_loop_perception \
+                  gazebo_bridge/test_vehicle_cmd_bridge_watchdog; do
+                PKG="${PAIR%%/*}"
+                NAME="${PAIR##*/}"
+                L3G="build/${PKG}/test_results/${PKG}/test_${NAME}.py.xunit.xml"
                 if [ ! -f "${L3G}" ]; then
                   echo "✗ ${NAME} 没有结果文件 —— 它没跑，而不是它通过了。"
                   echo "  期望：${L3G}"
@@ -202,7 +218,10 @@ jobs:
               # ads_control 的历史是现成的反面教材：它的 CMakeLists 从 P2-S1 起
               # 就写着"verify_control.sh 会 ldd 这个 .so"，而那个脚本从没被写出来，
               # 整个 P2 期间这条约束只靠纪律维持 —— 直到 P2-S5 逐个 grep 才发现。
-              for pkg in ads_control ads_planning; do
+              # ⚠️ 2026-08-12 复检补全：四个含 lib/ 的包都注册了该 CTest，
+              # 此前只查两个 —— CLAUDE.md 声称"由 CTest 机械保证"，
+              # 而没人保证那个 CTest 还在。
+              for pkg in ads_control ads_planning ads_localization ads_perception; do
                 TAG=$(head -1 "build/${pkg}/Testing/TAG")
                 if ! grep -q "no_ros_dependencies" "build/${pkg}/Testing/${TAG}/Test.xml"; then
                   echo "✗ ${pkg} 的 no_ros_dependencies 校验没有出现在测试结果里 ——"
