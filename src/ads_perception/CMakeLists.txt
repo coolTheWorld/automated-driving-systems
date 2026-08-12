@@ -24,7 +24,9 @@ add_library(${PROJECT_NAME} SHARED
   src/ground_segmentation.cpp
   src/euclidean_cluster.cpp
   src/lshape_fit.cpp
-  src/size_classifier.cpp)
+  src/size_classifier.cpp
+  src/hungarian.cpp
+  src/tracker.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -83,6 +85,22 @@ if(BUILD_TESTING)
   #    解决这件事 —— 猜错的概率是 50%，而错了之后 P6 会预测出一条逆行轨迹。
   ament_add_gtest(test_lshape_fit test/test_lshape_fit.cpp)
   target_link_libraries(test_lshape_fit ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：匈牙利算法。
+  #
+  # ⚠️ 这个算法容易写错，而写错的表现是「大部分时候对、偶尔配错一对」。
+  #    所以判据必须与**穷举**对账（小规模全排列）——
+  #    与 ads_map 的 Dijkstra 用穷举脚本对账是同一条规矩。
+  ament_add_gtest(test_hungarian test/test_hungarian.cpp)
+  target_link_libraries(test_hungarian ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：多目标跟踪。
+  #
+  # ⚠️ 生命周期参数直接来自 S1 的实测（目标闪烁，命中率 33–74%），
+  #    所以判据必须在**带丢帧的**序列上跑 —— 每帧都命中的理想序列上，
+  #    「累计命中」与「连续命中」给出一样的结果，判据就没区分力了。
+  ament_add_gtest(test_tracker test/test_tracker.cpp)
+  target_link_libraries(test_tracker ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_perception.so 的 DT_NEEDED 里不许有 ROS 库。
   add_test(NAME no_ros_dependencies
