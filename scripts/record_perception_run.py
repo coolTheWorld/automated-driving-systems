@@ -120,6 +120,30 @@ CRITERION_MAX_RANGE_M = 30.0
 # **范围外的帧照样进 CSV**，只是不进判据。
 CRITERION_MIN_RANGE_M = 3.0
 
+# ---- 符号判据的两条机械排除（P6-S0 收口，2026-08-12 用户拍板） -------------
+#
+# 「速度符号错」考的是**稳定跟踪下的运动方向**。两类过渡帧里符号与真值反
+# 是系统设计的必然，不是符号 bug —— 判它等于判"KF 有没有零滞后"：
+#
+# ① **真值方向翻转过渡**（行人/NPC 的 U 转）：真值方向 180° 反转时 KF 滞后
+#    半秒量级，翻转沿途 dot < 0 物理上不可避免。排除条件按**真值**机械判：
+#    过去 1.0 s 内真值方向变化 > 45°。ODD 内最急的合法弯 R=12 m @ 4 m/s
+#    只有 v/R = 19°/s（1 s 内 19° < 45°，余量 2.4×），正常过弯**不会**被排除；
+#    U 转实测 ≥ 90°/s，必被排除。方向只在 |v| > 0.5（消歧门限同源）时采样。
+# ② **配对交接过渡**：配对的感知 id 变化后（交会互换/重复航迹摇摆/重建），
+#    新配对的 KF 速度要 ~0.5 s（5 帧）重新收敛 —— 与 max_misses 同窗。
+#    交接头 5 帧的符号是身份混叠，不是符号估计错。
+#
+# ⚠️ 两条都**只作用于符号判据**：速度/位置误差的分位数聚合一个样本都不动
+#    （p95 对个位数的过渡帧不敏感，动了反而是藏数据）。排除帧数照印 ——
+#    藏起来的话"排除"会悄悄变成"过滤"，而那正是 SPEC §11 禁的那类。
+#
+# 故障注入实测（2026-08-12，注入 = 把符号比较反转）：456/456 全部报错、
+# 判据 FAIL，两条排除只吃掉 18 + 55 个过渡帧 —— 排除**吞不掉**系统性符号 bug。
+SIGN_TURN_WINDOW_S = 1.0
+SIGN_TURN_EXCLUDE_DEG = 45.0
+SIGN_PAIRING_MIN_AGE = 5
+
 BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
@@ -237,6 +261,11 @@ class PerceptionScorer(Node):
         self.false_positives_in_lane = 0
         self.false_positives_out_of_range = 0
         self.false_positive_log = []
+        # 符号判据的两条机械排除（见 SIGN_* 常量的推导）
+        self.gt_dir_history = defaultdict(list)   # gt_id -> [(t, 方向 rad)]，只在 |v|>0.5 时记
+        self.pairing = {}                         # gt_id -> [感知 id, 同配对连续帧数]
+        self.sign_excluded_turn = 0
+        self.sign_excluded_handover = 0
         self.perceived_frames = 0
         # 刺激物自检（见 STIMULUS_* 常量上方的说明）
         self.stimulus_max_lift_m = 0.0
@@ -335,6 +364,23 @@ class PerceptionScorer(Node):
                 other is not gt and segment_intersects_box(ego, (gx, gy), other)
                 for other in truth[1].obstacles)
 
+            # 真值方向历史（符号判据排除 ① 用，推导见 SIGN_* 常量）。
+            # ⚠️ **每帧都记，与配没配上无关**：目标在 U 转期间恰好漏检、
+            #    转完立刻重现的话，只在配上时记的历史里没有转向样本，
+            #    排除条件恒假 —— 恰好在最需要它的工况下失效。
+            gvx, gvy = gt.velocity_mps.x, gt.velocity_mps.y
+            turning = False
+            if math.hypot(gvx, gvy) > 0.5:
+                cur_dir = math.atan2(gvy, gvx)
+                history = self.gt_dir_history[gt.id]
+                turning = any(
+                    abs((cur_dir - past_dir + math.pi) % (2.0 * math.pi) - math.pi)
+                    > math.radians(SIGN_TURN_EXCLUDE_DEG)
+                    for past_t, past_dir in history
+                    if t - past_t <= SIGN_TURN_WINDOW_S)
+                history.append((t, cur_dir))
+                del history[:max(0, len(history) - 40)]
+
             row = {
                 't_s': f'{t:.3f}',
                 'gt_id': gt.id,
@@ -369,6 +415,12 @@ class PerceptionScorer(Node):
                 #    配对逐帧在它们之间摇摆，看起来像"ID 在跳"。
                 'extra_within_match_m': '',
                 'second_match_dist_m': '',
+                # 真值速度与符号排除的取证列（P6-S0 收口加）：出了「符号错」
+                # 要能离线复算它属不属于两条排除，而不是重跑一轮。
+                'gt_vx_mps': f'{gvx:.3f}',
+                'gt_vy_mps': f'{gvy:.3f}',
+                'gt_turning': int(turning),
+                'pairing_age': '',
             }
             # 落在配对半径内的**全部**感知目标（不只最近那个）
             nearby = sorted(
@@ -400,7 +452,6 @@ class PerceptionScorer(Node):
                 row['perceived_hgt_m'] = f'{obstacle.size_m.z:.3f}'
                 row['near_edge_err_m'] = (
                     f'{distance_to_box(ego, obstacle) - distance_to_box(ego, gt):.3f}')
-                gvx, gvy = gt.velocity_mps.x, gt.velocity_mps.y
                 pvx, pvy = obstacle.velocity_mps.x, obstacle.velocity_mps.y
                 row['velocity_error_mps'] = f'{math.hypot(pvx - gvx, pvy - gvy):.3f}'
                 # ⚠️ 符号**单独判**：符号反了大小照样对，而 P7 会因此
@@ -410,8 +461,21 @@ class PerceptionScorer(Node):
                 #    不做消歧（heading_min_speed_mps 的推导）——刚（重）建的
                 #    航迹速度未成熟，那几帧的符号是噪声，判它等于判
                 #    "初始化是不是瞬间完成"，而那不是符号判据要考的。
+                # ⚠️ 另有两条机械排除（U 转过渡 / 配对交接），推导见 SIGN_* 常量。
+                pairing = self.pairing.get(gt.id)
+                if pairing is not None and pairing[0] == obstacle.id:
+                    pairing[1] += 1
+                else:
+                    pairing = [obstacle.id, 0]
+                    self.pairing[gt.id] = pairing
+                row['pairing_age'] = pairing[1]
                 if math.hypot(gvx, gvy) > 0.5 and math.hypot(pvx, pvy) > 0.5:
-                    row['velocity_sign_ok'] = int(pvx * gvx + pvy * gvy > 0.0)
+                    if turning:
+                        self.sign_excluded_turn += 1
+                    elif pairing[1] < SIGN_PAIRING_MIN_AGE:
+                        self.sign_excluded_handover += 1
+                    else:
+                        row['velocity_sign_ok'] = int(pvx * gvx + pvy * gvy > 0.0)
                 self.assigned_ids[gt.id].append(obstacle.id)
             self.rows.append(row)
 
@@ -565,8 +629,11 @@ class PerceptionScorer(Node):
         signed = [r for r in detected if r['velocity_sign_ok'] != '']
         if signed:
             wrong = sum(1 for r in signed if int(r['velocity_sign_ok']) == 0)
+            # 排除数照印：排除一旦不可见就会悄悄变成过滤（SPEC §11 禁的那类）。
             print(f'{"速度符号错的样本":<34}{wrong:>10}   == 0        '
-                  f'{"PASS" if wrong == 0 else "FAIL"}  n={len(signed)}')
+                  f'{"PASS" if wrong == 0 else "FAIL"}  n={len(signed)}'
+                  f'   (排除: U转过渡 {self.sign_excluded_turn}、'
+                  f'配对交接 {self.sign_excluded_handover})')
             ok = ok and wrong == 0
         # ⑤ ID 切换 —— 在适用范围内重新统计（self.assigned_ids 是全距离的）
         # ⚠️ 中断超过「删除窗口 + 遮挡滑行上限」（0.5 + 3.0 = 3.5 s）后重入，
