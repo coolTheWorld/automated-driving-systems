@@ -199,6 +199,8 @@ SPEC §5 列出的其余包（`ads_prediction` 等）**尚未创建**，
 给的是**轴向**不是朝向）、`size_classifier`、`hungarian`（O(n³)，**禁用配对要用
 有限大数不能用 inf** —— `inf−inf=NaN` 会死循环）、`tracker`（恒速 KF + 匈牙利关联 +
 航迹生命周期 + **包围盒补全/重锚/去重**）。
+推导、参数与边界见 [docs/modules/perception.md](docs/modules/perception.md)，**改这个模块前先读它**。
+其中 §0 那张表最要紧：**P5 的四个根因没有一个在最初怀疑的地方**。
 ⚠️ `tracker` 里三条实测结论极反直觉，改它之前先读 `tracker.hpp` 的文件头：
 **滤包围盒中心是错的**（中心不是目标身上的固定点，随观测几何漂移 2.2 m，
 卡尔曼会把它读成 8.8 m/s 的假速度）、**L-Shape 的「长/宽」命名与目标无关**
