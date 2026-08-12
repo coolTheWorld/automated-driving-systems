@@ -184,6 +184,13 @@ if(BUILD_TESTING)
       FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
       ROS_DOMAIN_ID=42)
 
+  # 坏输入健壮性：NaN /odom 不许把节点炸死（2026-08-12 复检确认的缺陷的守卫）。
+  # 只起 control_node、墙钟、几秒跑完 —— 不需要 GPU，进 CI。
+  add_launch_test(test/test_odom_robustness.py
+    TIMEOUT 60
+    ENV
+      ROS_DOMAIN_ID=46)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——

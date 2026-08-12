@@ -379,11 +379,24 @@ public:
         "精度到不了 SPEC §1 的 0.3 m（那正是要做 NDT 的理由）");
     } else {
       try {
-        ndt_map_ = std::make_unique<ads_localization::NdtGrid>(
-          ads_localization::LoadPcdAscii(map_path), grid_params);
+        // 只读一次盘，精/粗两个网格从同一份点云构造。
+        const std::vector<Eigen::Vector3d> map_cloud = ads_localization::LoadPcdAscii(map_path);
+        ndt_map_ = std::make_unique<ads_localization::NdtGrid>(map_cloud, grid_params);
+        // ⚠️⚠️ **粗网格的构造曾经整个缺失**（2026-08-12 复检发现）：上面那一大段
+        //    注释推导了 coarse_params 该怎么取，参数也声明了，唯独没有这一行 ——
+        //    于是 on_cloud 里 `ndt_coarse_map_ && …` 恒为假，开机 bootstrap 与
+        //    失锁恢复**整条是死代码**。L1 用例全绿（它们自己构造粗网格），
+        //    节点侧却零功能。CP-P4-B 的「恢复实测 0 次触发」当时被归因为
+        //    「粗网格同样退化」—— 那个归因是错的：粗配准从未执行过，
+        //    `coarse.degenerate` 根本没被观测过。
+        //    教训：**参数声明得再讲究，也证明不了消费它的对象存在。**
+        ndt_coarse_map_ = std::make_unique<ads_localization::NdtGrid>(map_cloud, coarse_params);
         RCLCPP_INFO(
-          get_logger(), "点云地图已载入：%zu 个非空体素（稀疏丢弃 %zu，退化修正 %zu）",
-          ndt_map_->size(), ndt_map_->discarded_sparse_voxels(), ndt_map_->regularized_voxels());
+          get_logger(),
+          "点云地图已载入：精网格 %zu 个非空体素（稀疏丢弃 %zu，退化修正 %zu），"
+          "粗网格 %zu 个（恢复/自举用）",
+          ndt_map_->size(), ndt_map_->discarded_sparse_voxels(), ndt_map_->regularized_voxels(),
+          ndt_coarse_map_->size());
       } catch (const std::exception & e) {
         // 地图载入失败必须**大声报**。静默降级的症状是「定位怎么调都到不了
         // 0.3 m」，而没人想到 NDT 根本没在跑。
@@ -604,10 +617,19 @@ private:
           guess = coarse.pose;
           used_coarse = true;
           ++recovery_attempts_;
-          RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 3000,
-            "NDT 已连续 %d 帧被拒，用粗网格重定初值（累计 %ld 次）", consecutive_ndt_failures_,
-            recovery_attempts_);
+          if (bootstrapping) {
+            // 开机自举是**预期路径**，用 INFO 不用 WARN —— 否则每次启动都刷
+            // 5 条告警，真正的失锁恢复反而被淹没在里面。
+            RCLCPP_INFO(
+              get_logger(), "开机自举：第 %d/%d 帧粗→精（粗配准位移 %.3f m）", ndt_frames_ + 1,
+              bootstrap_coarse_frames_,
+              (coarse.pose.translation() - filter_prediction.translation()).norm());
+          } else {
+            RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 3000,
+              "NDT 已连续 %d 帧被拒，用粗网格重定初值（累计 %ld 次）", consecutive_ndt_failures_,
+              recovery_attempts_);
+          }
         }
       }
       result = ads_localization::AlignNdt(*ndt_map_, scan, guess, ndt_params_);

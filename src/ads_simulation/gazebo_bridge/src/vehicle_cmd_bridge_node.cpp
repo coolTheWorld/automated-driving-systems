@@ -130,20 +130,27 @@ private:
 
   void on_cmd(const ads_msgs::msg::VehicleCmd::ConstSharedPtr msg)
   {
-    last_cmd_time_ = now();
-
     // ---- 任务 4.3：指令限幅 ----
     // 上游发什么都得挡住。控制器有 bug、参数没调好、消息里是 NaN ——
     // 这些都会发生，而 bridge 是最后一道能拦住它的地方。
 
     // NaN 必须单独判：NaN 参与任何比较都返回 false，clamp 会原样放行，
     // 一路传到 Gazebo 让物理引擎解算出 NaN 位姿，车直接消失。
+    //
+    // ⚠️⚠️ **被丢弃的指令不许喂狗**（2026-08-12 复检发现的缺陷）：
+    //    原来 `last_cmd_time_ = now()` 是本函数第一行，于是上游持续发 NaN 时
+    //    （本仓库已实际发生过两次的故障形态），每条被丢弃的坏指令都在刷新
+    //    看门狗，0.5 s 超时永不触发，车以**闩存的旧指令**加速到限速一直开 ——
+    //    恰是看门狗注释声称要防止的后果。语义上，持续 NaN 流等价于失联：
+    //    没有任何**有效**指令到达，就该按失联刹停。
+    //    所以喂狗挪到校验之后：只有真指令才算「联系还在」。
     if (!std::isfinite(msg->steer_angle_rad) || !std::isfinite(msg->accel_mps2)) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 1000, "收到非有限的指令（转角 %.3f，加速度 %.3f），已丢弃",
         msg->steer_angle_rad, msg->accel_mps2);
       return;
     }
+    last_cmd_time_ = now();
 
     const double steer_raw = msg->steer_angle_rad;
     steer_rad_ = clamp(steer_raw, -max_steer_rad_, max_steer_rad_);

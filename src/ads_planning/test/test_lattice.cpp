@@ -468,3 +468,24 @@ TEST(Lattice, ZeroSizeObstacleIsAcceptedRatherThanRejected)
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+//  ⚠️ margin=0 后门（2026-08-12 复检堵上的）
+// ---------------------------------------------------------------------------
+TEST(Lattice, RejectsZeroSafetyMarginOutright)
+{
+  // ⚠️ 这不是普通的参数校验用例。margin=0 曾经是**合法取值**（require_non_negative
+  //    放行），而 distance_m() 对重叠的 OBB 返回 0.0 ⟹ 准入判据 `0.0 < 0.0`
+  //    恒为假 ⟹ **撞上去的候选不被淘汰** —— 一个伪装成阈值的碰撞检查关闭开关，
+  //    SPEC §11 明令禁止的东西。
+  //
+  //    防线有两道：① 这里钉死的 require_positive；② 准入处与 margin 无关的
+  //    `min_clearance_m <= 0.0` 硬性淘汰。② 在 ① 存在时**不可达**（任何正
+  //    margin 都先拦住重叠），无法用常规用例覆盖 —— 它防的是 ① 被改掉的未来。
+  //    注入实测（2026-08-12）：把 ① revert 回 non_negative ⟹ 本用例红。
+  const ReferenceLine line = MakeStraightLine();
+  LatticeParams params = MakeParams();
+  params.safety_margin_m = 0.0;
+  EXPECT_THROW(ads_planning::plan_lateral(line, AtOrigin(), {}, params), std::invalid_argument)
+    << "margin=0 被放行了 —— 碰撞准入可以被配置关掉（SPEC §11 禁止）";
+}

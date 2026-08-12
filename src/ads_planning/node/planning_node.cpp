@@ -72,6 +72,10 @@ public:
     params_.lattice.resample_step_m = declare_parameter<double>("trajectory.resample_step_m");
     params_.lattice.safety_margin_m = declare_parameter<double>("safety.margin_m");
     params_.stop_margin_m = declare_parameter<double>("safety.stop_margin_m");
+    // 障碍物列表多久没更新就算过期，s。取 1.0 = 感知标称周期（0.1 s）的 10 倍：
+    // 感知自己的航迹删除窗口是 0.5 s（max_misses），1.0 s 已是整条流水线死透。
+    // 调小到 0.2 → 感知偶发慢一拍就误刹；调大到 5 → 动态目标按 20 m 前的位置判碰撞。
+    obstacle_timeout_s_ = declare_parameter<double>("safety.obstacle_timeout_s", 1.0);
     params_.lattice.weight_offset = declare_parameter<double>("cost.weight_offset");
     params_.lattice.weight_curvature = declare_parameter<double>("cost.weight_curvature");
     params_.lattice.weight_clearance = declare_parameter<double>("cost.weight_clearance");
@@ -199,6 +203,37 @@ private:
       return;
     }
 
+    // ---- 障碍物过期检查（2026-08-12 复检补上的缺口）------------------------
+    //
+    // ⚠️ 原来这里什么都没有：回调只存指针、header.stamp 从未被读。
+    //    感知进程死掉后，规划器**永远**拿着冻结的障碍物列表做碰撞检查 ——
+    //    P5 起有 4 m/s 的动态目标，冻结 1 s = 按 4 m 前的位置判碰撞。
+    //    对比：control_node 对 /odom 有超时降级，这里却对 /perception/obstacles
+    //    没有 —— 同一类输入失效，两种待遇。
+    //
+    // 过期 ⟹ **不发轨迹**（与"规划抛异常"同一条降级路径）：下游 control_node
+    // 落进 NO_PATH 分支刹停并保持。不选"继续按旧障碍物规划"—— 那是拿过期
+    // 数据继续开；也不选"当没有障碍物"—— 那更糟。
+    //
+    // ⚠️ **从未收到过任何 ObstacleArray 时不判**（obstacles_ 为空指针直接放行）。
+    //    这不是疏忽是边界：CP-P2-B 回归基线（obstacles:=none dynamic:=none）
+    //    里整个话题**没有发布者**，那一跑必须照常规划。「链路存在但断了」
+    //    与「链路本来就不存在」是两回事，前者才是故障。
+    //    代价（如实记）：感知**从启动起就没发过一条**的场景抓不到 ——
+    //    那看起来与基线跑一模一样。要区分得靠 launch 层告诉规划器
+    //    「这一跑该有感知」，P6 接 /perception 进规划闭环时一并做。
+    if (obstacles_) {
+      const double age_s = (now() - rclcpp::Time(obstacles_->header.stamp)).seconds();
+      if (age_s > obstacle_timeout_s_) {
+        publish_diagnostics(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "障碍物列表已 " + std::to_string(age_s) +
+            " s 没有更新 —— 感知/真值链路死了？本周期不发轨迹（下游会刹停）",
+          {});
+        return;
+      }
+    }
+
     const ads_common::Pose2D ego_pose{
       ego.transform.translation.x, ego.transform.translation.y,
       tf2::getYaw(ego.transform.rotation)};
@@ -298,6 +333,7 @@ private:
 
   std::unique_ptr<ads_common::ReferenceLine> reference_line_;
   ads_msgs::msg::ObstacleArray::SharedPtr obstacles_;
+  double obstacle_timeout_s_{1.0};
   /// 上一周期的横向选择，喂给代价函数的一致性项。换路径时必须清空。
   std::optional<double> previous_offset_m_;
   /// 最近点投影的局部搜索提示。**不是性能优化是正确性要求** ——

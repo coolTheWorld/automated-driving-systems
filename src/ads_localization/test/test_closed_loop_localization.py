@@ -242,6 +242,18 @@ class TestLocalizationClosedLoop(unittest.TestCase):
             rejected, 0,
             f'新息门限拒了 {rejected} 帧 —— 要么真锁错了，要么阈值太紧在误杀好帧')
 
+        # ---- ③b 开机自举必须真的执行过 ----
+        # ⚠️ 这条守着一个已经发生过的缺陷（2026-08-12 复检发现）：粗网格的
+        #    参数推导、声明、消费代码全都在，唯独**构造那一行缺失** ——
+        #    ndt_coarse_map_ 恒为空指针，bootstrap 与失锁恢复整条是死代码，
+        #    而 L1 用例全绿（它们自己构造粗网格）、本测试当时也全绿。
+        #    「参数声明得再讲究，也证明不了消费它的对象存在」——
+        #    所以这里机械地断言自举计数，而不是相信代码结构。
+        recovery = int(float(self.diagnostics[-1]['ndt_recovery_attempts']))
+        self.assertGreaterEqual(
+            recovery, 1,
+            '开机自举一次都没执行 —— ndt_coarse_map_ 是不是又没被构造？')
+
         # ---- ④ map→odom 只许有**一个**发布者 ----
         # SPEC §3.3。这条**必须机械地查**，不能指望从数值上看出来 ——
         # 实测（本文件的故障注入 C）：再挂一个静态 map→odom，末段位置误差

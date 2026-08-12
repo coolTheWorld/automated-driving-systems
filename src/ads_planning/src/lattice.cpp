@@ -66,7 +66,13 @@ void validate(const LatticeParams & params, const std::vector<Rectangle> & obsta
     throw std::invalid_argument("plan_lateral: min_horizon_m 大于 max_horizon_m");
   }
   require_positive(params.resample_step_m, "resample_step_m");
-  require_non_negative(params.safety_margin_m, "safety_margin_m");
+  // ⚠️ margin 必须**严格为正**（2026-08-12 复检堵上的后门）：
+  //    原来是 require_non_negative —— 而 distance_m() 对**重叠**的 OBB 返回 0.0，
+  //    于是 margin=0 时准入判据 `0.0 < 0.0` 恒为假，**撞上去的候选不被淘汰**。
+  //    这实质上是「可被配置关掉的碰撞检查」（SPEC §11 明令禁止），
+  //    只是关闭开关伪装成了一个合法的阈值取值。margin=0（车体擦着障碍物过）
+  //    不是任何 ODD 允许的行为，没有合法使用场景。
+  require_positive(params.safety_margin_m, "safety_margin_m");
   require_positive(params.vehicle_length_m, "vehicle_length_m");
   require_positive(params.vehicle_width_m, "vehicle_width_m");
   require_non_negative(params.rear_overhang_m, "rear_overhang_m");
@@ -254,7 +260,12 @@ LatticeResult plan_lateral(
       }
 
       // **准入条件，不是代价项**：不满足直接淘汰，不允许"够便宜就擦着过"。
-      if (min_clearance_m < params.safety_margin_m) {
+      //
+      // ⚠️ 重叠（<= 0）单独一道**与 margin 无关**的硬性淘汰：即使上面那条
+      //    require_positive 哪天被谁改回去，撞上去的候选也过不了这里。
+      //    碰撞检查不许有任何参数取值能把它关掉（SPEC §11），
+      //    所以防线要有一道不吃参数的。
+      if (min_clearance_m <= 0.0 || min_clearance_m < params.safety_margin_m) {
         ++result.blocked_count;
         continue;
       }

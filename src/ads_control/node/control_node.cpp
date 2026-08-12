@@ -355,6 +355,22 @@ private:
     // 横摆角速度只有一个用途：算**实测**横向加速度 |v·ω| 报进 diagnostics。
     // 它不进任何控制律 —— 控制律用的是参考路径的量，加进来会把
     // 「跟得准不准」和「路弯不弯」搅在一起。
+    // ⚠️ 必须先 isfinite 再入库（2026-08-12 复检补上的缺口）。
+    //    原来这里原样存入：一条含 NaN/±inf 车速的消息在下一拍进到
+    //    stanley_->update()，lib 的 RequireFinite 抛 std::invalid_argument，
+    //    异常穿出定时器回调与 spin，被 main 接住 → FATAL「启动失败」+ exit(1)
+    //    —— **整个控制节点死掉**，而不是降级刹停。degrade() 分支同样喂 lib，
+    //    连降级路径都救不了。lib 抛异常的设计前提是**调用方接住**（本节点对
+    //    /planning/trajectory 就接了，对 /odom 却没有 —— 处理不对称）。
+    //
+    //    对策与 bridge 的指令校验同构：坏样本**丢弃**（不更新 last_odom_time_），
+    //    持续坏由既有的里程计超时降级兜底 —— 那正是它存在的意义。
+    if (!std::isfinite(msg->twist.twist.linear.x) || !std::isfinite(msg->twist.twist.angular.z)) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000, "收到非有限的 /odom（v=%.3f ω=%.3f），已丢弃",
+        msg->twist.twist.linear.x, msg->twist.twist.angular.z);
+      return;
+    }
     measured_speed_mps_ = msg->twist.twist.linear.x;
     measured_yaw_rate_radps_ = msg->twist.twist.angular.z;
     last_odom_time_ = now();

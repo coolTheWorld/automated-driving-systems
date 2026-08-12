@@ -114,6 +114,18 @@ if(BUILD_TESTING)
   set(ament_cmake_clang_format_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../../.clang-format)
 
   ament_lint_auto_find_test_dependencies()
+
+  # 看门狗行为测试：**不需要 Gazebo**（节点用墙钟，测试直接喂 /vehicle_cmd）。
+  # 守着「被丢弃的 NaN 指令不许喂狗」—— check_vehicle_cmd.py 抓不到它，
+  # 理由见测试文件头。这是本包第一个行为测试（此前只有 lint）。
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_vehicle_cmd_bridge_watchdog.py
+    TIMEOUT 60
+    ENV
+      # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，
+      #    分配表：ads_control 41/42、ads_localization 43、ads_perception 44、
+      #    gazebo_bridge 45。
+      ROS_DOMAIN_ID=45)
 endif()
 
 ament_package()
