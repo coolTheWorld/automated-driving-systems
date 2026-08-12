@@ -78,7 +78,7 @@
             </vertical>
           </scan>
           <range>
-            <min>0.5000</min>
+            <min>2.2000</min>
             <max>50.0000</max>
             <!-- 距离量化步长。真实雷达受 ADC 位数限制，这里给 1 cm。 -->
             <resolution>0.01</resolution>

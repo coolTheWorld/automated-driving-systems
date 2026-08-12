@@ -262,7 +262,27 @@ public:
     const Detection & detection, const Track & track,
     const Eigen::Vector2d & sensor_position) const;
 
+  /// 观测**大于**航迹已知尺寸时，航迹位置需要挪多少才算按新盒子重新锚定。
+  ///
+  /// 与 `CompletedCenter` 是同一件事的两半：一个补观测、一个补航迹。
+  /// 近边没动而盒子变长时，中心的位移是**重新锚定**不是运动 ——
+  /// 不补的话卡尔曼会把它读成速度（实测一帧 4.4 m/s，真值 4.0）。
+  ///
+  /// @param detection       本帧检测
+  /// @param track           航迹
+  /// @param sensor_position 传感器位置，与 detection 同系
+  /// @return 应当加到航迹位置上的偏移；轴向不一致或没有增量时为零
+  Eigen::Vector2d TrackAnchorShift(
+    const Detection & detection, const Track & track,
+    const Eigen::Vector2d & sensor_position) const;
+
 private:
+  /// 把一个盒子中心沿「背离传感器」的方向挪半个缺口。`CompletedCenter` 与
+  /// `TrackAnchorShift` 共用它 —— 两者只是缺口的符号不同。
+  static Eigen::Vector2d AnchorOffset(
+    double yaw_rad, double deficit_long_m, double deficit_lat_m, const Eigen::Vector2d & box_center,
+    const Eigen::Vector2d & sensor_position);
+
   void Predict(double dt_s);
   void Associate(
     const std::vector<Detection> & detections, const Eigen::Vector2d & sensor_position,

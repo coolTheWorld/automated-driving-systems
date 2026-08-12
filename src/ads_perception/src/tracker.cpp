@@ -93,31 +93,55 @@ bool Tracker::AxesConsistent(double detection_yaw_rad, double track_yaw_rad) con
   return difference <= params_.extent_memory_max_axis_diff_rad;
 }
 
+Eigen::Vector2d Tracker::AnchorOffset(
+  double yaw_rad, double deficit_long_m, double deficit_lat_m, const Eigen::Vector2d & box_center,
+  const Eigen::Vector2d & sensor_position)
+{
+  if (deficit_long_m <= 0.0 && deficit_lat_m <= 0.0) {
+    return Eigen::Vector2d::Zero();
+  }
+  const Eigen::Vector2d axis_long(std::cos(yaw_rad), std::sin(yaw_rad));
+  const Eigen::Vector2d axis_lat(-axis_long.y(), axis_long.x());
+  const Eigen::Vector2d to_sensor = sensor_position - box_center;
+
+  // 缺口补在**背离传感器**的一侧。投影恰好为 0 时不补：那说明传感器在这条轴的
+  // 垂直平分面上，两边同样可见，没有任何依据偏向某一侧 —— 硬猜一边的话，
+  // 目标从这一侧转到那一侧时中心会跳，而那正是本节要消除的东西。
+  auto side = [](double projection) { return (projection > 0.0) - (projection < 0.0); };
+  return -axis_long * (0.5 * std::max(0.0, deficit_long_m) * side(to_sensor.dot(axis_long))) -
+         axis_lat * (0.5 * std::max(0.0, deficit_lat_m) * side(to_sensor.dot(axis_lat)));
+}
+
 Eigen::Vector2d Tracker::CompletedCenter(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
   if (!AxesConsistent(detection.yaw_rad, track.yaw_rad)) {
     return detection.position;
   }
-  const double deficit_long = std::max(0.0, track.length_m - detection.length_m);
-  const double deficit_lat = std::max(0.0, track.width_m - detection.width_m);
-  if (deficit_long <= 0.0 && deficit_lat <= 0.0) {
-    return detection.position;
+  // 观测**小于**记忆：看不见的那截藏在背离传感器的一侧，把中心补回去。
+  return detection.position + AnchorOffset(
+                                detection.yaw_rad, track.length_m - detection.length_m,
+                                track.width_m - detection.width_m, detection.position,
+                                sensor_position);
+}
+
+Eigen::Vector2d Tracker::TrackAnchorShift(
+  const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
+{
+  if (!AxesConsistent(detection.yaw_rad, track.yaw_rad)) {
+    return Eigen::Vector2d::Zero();
   }
-
-  const Eigen::Vector2d axis_long(std::cos(detection.yaw_rad), std::sin(detection.yaw_rad));
-  const Eigen::Vector2d axis_lat(-axis_long.y(), axis_long.x());
-  const Eigen::Vector2d to_sensor = sensor_position - detection.position;
-
-  // 缺口补在**背离传感器**的一侧。投影恰好为 0 时不补：那说明传感器在这条轴的
-  // 垂直平分面上，两边同样可见，没有任何依据偏向某一侧 —— 硬猜一边的话，
-  // 目标从这一侧转到那一侧时中心会跳，而那正是本节要消除的东西。
-  auto side = [](double projection) { return (projection > 0.0) - (projection < 0.0); };
-  const double sign_long = side(to_sensor.dot(axis_long));
-  const double sign_lat = side(to_sensor.dot(axis_lat));
-
-  return detection.position - axis_long * (0.5 * deficit_long * sign_long) -
-         axis_lat * (0.5 * deficit_lat * sign_lat);
+  // 观测**大于**记忆：目标露出了更多，说明航迹此前那个位置是按**更小的盒子**
+  // 锚定的。近边没动，中心却因为盒子变长而往远处挪了半个增量 ——
+  // 那不是运动，是**重新锚定**。不补的话卡尔曼会把它读成速度。
+  //
+  // ⚠️ 这一条与 CompletedCenter 是**同一件事的两半**，缺一个就只修一半：
+  //    实测目标由远及近时长度在一帧内涨 0.87 m ⟹ 中心挪 0.44 m ⟹
+  //    0.1 s 一帧 = **4.4 m/s 假速度**（实测峰值 4.641，真值 4.0）。
+  //    只做 CompletedCenter 时速度判据在 0.967 / 1.109 之间抖（判据 1.0）。
+  return AnchorOffset(
+    detection.yaw_rad, detection.length_m - track.length_m, detection.width_m - track.width_m,
+    detection.position, sensor_position);
 }
 
 void Tracker::Associate(
@@ -145,9 +169,14 @@ void Tracker::Associate(
       //    可见部分的中心，两者相差可达一个半车长 —— 拿原始中心去判，
       //    目标一靠近就判不进门 ⟹ 关联失败 ⟹ 航迹重建 ⟹ **ID 跳变**。
       //    实测正是在 3.5 m 处连着跳了两次（感知长度 1.56 ↔ 4.41）。
+      // ⚠️ 两边都要换算到**同一个锚点**再比：观测比记忆小就补全观测，
+      //    观测比记忆大就重新锚定航迹。少做一半的话，目标由远及近露出侧面
+      //    的那几帧新息里混着一个 1 m 量级的"重新锚定"量，会判不进门 ⟹ ID 跳变。
       const Eigen::Vector2d measurement =
         CompletedCenter(detections[d], tracks_[t], sensor_position);
-      const Eigen::Vector2d innovation = measurement - tracks_[t].position();
+      const Eigen::Vector2d anchored =
+        tracks_[t].position() + TrackAnchorShift(detections[d], tracks_[t], sensor_position);
+      const Eigen::Vector2d innovation = measurement - anchored;
       const double mahalanobis = innovation.transpose() * information * innovation;
       // ⚠️ 门限用**卡方**。这里可以这么做，因为协方差是滤波器自己按已知的
       //    Q/R 递推出来的 —— 与 P4 那个未标定的 NDT 协方差不同
@@ -173,6 +202,9 @@ void Tracker::ApplyUpdate(
   //    —— 而且不会报错，只是安静地退回旧行为。
   const bool axes_consistent = AxesConsistent(detection.yaw_rad, track->yaw_rad);
   const Eigen::Vector2d measurement = CompletedCenter(detection, *track, sensor_position);
+  // 重新锚定：只挪**位置**，不动速度也不动协方差 —— 这是一次坐标改写，
+  // 不是一次观测。改协方差等于宣称"我对位置更不确定了"，而事实相反。
+  track->state.head<2>() += TrackAnchorShift(detection, *track, sensor_position);
 
   const double measurement_variance = params_.measurement_stddev_m * params_.measurement_stddev_m;
 

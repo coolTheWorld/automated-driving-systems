@@ -490,3 +490,37 @@ TEST(Tracker, KeepsTheIdWhenTheObservedExtentCollapses)
   EXPECT_EQ(tracker.ConfirmedTracks()[0].id, id) << "尺寸一塌 ID 就变了 —— 关联没用补全后的位置";
   EXPECT_EQ(tracker.tracks().size(), 1U) << "多出了一条重复航迹";
 }
+
+TEST(Tracker, DoesNotReadRevealedExtentAsVelocity)
+{
+  // ⚠️ 与 CompletedCenter 对称的另一半：目标**由远及近**时侧面逐渐露出来，
+  //    盒子变长而近边没动 —— 中心因此往远处挪，这不是运动，是**重新锚定**。
+  //    不补的话卡尔曼把它读成速度。实测一帧长 0.87 m ⟹ 4.4 m/s（真值 4.0）。
+  //
+  // ⚠️ **增长必须是渐进的。** 一次涨 1.7 m 的话新息会超出卡方门限、
+  //    这一帧被直接拒掉，航迹靠惯性保持 v≈0 —— 于是不修也"通过"。
+  //    那测到的是"门限拒了它"，不是"锚定对了"。这个陷阱本文件已经踩过两次。
+  //    每帧 +0.3 m ⟹ 中心挪 0.15 m ⟹ 马氏距离 0.125，稳稳进门。
+  Tracker tracker;
+  const double near_edge_x = 10.0;  // 目标**静止**，近边固定在 10 m
+  double length = 1.0;
+
+  for (int frame = 0; frame < 4; ++frame) {
+    tracker.Update({MakePartial(near_edge_x + 0.5 * length, 0.0, length, 1.8)}, kDt, kSensor);
+  }
+  ASSERT_FALSE(tracker.ConfirmedTracks().empty());
+
+  for (int frame = 0; frame < 11; ++frame) {
+    length += 0.3;  // 侧面一点点露出来，一直到 4.3 m
+    tracker.Update({MakePartial(near_edge_x + 0.5 * length, 0.0, length, 1.8)}, kDt, kSensor);
+  }
+  ASSERT_FALSE(tracker.ConfirmedTracks().empty()) << "航迹被删了";
+  const Track & track = tracker.ConfirmedTracks()[0];
+  printf(
+    "[          ] 盒子 1.0 → %.1f m（近边不动、目标静止），估计速度 %.3f m/s\n", length,
+    track.velocity().norm());
+  EXPECT_LT(track.velocity().norm(), 0.3)
+    << "把「露出来的部分」读成了速度 —— 观测变大时没有重新锚定航迹";
+  // 位置应当落在**整个目标**的中心上，而不是可见部分的中心。
+  EXPECT_NEAR(track.position().x(), near_edge_x + 0.5 * length, 0.35);
+}
