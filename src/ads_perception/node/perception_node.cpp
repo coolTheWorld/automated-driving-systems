@@ -84,6 +84,7 @@ struct StageStats
   int input_points{0};
   int non_ground_points{0};
   int clusters{0};
+  int largest_cluster{0};
   int detections{0};
   int confirmed_tracks{0};
   double ground_ms{0.0};
@@ -140,6 +141,10 @@ public:
     // 点云比这么旧就丢。与 localization_node 那条同一个理由：
     // 用旧帧算出来的障碍物位置对应的是**过去**的时刻，而下游会当成现在的。
     max_cloud_age_s_ = declare_parameter<double>("max_cloud_age_s", 0.15);
+    // 诊断发布周期，s。默认 1 Hz（给人看的，不是控制回路的一部分）。
+    // ⚠️ 设 0 则**每帧都发** —— 排查"某个距离上目标消失"这类问题时必须这样，
+    //    因为 1 Hz 只能采到十分之一的帧，而故障往往只持续几帧。
+    diagnostics_period_s_ = declare_parameter<double>("diagnostics_period_s", 1.0);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -247,6 +252,12 @@ private:
       ads_perception::ClusterEuclidean(non_ground, cluster_params_);
     stats.cluster_ms = Elapsed(&stage);
     stats.clusters = static_cast<int>(clusters.size());
+    // ⚠️ **最大簇的点数**：欠分割（多个目标被连成一片）的直接证据。
+    //    只看簇数看不出来 —— 簇数少既可能是"目标少"也可能是"全连一起了"。
+    for (const ads_perception::Cluster & cluster : clusters) {
+      stats.largest_cluster =
+        std::max(stats.largest_cluster, static_cast<int>(cluster.indices.size()));
+    }
 
     // ---- ③ L-Shape 拟合 + 转到 map 系 -----------------------------------
     const double yaw = QuaternionYaw(transform.transform.rotation);
@@ -382,7 +393,8 @@ private:
   {
     // 1 Hz 就够 —— 这是给人看的，不是控制回路的一部分。
     const rclcpp::Time now_stamp(stamp);
-    if (now_stamp.nanoseconds() - last_diag_ns_ < 1'000'000'000LL) {
+    const std::int64_t period_ns = static_cast<std::int64_t>(diagnostics_period_s_ * 1e9);
+    if (now_stamp.nanoseconds() - last_diag_ns_ < period_ns) {
       return;
     }
     last_diag_ns_ = now_stamp.nanoseconds();
@@ -404,6 +416,7 @@ private:
     add("input_points", stats.input_points);
     add("non_ground_points", stats.non_ground_points);
     add("clusters", stats.clusters);
+    add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);
     add("confirmed_tracks", stats.confirmed_tracks);
     // ⚠️ **分阶段耗时**，不是只发一个总数。CLAUDE.md 那条「频率低 = 算力不够
@@ -444,6 +457,7 @@ private:
 
   std::string map_frame_;
   double max_cloud_age_s_{0.15};
+  double diagnostics_period_s_{1.0};
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   std::int64_t last_diag_ns_{0};
   std::int64_t dropped_stale_clouds_{0};
