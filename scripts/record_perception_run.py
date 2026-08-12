@@ -443,6 +443,16 @@ class PerceptionScorer(Node):
             writer = csv.DictWriter(handle, fieldnames=list(self.rows[0].keys()))
             writer.writeheader()
             writer.writerows(self.rows)
+        # 虚警明细**全量**落盘（P6-S0）。score() 只印前 6 条是给人扫一眼的；
+        # 幻影缺陷（欠分割污染尺寸记忆）随机 0–5 帧次/轮，要跨多轮汇总
+        # 才能看出规律 —— 只靠终端里那 6 行，跑完一关终端数据就没了。
+        # 路径取主 CSV 旁边的 <名字>.fp.csv，没虚警时也写（只有表头），
+        # 免得「文件不存在」和「没有虚警」两种情况分不开。
+        fp_path = (path[:-4] if path.endswith('.csv') else path) + '.fp.csv'
+        with open(fp_path, 'w', newline='', encoding='utf-8') as handle:
+            writer = csv.writer(handle)
+            writer.writerow(['t_s', 'x_m', 'y_m', 'length_m', 'width_m', 'id'])
+            writer.writerows(self.false_positive_log)
 
     def score(self) -> bool:
         """Print the CP-P5-B table.
@@ -659,6 +669,7 @@ def main() -> int:
         rclpy.spin_once(node, timeout_sec=0.05)
     node.write(args.out)
     print(f'CSV: {args.out}')
+    print(f'虚警明细: {(args.out[:-4] if args.out.endswith(".csv") else args.out)}.fp.csv')
 
     # ⚠️ 刺激物自检**在打分之前**，而且不达标时**不打分** ——
     #    刺激物坏了的时候那张判据表上的每一个数都是没有意义的，

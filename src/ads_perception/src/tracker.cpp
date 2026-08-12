@@ -39,6 +39,10 @@ Tracker::Tracker(const TrackerParams & params) : params_(params)
   ads_common::RequireFinitePositive(
     params_.measurement_stddev_m, "TrackerParams", "measurement_stddev_m");
   ads_common::RequireFinitePositive(params_.gate_chi_square, "TrackerParams", "gate_chi_square");
+  ads_common::RequireFinitePositive(
+    params_.anchor_shift_max_m, "TrackerParams", "anchor_shift_max_m");
+  ads_common::RequireFinitePositive(
+    params_.coast_max_speed_mps, "TrackerParams", "coast_max_speed_mps");
   if (params_.confirm_hits <= 0 || params_.max_misses <= 0) {
     throw std::invalid_argument("TrackerParams: confirm_hits 与 max_misses 必须为正");
   }
@@ -150,9 +154,17 @@ Eigen::Vector2d Tracker::CompletedCenter(
     return detection.position;
   }
   // 观测**小于**记忆：看不见的那截藏在背离传感器的一侧，把中心补回去。
-  return aligned.position + AnchorOffset(
-                              aligned.yaw_rad, track.length_m - aligned.length_m,
-                              track.width_m - aligned.width_m, aligned.position, sensor_position);
+  const Eigen::Vector2d offset = AnchorOffset(
+    aligned.yaw_rad, track.length_m - aligned.length_m, track.width_m - aligned.width_m,
+    aligned.position, sensor_position);
+  // ⚠️ 位移超出物理上限 ⟹ "同一个目标露出更多/被挡住一截"的前提不成立，
+  //    这一半的补全退出、用原始中心 —— 让原始新息直面卡方门限。
+  //    （重锚那一半在 TrackAnchorShift 里有同一道闸，各封各的位移。）
+  //    理由与实测见 TrackerParams::anchor_shift_max_m。
+  if (offset.norm() > params_.anchor_shift_max_m) {
+    return detection.position;
+  }
+  return aligned.position + offset;
 }
 
 Eigen::Vector2d Tracker::TrackAnchorShift(
@@ -170,9 +182,17 @@ Eigen::Vector2d Tracker::TrackAnchorShift(
   //    实测目标由远及近时长度在一帧内涨 0.87 m ⟹ 中心挪 0.44 m ⟹
   //    0.1 s 一帧 = **4.4 m/s 假速度**（实测峰值 4.641，真值 4.0）。
   //    只做 CompletedCenter 时速度判据在 0.967 / 1.109 之间抖（判据 1.0）。
-  return AnchorOffset(
+  const Eigen::Vector2d offset = AnchorOffset(
     aligned.yaw_rad, aligned.length_m - track.length_m, aligned.width_m - track.width_m,
     aligned.position, sensor_position);
+  // ⚠️ 与 CompletedCenter 同一道物理上限，各封各的位移：超限的那一半
+  //    退出，没被补偿的尺寸差就原样留在新息里、直面卡方门限。
+  //    墙沿碎片 0.03 → 6 m 的"重锚"位移 3 m 正是把 5.9 m 外另一个碎片
+  //    拉进门限的虫洞。见 TrackerParams::anchor_shift_max_m。
+  if (offset.norm() > params_.anchor_shift_max_m) {
+    return Eigen::Vector2d::Zero();
+  }
+  return offset;
 }
 
 void Tracker::Associate(
@@ -454,12 +474,16 @@ void Tracker::Update(
       ApplyUpdate(detections[assignment[t]], sensor_position, &tracks_[t]);
       detection_used[assignment[t]] = 1;
     } else if (
-      tracks_[t].confirmed && IsOccludedByAnotherTrack(tracks_[t], sensor_position) &&
+      tracks_[t].confirmed && tracks_[t].velocity().norm() <= params_.coast_max_speed_mps &&
+      IsOccludedByAnotherTrack(tracks_[t], sensor_position) &&
       tracks_[t].occluded_misses < params_.max_occluded_misses) {
       // 被别的已确认航迹挡住视线：未命中**不计入删除计数**，按恒速滑行。
       // 看不见 ≠ 消失 —— 这一条解决「遮挡 0.5–1.8 s vs 删除窗口 0.5 s」的
       // 设计冲突，见 TrackerParams::max_occluded_misses 的推导。
       // 只对已确认的航迹滑行：未确认的本来就还不算"存在"。
+      // ⚠️ 还要速度在 ODD 物理上限之内：滑行是在**外推**状态，外推一个
+      //    物理上不可能的状态就是在制造幽灵（实测 11.9 m/s 的假航迹
+      //    靠滑行飞越 35 m 横穿车道）。见 TrackerParams::coast_max_speed_mps。
       ++tracks_[t].occluded_misses;
     } else {
       ++tracks_[t].consecutive_misses;

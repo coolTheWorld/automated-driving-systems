@@ -779,3 +779,90 @@ TEST(Tracker, OcclusionCoastingHasACap)
     "[          ] 遮挡 20 帧（上限 8）后剩 %zu 条确认航迹\n", tracker.ConfirmedTracks().size());
   EXPECT_EQ(tracker.ConfirmedTracks().size(), 1U) << "滑行没有上限 —— 幽灵永生";
 }
+
+// ---------------------------------------------------------------------------
+//  ⚠️ 两道物理闸 —— P6-S0 车道内幻影的修复（2026-08-12）
+//
+//  实测因果链（复现轮 rosbag 逐帧钉死，见 tasks/todo.md 的 P6-S0 记录）：
+//  墙沿/杆件碎片的 L-Shape 拟合帧间剧变（0.03 ↔ 6 m）→ 重锚位移 3 m
+//  把数米外**另一个**碎片"拉进"卡方门限 → 两个静止碎片被焊成一条带
+//  9–12 m/s 假速度的航迹 → 遮挡滑行让它免死最多 3 s、按假速度飞越
+//  35 m 横穿地图 → 滑进自车车道 30 m 带内，成为 6.00×N 的幻影虚警。
+//  两道闸各断一环：位移上限断"焊接"，速度准入断"飞行"。
+//
+//  ## 故障注入实测（2026-08-12，跑完立刻回填）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 位移闸条件改恒假（去掉闸） | **红 1 条**：`RejectsTheAnchorWormhole…`，
+//  |   | 「4.5 m 外的碎片被焊进原航迹」断言失败（航迹数 1 ≠ 2），其余 26 条全绿 |
+//  | 去掉滑行的速度准入 | **红 1 条**：`DoesNotCoastAnImplausiblyFastTrack`
+//  |   | （幽灵靠滑行存活）；对照用例 `SurvivesAnOcclusion…` 保持绿 ——
+//  |   | 证明红的是速度准入，不是遮挡判定 |
+// ---------------------------------------------------------------------------
+TEST(Tracker, RejectsTheAnchorWormholeBetweenStructureFragments)
+{
+  // 复刻实测工况：帧 1 一个微小碎片（0.03×0.01，L-Shape 对杆件/墙沿的
+  // 典型输出），帧 2 同一轴向上 4.5 m 外一个 6.0×0.25 的长碎片。
+  // 4.5 m/0.1 s = 45 m/s —— 物理上不可能是同一个目标在运动，
+  // 唯一能把它拉进门限的是"尺寸差 5.97 → 重锚位移 2.99"这个虫洞。
+  Tracker tracker;
+  tracker.Update({MakePartial(20.0, 0.0, 0.03, 0.01)}, kDt, kSensor);
+  ASSERT_EQ(tracker.tracks().size(), 1U);
+  const std::uint32_t fragment_id = tracker.tracks()[0].id;
+
+  tracker.Update({MakePartial(24.5, 0.0, 6.0, 0.25)}, kDt, kSensor);
+
+  ASSERT_EQ(tracker.tracks().size(), 2U) << "4.5 m 外的碎片被焊进了原航迹 —— 重锚位移闸没生效";
+  const Track * fragment = FindById(tracker.tracks(), fragment_id);
+  ASSERT_NE(fragment, nullptr);
+  printf(
+    "[          ] 碎片航迹位置 (%.2f, %.2f)、速度 %.2f m/s（虫洞打开时是 8.8 量级）\n",
+    fragment->position().x(), fragment->position().y(), fragment->velocity().norm());
+  EXPECT_LT((fragment->position() - Eigen::Vector2d(20.0, 0.0)).norm(), 0.6)
+    << "原碎片航迹被拖走了";
+  EXPECT_LT(fragment->velocity().norm(), 0.5)
+    << "静止碎片得到了数米每秒的假速度 —— 这正是幻影的出生证";
+}
+
+TEST(Tracker, DoesNotCoastAnImplausiblyFastTrack)
+{
+  // 几何与 SurvivesAnOcclusionLongerThanMaxMisses **完全相同**（车横在
+  // (10,0) 挡视线、目标在 (20+,0) 的车后），那条用例证明这个几何下
+  // 1.2 m/s 的行人**能**滑行 —— 所以本用例里目标死掉只能是速度准入拦的，
+  // 不是遮挡判定坏了。两条用例互为对照。
+  //
+  // 10 m/s 超出 ODD 上限 8.33：园区里没有这么快的东西，这条航迹的状态
+  // 必然是坏的（实测里它就是被碎片焊出来的）。外推坏状态 = 制造幽灵。
+  Tracker tracker;
+  Detection car;
+  car.position = {10.0, 0.0};
+  car.yaw_rad = M_PI / 2.0;
+  car.length_m = 4.4;
+  car.width_m = 1.8;
+  car.height_m = 1.5;
+  for (int frame = 0; frame < 5; ++frame) {
+    tracker.Update({car, MakePartial(20.0 + frame, 0.0, 4.4, 1.8)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);
+  std::uint32_t ghost_id = 0;
+  double ghost_speed = 0.0;
+  for (const Track & track : tracker.ConfirmedTracks()) {
+    if (track.velocity().norm() > ghost_speed) {
+      ghost_speed = track.velocity().norm();
+      ghost_id = track.id;
+    }
+  }
+  ASSERT_GE(ghost_speed, 9.0) << "快目标的速度还没收敛 —— 用例前提没建立起来";
+
+  // 消失在车后。速度合法的目标在这里会滑行（对照用例），10 m/s 的不许。
+  for (int frame = 0; frame < 6; ++frame) {
+    tracker.Update({car}, kDt, kSensor);
+  }
+  printf(
+    "[          ] %.1f m/s 的航迹在遮挡后 %zu 条确认航迹存活（应只剩车）\n", ghost_speed,
+    tracker.ConfirmedTracks().size());
+  EXPECT_EQ(FindById(tracker.ConfirmedTracks(), ghost_id), nullptr)
+    << "物理上不可能的状态被滑行外推 —— 幽灵会带着假速度横穿地图";
+  EXPECT_EQ(tracker.ConfirmedTracks().size(), 1U);
+}

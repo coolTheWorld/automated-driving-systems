@@ -134,6 +134,12 @@ public:
     tracker_params_.max_occluded_misses = declare_parameter<int>("tracker.max_occluded_misses", 30);
     tracker_params_.heading_min_speed_mps =
       declare_parameter<double>("tracker.heading_min_speed_mps", 0.5);
+    // 两道物理闸（P6-S0 加），推导见 tracker.hpp 对应参数的注释：
+    // 前者封"尺寸差换算成位置修正"的关联虫洞，后者不让坏状态借遮挡滑行外推。
+    tracker_params_.anchor_shift_max_m =
+      declare_parameter<double>("tracker.anchor_shift_max_m", 2.2);
+    tracker_params_.coast_max_speed_mps =
+      declare_parameter<double>("tracker.coast_max_speed_mps", 8.33);
     tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params_);
     max_misses_ = tracker_params_.max_misses;
 
