@@ -601,3 +601,93 @@ TEST(Tracker, DoesNotReadRevealedExtentAsVelocity)
   // 位置应当落在**整个目标**的中心上，而不是可见部分的中心。
   EXPECT_NEAR(track.position().x(), near_edge_x + 0.5 * length, 0.35);
 }
+
+// ---------------------------------------------------------------------------
+//  ⚠️ 重复航迹合并 —— CP-P5-B 实测出来的独立缺陷
+//
+//  症状是「ID 在两个值之间来回跳」（338↔369、390↔391），而它**不是**
+//  "航迹死了重建"，是两条航迹**并存**、评测逐帧在它们之间摇摆。
+//  实测：31/678 帧次的真值目标 1.0 m 内有 2 个以上感知目标，
+//  第二近者中位 **0.07 m**、最大 0.44 m。
+//
+//  重复本身就是缺陷：规划会把一个目标当成两个障碍物去做碰撞检查。
+// ---------------------------------------------------------------------------
+TEST(Tracker, MergesADuplicateTrackOntoTheOlderOne)
+{
+  // ⚠️ 目标必须是**运动**的。第一版用静止目标，于是两条航迹速度都是 0，
+  //    "速度门限只对已确认的航迹生效"这条注进去也不红 —— 门限根本没被走到。
+  //    真实的重复恰恰是"新航迹初速 0 vs 老航迹 −4 m/s"，静止目标测不到它。
+  Tracker tracker;
+  double x = 20.0;
+  for (int frame = 0; frame < 5; ++frame, x += 4.0 * kDt) {
+    tracker.Update({MakeDetection(x, 0.0)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 1U);
+  const std::uint32_t original_id = tracker.ConfirmedTracks()[0].id;
+  ASSERT_GT(tracker.ConfirmedTracks()[0].velocity().norm(), 2.0) << "老航迹得先有速度";
+
+  // 同一帧多出一个只差 0.2 m 的检测 —— 一对一关联下它配不上，于是新建一条
+  // **初速为 0** 的航迹。合并要能把它收掉，而且留下更老的那条。
+  x += 4.0 * kDt;
+  tracker.Update({MakeDetection(x, 0.0), MakeDetection(x + 0.2, 0.0)}, kDt, kSensor);
+  printf(
+    "[          ] 多一个 0.2 m 外的检测之后：航迹 %zu 条，ID %u → %u\n", tracker.tracks().size(),
+    original_id, tracker.tracks().empty() ? 0 : tracker.tracks()[0].id);
+  EXPECT_EQ(tracker.tracks().size(), 1U) << "重复航迹没被合并 —— 规划会看到两个障碍物";
+  EXPECT_EQ(tracker.tracks()[0].id, original_id) << "合并时留错了那条（应当留更老的）";
+}
+
+TEST(Tracker, KeepsTheOlderIdWhenTwoDuplicatesHaveTheSameHitCount)
+{
+  // ⚠️ 专门走**打平**那条分支。上一条用例里两条航迹命中数是 6 vs 1，
+  //    打平的分支从没被执行过 —— 把"打平留更新的"注进去照样绿。
+  //    同一帧生出的两条航迹命中数都是 1，这时才轮到 id 决定去留。
+  Tracker tracker;
+  tracker.Update({MakeDetection(20.0, 0.0), MakeDetection(20.2, 0.0)}, kDt, kSensor);
+  ASSERT_EQ(tracker.tracks().size(), 1U) << "同一帧生出的两条重复航迹没被合并";
+  printf("[          ] 同一帧两条重复航迹（命中数都是 1）→ 留下 ID %u\n", tracker.tracks()[0].id);
+  EXPECT_EQ(tracker.tracks()[0].id, 1U) << "打平时没留更老（id 更小）的那条";
+}
+
+TEST(Tracker, DoesNotMergeTwoTargetsThatMerelyPassCloseBy)
+{
+  // ⚠️ 合并的反面风险比重复更严重：把车和行人并成一个目标 = **漏掉一个人**。
+  //    位置近但**速度截然不同**就是两个目标，不是重复。
+  //    实测本场景两个目标速度差 5.2 m/s（车 −4.0、行人 +1.2）。
+  //
+  // ⚠️ **必须断言 ID 还在，不能只数条数。** 第一版只断言"最后还有 2 条"，
+  //    而交会时并掉一条之后、分开后又会重建一条 —— 数量照样回到 2，
+  //    于是"去掉速度门限"注进去也不红。数量守恒 ≠ 身份守恒。
+  //
+  //    横向只差 0.9 m（< merge_distance 1.0），所以交会时**一定**进入合并的
+  //    距离判据 —— 唯一拦住它的就是速度门限。
+  Tracker tracker;
+  double xa = 10.0;
+  double xb = 24.0;
+  std::uint32_t id_a = 0;
+  std::uint32_t id_b = 0;
+  double closest = 1e9;
+  for (int frame = 0; frame < 40; ++frame) {
+    xa += 3.0 * kDt;
+    xb -= 3.0 * kDt;
+    tracker.Update({MakeDetection(xa, 0.45), MakeDetection(xb, -0.45)}, kDt, kSensor);
+    closest = std::min(closest, std::hypot(xa - xb, 0.9));
+    if (frame == 6) {
+      const auto tracks = tracker.ConfirmedTracks();
+      ASSERT_EQ(tracks.size(), 2U);
+      for (const Track & track : tracks) {
+        (track.velocity().x() > 0.0 ? id_a : id_b) = track.id;
+      }
+    }
+  }
+  const auto tracks = tracker.ConfirmedTracks();
+  printf(
+    "[          ] 两个目标最近曾靠到 %.2f m（合并阈值 1.0），最后剩 %zu 条航迹，"
+    "原 ID %u/%u 是否都还在：%d/%d\n",
+    closest, tracks.size(), id_a, id_b, FindById(tracks, id_a) != nullptr,
+    FindById(tracks, id_b) != nullptr);
+  ASSERT_LT(closest, 1.0) << "两者从没靠到合并阈值以内 —— 这条用例什么都没测";
+  EXPECT_EQ(tracks.size(), 2U) << "把两个擦身而过的目标并成了一个 —— 会漏掉一个目标";
+  EXPECT_NE(FindById(tracks, id_a), nullptr) << "A 的 ID 在交会时被并掉了";
+  EXPECT_NE(FindById(tracks, id_b), nullptr) << "B 的 ID 在交会时被并掉了";
+}

@@ -188,11 +188,22 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有十个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
-`ads_planning`、**`ads_localization`**、`ads_bringup`、`ads_simulation/gazebo_bridge`、
-`ads_teleop`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_perception`、`ads_prediction` 等）**尚未创建**，
+`src/` 下**目前有十一个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`ads_planning`、`ads_localization`、**`ads_perception`**、`ads_bringup`、
+`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+SPEC §5 列出的其余包（`ads_prediction` 等）**尚未创建**，
 涉及它们的命令是规划中的形态，不要假设能跑。
+
+`ads_perception`（**P5，CP-P5-B 已达成**）有六个 lib：`ground_segmentation`（RANSAC +
+坡度校验）、`euclidean_cluster`（体素哈希 + BFS）、`lshape_fit`（closeness 准则，
+给的是**轴向**不是朝向）、`size_classifier`、`hungarian`（O(n³)，**禁用配对要用
+有限大数不能用 inf** —— `inf−inf=NaN` 会死循环）、`tracker`（恒速 KF + 匈牙利关联 +
+航迹生命周期 + **包围盒补全/重锚/去重**）。
+⚠️ `tracker` 里三条实测结论极反直觉，改它之前先读 `tracker.hpp` 的文件头：
+**滤包围盒中心是错的**（中心不是目标身上的固定点，随观测几何漂移 2.2 m，
+卡尔曼会把它读成 8.8 m/s 的假速度）、**L-Shape 的「长/宽」命名与目标无关**
+（正对时"长轴"指的是车宽，轴向翻 90°，要换说法而不是放弃）、
+**重复航迹是独立于 ID 跳变的缺陷**（规划会把一个目标当成两个障碍物）。
 
 `ads_planning`（P3，**建设中**）目前有六个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
 **CP-P3-A 已达成**）、**`quintic`**（五次多项式，六个边界条件的闭式解）、

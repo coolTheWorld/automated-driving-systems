@@ -85,6 +85,30 @@ DUPLICATE_RADIUS_M = 1.0
 STIMULUS_MAX_LIFT_M = 0.10
 STIMULUS_MAX_TILT_DEG = 2.0
 
+# ---- 判据的适用范围 -------------------------------------------------------
+#
+# ⚠️ **这个数由传感器的物理分辨率定，不由"改到多少能过"定。**（2026-08-12）
+#
+# 起因：原来只有检测率判据有范围（车 20 m、人 15 m），而位置/速度/ID 判据
+# 在**全距离**（到 50 m）上算 —— 同一张表里两套范围，判据自己不自洽。
+# 实测代价：某一轮横向误差 p95 = 0.704（FAIL），而那 **全部** 来自 45–51 m，
+# 20 m 内 p95 只有 0.080。判的是传感器的物理极限，不是算法。
+#
+# 推导（32 线 / 35° 垂直视场，水平 0.2°/点）：
+#     线间隔 = tan(35°/31) = 0.01971 rad      水平间隔 = 0.2° = 0.00349 rad
+#     距离 d 处目标上的点数 ≈ (h / 0.01971d) × (w / 0.00349d)
+#   行人 1.7 × 0.4 m：30 m ≈ **11 点**，40 m ≈ 6 点，
+#                     50 m ≈ **3.9 点 < min_cluster_size(5) ⟹ 物理上不可检**。
+#   取「最小目标仍有 ≥ 2 × min_cluster_size = 10 点」⟹ d = **31.4 m**。
+#
+# 取 30 m（略保守于推导值）。
+# 调大到 40 m → 判的是 6 个点上的拟合，判据度量的是雷达而不是算法；
+# 调小到 20 m → 与检测率判据同范围，但放弃了 20–30 m 这段系统确实工作的区间。
+#
+# ⚠️ **范围外的数照样打印，只是不判。** 藏起来的话，下一个人会以为
+#    远处也有同样的保证 —— 那正是"绿灯不代表对"最难发现的一种。
+CRITERION_MAX_RANGE_M = 30.0
+
 BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
@@ -135,6 +159,7 @@ class PerceptionScorer(Node):
         # {真值 id: [感知 id, ...]}，用来数 ID 切换
         self.assigned_ids = defaultdict(list)
         self.false_positives_in_lane = 0
+        self.false_positives_out_of_range = 0
         self.perceived_frames = 0
         # 刺激物自检（见 STIMULUS_* 常量上方的说明）
         self.stimulus_max_lift_m = 0.0
@@ -297,8 +322,14 @@ class PerceptionScorer(Node):
         for index, obstacle in enumerate(msg.obstacles):
             if index in matched_perceived:
                 continue
-            if abs(obstacle.pose.position.y - EGO_LANE_CENTER_Y_M) <= EGO_LANE_HALF_WIDTH_M:
+            if abs(obstacle.pose.position.y - EGO_LANE_CENTER_Y_M) > EGO_LANE_HALF_WIDTH_M:
+                continue
+            distance_m = math.hypot(
+                obstacle.pose.position.x - ego[0], obstacle.pose.position.y - ego[1])
+            if distance_m <= CRITERION_MAX_RANGE_M:
                 self.false_positives_in_lane += 1
+            else:
+                self.false_positives_out_of_range += 1
 
     def write(self, path: str) -> None:
         """Dump the per-frame rows so the numbers can be re-checked later."""
@@ -339,17 +370,29 @@ class PerceptionScorer(Node):
                 line += f'{rate * 100:>7.1f}%({len(subset):>3})'
             print(line)
 
-        detected = [row for row in self.rows if row['detected']]
+        # ⚠️ **判据只在适用范围内算**，理由与推导见 CRITERION_MAX_RANGE_M。
+        #    范围外的值一并打印但**不判** —— 藏起来会让人以为远处也有同样的保证。
+        in_range = [r for r in self.rows if float(r['range_m']) <= CRITERION_MAX_RANGE_M]
+        detected = [row for row in in_range if row['detected']]
+        all_detected = [row for row in self.rows if row['detected']]
         ok = True
 
-        def check(label, value, limit, unit='', greater_is_better=False):
+        def reference(key):
+            """同一个量在**全距离**上的 95 分位，只作参考。"""
+            values = sorted(abs(float(r[key])) for r in all_detected if r.get(key))
+            return values[int(len(values) * 0.95)] if values else float('nan')
+
+        def check(label, value, limit, unit='', greater_is_better=False, ref=None):
             nonlocal ok
             passed = value > limit if greater_is_better else value < limit
             ok = ok and passed
             arrow = '>' if greater_is_better else '<'
+            tail = f'  {unit}' if ref is None else f'  {unit}   (全距离 {ref:.4f})'
             print(f'{label:<34}{value:>10.4f}{arrow:>4} {limit:<8} '
-                  f'{"PASS" if passed else "FAIL"}  {unit}')
+                  f'{"PASS" if passed else "FAIL"}{tail}')
 
+        print(f'\n判据适用范围：**≤ {CRITERION_MAX_RANGE_M:.0f} m**'
+              f'（{len(in_range)}/{len(self.rows)} 帧次在内；理由见脚本里的推导）')
         print('\n项                                     实测    判据  结果')
         # ① NPC 车检测率（20 m 内）
         vehicle_close = [
@@ -385,10 +428,12 @@ class PerceptionScorer(Node):
             near = sorted(abs(float(r['near_edge_err_m'])) for r in detected
                           if r['near_edge_err_m'])
             if near:
-                check('近边距离误差 (95 分位, m)', near[int(len(near) * 0.95)], 0.5, 'm')
+                check('近边距离误差 (95 分位, m)', near[int(len(near) * 0.95)], 0.5, 'm',
+                      ref=reference('near_edge_err_m'))
             cross = sorted(abs(float(r['err_cross_m'])) for r in detected if r['err_cross_m'])
             if cross:
-                check('横向位置误差 (95 分位, m)', cross[int(len(cross) * 0.95)], 0.5, 'm')
+                check('横向位置误差 (95 分位, m)', cross[int(len(cross) * 0.95)], 0.5, 'm',
+                      ref=reference('err_cross_m'))
             # 中心误差仍然打印，但**不判**：留着是为了让下一个人一眼看到
             # 它有多大、以及为什么不拿它当判据。删掉的话这段历史就没了。
             centers = sorted(float(r['position_error_m']) for r in detected)
@@ -398,21 +443,27 @@ class PerceptionScorer(Node):
         moving = [r for r in detected if r['velocity_error_mps']]
         if moving:
             v_errors = sorted(float(r['velocity_error_mps']) for r in moving)
-            check('速度误差 (95 分位, m/s)', v_errors[int(len(v_errors) * 0.95)], 1.0, 'm/s')
+            check('速度误差 (95 分位, m/s)', v_errors[int(len(v_errors) * 0.95)], 1.0, 'm/s',
+                  ref=reference('velocity_error_mps'))
         signed = [r for r in detected if r['velocity_sign_ok'] != '']
         if signed:
             wrong = sum(1 for r in signed if int(r['velocity_sign_ok']) == 0)
             print(f'{"速度符号错的样本":<34}{wrong:>10}   == 0        '
                   f'{"PASS" if wrong == 0 else "FAIL"}  n={len(signed)}')
             ok = ok and wrong == 0
-        # ⑤ ID 切换
-        switches = sum(len(set(ids)) - 1 for ids in self.assigned_ids.values() if ids)
+        # ⑤ ID 切换 —— 在适用范围内重新统计（self.assigned_ids 是全距离的）
+        in_range_ids = defaultdict(set)
+        for row in detected:
+            in_range_ids[row['gt_id']].add(row['perceived_id'])
+        switches = sum(len(v) - 1 for v in in_range_ids.values())
+        all_switches = sum(len(set(ids)) - 1 for ids in self.assigned_ids.values() if ids)
         print(f'{"ID 切换次数":<34}{switches:>10}   <= 2        '
-              f'{"PASS" if switches <= 2 else "FAIL"}')
+              f'{"PASS" if switches <= 2 else "FAIL"}     (全距离 {all_switches})')
         ok = ok and switches <= 2
         # ⑦ 车道内虚警
         print(f'{"车道内虚警帧次":<34}{self.false_positives_in_lane:>10}   == 0        '
-              f'{"PASS" if self.false_positives_in_lane == 0 else "FAIL"}')
+              f'{"PASS" if self.false_positives_in_lane == 0 else "FAIL"}'
+              f'     (范围外另有 {self.false_positives_out_of_range})')
         ok = ok and self.false_positives_in_lane == 0
 
         print('\n全部通过' if ok else '\n有判据未通过')

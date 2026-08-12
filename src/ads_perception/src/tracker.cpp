@@ -316,6 +316,56 @@ void Tracker::ResolveHeading(Track * track) const
   track->heading_resolved = true;
 }
 
+void Tracker::MergeDuplicateTracks()
+{
+  // O(n²)。园区场景一帧十几条航迹，而整条感知流水线实测才 5 ms ——
+  // 这里的开销可以忽略，不值得为它引入空间索引。
+  std::vector<char> removed(tracks_.size(), 0);
+  for (std::size_t a = 0; a < tracks_.size(); ++a) {
+    if (removed[a] != 0) {
+      continue;
+    }
+    for (std::size_t b = a + 1; b < tracks_.size(); ++b) {
+      if (removed[b] != 0) {
+        continue;
+      }
+      if ((tracks_[a].position() - tracks_[b].position()).norm() > params_.merge_distance_m) {
+        continue;
+      }
+      // ⚠️ 速度一致性**只在两条都已确认时**才判。新建的航迹初速恒为 0，
+      //    拿它去比一条 −4 m/s 的确认航迹必然超门限 ⟹ 重复永远合不掉，
+      //    而"新建的那条"正是重复最常见的来源。理由见 merge_speed_mps 的注释。
+      if (tracks_[a].confirmed && tracks_[b].confirmed) {
+        if ((tracks_[a].velocity() - tracks_[b].velocity()).norm() > params_.merge_speed_mps) {
+          continue;  // 位置近但速度截然不同 ⟹ 是擦身而过的两个目标
+        }
+      }
+      // 留命中多的那条；打平留 id 小的（更老 ⟹ 下游积累的历史更长）。
+      const bool keep_b = tracks_[b].hits > tracks_[a].hits ||
+                          (tracks_[b].hits == tracks_[a].hits && tracks_[b].id < tracks_[a].id);
+      // ⚠️ **不合并尺寸**：两条航迹各自的 length/width 是在各自的轴向约定下
+      //    记的，直接取 max 可能把"长"和"宽"混起来。留下来的那条命中更多、
+      //    记忆更可信，用它的就好。少写十行，也少一处会悄悄出错的地方。
+      removed[keep_b ? a : b] = 1;
+      if (keep_b) {
+        break;  // a 已被并掉，不必再与后面的比
+      }
+    }
+  }
+
+  // ⚠️ 显式重建而不是 `remove_if` + 捕获一个自增下标：后者依赖谓词被
+  //    "按顺序、每个元素恰好一次"调用。标准确实这么要求，但那种写法一眼看不出
+  //    对错，而这里多写三行就完全显然。**能跑但脆的写法不值得省这三行。**
+  std::vector<Track> kept;
+  kept.reserve(tracks_.size());
+  for (std::size_t i = 0; i < tracks_.size(); ++i) {
+    if (removed[i] == 0) {
+      kept.push_back(tracks_[i]);
+    }
+  }
+  tracks_.swap(kept);
+}
+
 void Tracker::Update(
   const std::vector<Detection> & detections, double dt_s, const Eigen::Vector2d & sensor_position)
 {
@@ -382,6 +432,11 @@ void Tracker::Update(
     track.confirmed = params_.confirm_hits <= 1;
     tracks_.push_back(track);
   }
+
+  // ⚠️ 放在**建完新航迹之后**：重复最常见的来源就是"这一帧没配上、于是新建
+  //    了一条"，而那条新航迹此刻就叠在老航迹上。放在前面的话它要多活一帧，
+  //    而只要它凑够 confirm_hits 就会被发给下游 —— 规划于是看到两个障碍物。
+  MergeDuplicateTracks();
 }
 
 std::vector<Track> Tracker::ConfirmedTracks() const
