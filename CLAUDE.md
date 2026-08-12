@@ -642,6 +642,7 @@ P2 控制 → P3 规划 → P4 定位 → P5 感知。反直觉但正确：先�
 | 手动调 `ament_clang_format()` | `add_test given test NAME "clang_format" which already exists` | package.xml 声明 test_depend 后 lint hook 已自动注册。只能用 `set(ament_cmake_clang_format_CONFIG_FILE ...)` 指配置 |
 | `AMENT_LINT_AUTO_EXCLUDE` 设晚了 | 排除不生效且**不报错** | 必须在 `ament_lint_auto_find_test_dependencies()` **之前** —— 那个函数在调用时就把 linter 列表定死了 |
 | 中文句号 / docstring | pep257 报 D400 | pydocstyle 只认 ASCII 的 `.`。docstring 首行用英文句点，正文照常中文 |
+| 多行 docstring 摘要写在第一行 | pep257 报 **D213** | 本仓库启用的是 D213（摘要在**第二行**），与常见的 D212 相反。多行的写成 `"""` 换行 → 摘要 → 空行 → 正文；单行的不受影响 |
 | cppcheck 显示 skipped | 看着有检查其实没跑 | 上游主动拒用 2.13.0（已知性能问题）。**有意保留跳过**，不要设 `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS` 去覆盖 |
 | 手写 C++ 的排版 | `colcon test-result` 一次报 91 处 clang_format 失败 | 别靠手写对齐。写完直接跑 `clang-format --style=file:/workspace/.clang-format -i <文件>` |
 | `<tinyxml2.h>` 的 include 位置 | cpplint 报 include_order | 与 `<gtest/gtest.h>` 同理：按 `.h` 后缀被归成 C 系统头，**必须放在 C++ 标准库之前** |

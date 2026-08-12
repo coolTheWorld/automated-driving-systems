@@ -128,6 +128,22 @@ if(BUILD_TESTING)
   ament_add_gtest(test_tracker test/test_tracker.cpp)
   target_link_libraries(test_tracker ${PROJECT_NAME} ads_common::ads_common)
 
+  # L3-G：**不需要 GPU** 的感知闭环（合成点云 + perception_node），能进 CI。
+  #
+  # 验的是**接线**（话题/QoS/参数/base_link→map 变换/四阶段串没串起来），
+  # **不是感知质量** —— 合成点云没有遮挡、没有噪声起伏、只有一个目标，
+  # CP-P5-B 那些真正难的东西（可见面伪影、轴向翻转、重复航迹）都不会发生。
+  find_package(ament_cmake_ros REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_closed_loop_perception.py
+    TIMEOUT 120
+    ENV
+      # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，默认 domain 0 下
+      #    本测试会与 ads_control / ads_localization 的闭环共享话题与 TF。
+      #    ads_localization 加进来那次就是这么同时变红的（见 CLAUDE.md）。
+      #    分配表：ads_control 41 / 42，ads_localization 43，ads_perception 44。
+      ROS_DOMAIN_ID=44)
+
   # 机械校验：libads_perception.so 的 DT_NEEDED 里不许有 ROS 库。
   add_test(NAME no_ros_dependencies
     COMMAND ${CMAKE_COMMAND}
