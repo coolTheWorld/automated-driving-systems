@@ -85,6 +85,30 @@ BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
 
 
+def distance_to_box(point, obstacle) -> float:
+    """Exact 2-D distance from a point to an oriented bounding box.
+
+    ⚠️ **不要用「到最近顶点的距离」代替。** 那是个上界，正对时最近点在**边上**
+       而不是顶点上，会把距离高估半个车宽。这与 CLAUDE.md 里「拿 SAT 的最大
+       间隙当保守估计」是同一族的坑：偏保守的估计照样会让判据给出错误结论。
+       正确做法就是这几行 —— 转到盒子自身的坐标系，把点夹到盒子的范围内。
+
+    :param point: (x, y)，map 系
+    :param obstacle: ads_msgs/Obstacle，用它的 pose（中心 + yaw）与 size_m
+    :return: 距离 m；点在盒子内部时为 0
+    """
+    q = obstacle.pose.orientation
+    yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+    dx = point[0] - obstacle.pose.position.x
+    dy = point[1] - obstacle.pose.position.y
+    # map → 盒子自身坐标系（**反向**旋转 yaw）
+    local_x = math.cos(yaw) * dx + math.sin(yaw) * dy
+    local_y = -math.sin(yaw) * dx + math.cos(yaw) * dy
+    over_x = max(0.0, abs(local_x) - 0.5 * obstacle.size_m.x)
+    over_y = max(0.0, abs(local_y) - 0.5 * obstacle.size_m.y)
+    return math.hypot(over_x, over_y)
+
+
 def stamp_to_seconds(stamp) -> float:
     """Convert a ROS time message to float seconds.
 
@@ -198,6 +222,21 @@ class PerceptionScorer(Node):
                 'velocity_sign_ok': '',
                 'perceived_id': '',
                 'perceived_class': '',
+                # ---- 诊断列（不参与判据）------------------------------------
+                # ⚠️ 把位置误差**沿视线分解**，这是分辨两种误差的唯一办法：
+                #    「可见面伪影」是**沿视线、朝向自车**的（雷达打不到背面，
+                #    拟合出的盒子中心被拉向传感器）⟹ err_along 系统性为正；
+                #    真实的估计误差没有方向偏好 ⟹ 两个分量都在零附近抖。
+                #    只看模长的话这两者**完全分不开**，而它们的修法截然相反。
+                'err_along_m': '',   # 沿自车→目标视线，正 = 感知比真值**更近**
+                'err_cross_m': '',   # 垂直于视线
+                'perceived_len_m': '',
+                'perceived_wid_m': '',
+                'gt_len_m': f'{gt.size_m.x:.3f}',
+                # 近边距离误差：自车到**包围盒最近点**的距离，感知 − 真值。
+                # ⚠️ 这个量**物理上看得见**（近边正是雷达打到的那一面），
+                #    而「中心」在正对时看不见。刹车距离依赖的也是这个。
+                'near_edge_err_m': '',
             }
             if best is not None:
                 matched_perceived.add(best)
@@ -206,6 +245,17 @@ class PerceptionScorer(Node):
                 row['position_error_m'] = f'{best_distance:.3f}'
                 row['perceived_id'] = obstacle.id
                 row['perceived_class'] = CLASS_NAMES.get(obstacle.classification, '?')
+                if distance_m > 1e-6:
+                    # 视线单位向量（自车 → 真值中心）
+                    ux, uy = (gx - ego[0]) / distance_m, (gy - ego[1]) / distance_m
+                    dx = obstacle.pose.position.x - gx
+                    dy = obstacle.pose.position.y - gy
+                    row['err_along_m'] = f'{-(dx * ux + dy * uy):.3f}'
+                    row['err_cross_m'] = f'{dx * -uy + dy * ux:.3f}'
+                row['perceived_len_m'] = f'{obstacle.size_m.x:.3f}'
+                row['perceived_wid_m'] = f'{obstacle.size_m.y:.3f}'
+                row['near_edge_err_m'] = (
+                    f'{distance_to_box(ego, obstacle) - distance_to_box(ego, gt):.3f}')
                 gvx, gvy = gt.velocity_mps.x, gt.velocity_mps.y
                 pvx, pvy = obstacle.velocity_mps.x, obstacle.velocity_mps.y
                 row['velocity_error_mps'] = f'{math.hypot(pvx - gvx, pvy - gvy):.3f}'
