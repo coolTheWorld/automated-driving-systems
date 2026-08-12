@@ -29,6 +29,7 @@
 // =============================================================================
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -188,6 +189,11 @@ private:
 
   void tick()
   {
+    // 周期耗时用**墙钟**量：这是「规划算得够不够快」（CP-P3-B 判据 #7，
+    // ≤ 50 ms = 10 Hz 的半周期），不是算法时序（SPEC §5 禁的是后者）。
+    // ⚠️ 2026-08-12 复检发现：plan 表里这条判据从 P3 验收起就**没有任何
+    //    instrumentation 在量它** —— 判据表有第 7 行，脚本与节点都没有对应物。
+    tick_started_ = std::chrono::steady_clock::now();
     if (!reference_line_) {
       publish_diagnostics(diagnostic_msgs::msg::DiagnosticStatus::WARN, "还没收到 /route/path", {});
       return;
@@ -292,6 +298,13 @@ private:
   void publish_diagnostics(
     unsigned char level, const std::string & message, const PlanResult & result)
   {
+    // tick 的所有路径都以本函数收尾，所以在这里结算周期耗时恰好覆盖全部分支。
+    if (tick_started_) {
+      last_cycle_ms_ =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - *tick_started_)
+          .count();
+      tick_started_.reset();
+    }
     diagnostic_msgs::msg::DiagnosticArray array;
     array.header.stamp = now();
     diagnostic_msgs::msg::DiagnosticStatus status;
@@ -307,6 +320,7 @@ private:
     };
     // 「27 条候选全被淘汰」和「一条候选都没生成」是完全不同的故障 ——
     // 两个计数都报出去，否则现场只能看到"车停了"。
+    add("cycle_ms", std::to_string(last_cycle_ms_));
     add("candidate_count", std::to_string(result.candidate_count));
     add("blocked_count", std::to_string(result.blocked_count));
     add("lateral_offset_m", std::to_string(result.lateral_offset_m));
@@ -334,6 +348,8 @@ private:
   std::unique_ptr<ads_common::ReferenceLine> reference_line_;
   ads_msgs::msg::ObstacleArray::SharedPtr obstacles_;
   double obstacle_timeout_s_{1.0};
+  std::optional<std::chrono::steady_clock::time_point> tick_started_;
+  double last_cycle_ms_{0.0};
   /// 上一周期的横向选择，喂给代价函数的一致性项。换路径时必须清空。
   std::optional<double> previous_offset_m_;
   /// 最近点投影的局部搜索提示。**不是性能优化是正确性要求** ——

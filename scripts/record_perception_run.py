@@ -114,6 +114,71 @@ BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
 
 
+def optimal_assignment(gts, perceived, radius_m):
+    """Globally optimal one-to-one matching by total distance (brute force).
+
+    ⚠️ 不用贪心：贪心按遍历顺序抢航迹，先来的真值会把邻居的航迹抢走
+       （本场景两目标间距 1.75 m < 配对半径 2.5 m，实测确认会发生）。
+       真值最多 2–3 个，全排列穷举即全局最优 —— 与 test_hungarian 用穷举
+       对账是同一个道理，规模小就用最笨最对的办法。
+
+    :param gts: 真值障碍物列表
+    :param perceived: 感知障碍物列表
+    :param radius_m: 配对半径（超出者不许配）
+    :return: {真值下标: 感知下标}，配不上的真值不在字典里
+    """
+    if not gts or not perceived:
+        return {}
+    cost = [[math.hypot(p.pose.position.x - g.pose.position.x,
+                        p.pose.position.y - g.pose.position.y)
+             for p in perceived] for g in gts]
+    best_total, best_map = None, {}
+    candidates = [[j for j in range(len(perceived)) if cost[i][j] < radius_m] + [None]
+                  for i in range(len(gts))]
+
+    def recurse(i, used, total, mapping):
+        nonlocal best_total, best_map
+        if i == len(gts):
+            # 配对数多者优先，其次总距离小者 —— 否则「都不配」是零代价最优解
+            key = (-len(mapping), total)
+            if best_total is None or key < best_total:
+                best_total, best_map = key, dict(mapping)
+            return
+        for j in candidates[i]:
+            if j is None:
+                recurse(i + 1, used, total, mapping)
+            elif j not in used:
+                mapping[i] = j
+                recurse(i + 1, used | {j}, total + cost[i][j], mapping)
+                del mapping[i]
+
+    recurse(0, frozenset(), 0.0, {})
+    return best_map
+
+
+def segment_intersects_box(p0, p1, obstacle) -> bool:
+    """Does segment p0→p1 pass through the obstacle's 2-D box?
+
+    遮挡判定用：自车→行人的视线段穿过 NPC 车的盒子 = 行人被挡住。
+    采样法（步长 0.2 m）：盒子最短边 1.8 m，不会跨过去漏判；
+    比解析的线段-OBB 相交少 30 行，而这里是评测脚本，宁可笨不可错。
+
+    :param p0: (x, y) 起点（自车）
+    :param p1: (x, y) 终点（目标中心）
+    :param obstacle: ads_msgs/Obstacle（遮挡者）
+    :return: 是否穿过
+    """
+    length = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+    steps = max(2, int(length / 0.2))
+    for k in range(1, steps):
+        ratio = k / steps
+        x = p0[0] + ratio * (p1[0] - p0[0])
+        y = p0[1] + ratio * (p1[1] - p0[1])
+        if distance_to_box((x, y), obstacle) <= 0.0:
+            return True
+    return False
+
+
 def distance_to_box(point, obstacle) -> float:
     """Exact 2-D distance from a point to an oriented bounding box.
 
@@ -165,6 +230,10 @@ class PerceptionScorer(Node):
         self.stimulus_max_lift_m = 0.0
         self.stimulus_max_tilt_deg = 0.0
         self.stimulus_worst = ''
+        # 真值流健康度（见 _on_truth）
+        self.last_truth_s = None
+        self.max_truth_gap_s = 0.0
+        self.last_perceived_s = None
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -173,7 +242,13 @@ class PerceptionScorer(Node):
         self.create_subscription(ObstacleArray, '/perception/obstacles', self._on_perceived, 20)
 
     def _on_truth(self, msg):
-        self.truth_frames.append((stamp_to_seconds(msg.header.stamp), msg))
+        stamp_s = stamp_to_seconds(msg.header.stamp)
+        # 真值流健康度：断流时段里配对与刺激物自检都会**静默停止**，
+        # 残缺时段照样打分会返回一个不可信的 0（2026-08-12 复检确认）。
+        if self.last_truth_s is not None:
+            self.max_truth_gap_s = max(self.max_truth_gap_s, stamp_s - self.last_truth_s)
+        self.last_truth_s = stamp_s
+        self.truth_frames.append((stamp_s, msg))
         if len(self.truth_frames) > 200:
             del self.truth_frames[:100]
         self._check_stimulus(msg)
@@ -226,20 +301,27 @@ class PerceptionScorer(Node):
         if abs(truth[0] - t) > 0.15:
             return
         self.perceived_frames += 1
+        self.last_perceived_s = t
 
-        matched_perceived = set()
-        for gt in truth[1].obstacles:
+        # ---- 全局最优配对（2026-08-12 复检修复）----------------------------
+        # ⚠️ 原来是按真值遍历顺序的**贪心**最近邻：车（列表在前）可以抢走
+        #    行人的航迹 —— 两目标间距 1.75 m < 配对半径 2.5 m，抢错之后
+        #    符号/ID/检测率统计记的都是错误的配对。
+        #    真值最多 2–3 个，穷举全排列即全局最优，不需要匈牙利。
+        assignment = optimal_assignment(
+            truth[1].obstacles, msg.obstacles, self.match_radius_m)
+        for gt_index, gt in enumerate(truth[1].obstacles):
             gx, gy = gt.pose.position.x, gt.pose.position.y
             distance_m = math.hypot(gx - ego[0], gy - ego[1])
+            best = assignment.get(gt_index)
+            best_distance = (math.hypot(
+                msg.obstacles[best].pose.position.x - gx,
+                msg.obstacles[best].pose.position.y - gy) if best is not None else None)
 
-            best = None
-            best_distance = self.match_radius_m
-            for index, obstacle in enumerate(msg.obstacles):
-                if index in matched_perceived:
-                    continue
-                d = math.hypot(obstacle.pose.position.x - gx, obstacle.pose.position.y - gy)
-                if d < best_distance:
-                    best, best_distance = index, d
+            # 遮挡标记（判据 ⑥ 用）：自车→本目标的视线穿过**另一个**真值的盒子。
+            occluded = any(
+                other is not gt and segment_intersects_box(ego, (gx, gy), other)
+                for other in truth[1].obstacles)
 
             row = {
                 't_s': f'{t:.3f}',
@@ -268,6 +350,7 @@ class PerceptionScorer(Node):
                 # ⚠️ 这个量**物理上看得见**（近边正是雷达打到的那一面），
                 #    而「中心」在正对时看不见。刹车距离依赖的也是这个。
                 'near_edge_err_m': '',
+                'occluded': int(occluded),
                 # 同一个真值目标附近还有几个感知目标（>0 表示**重复航迹**）。
                 # ⚠️ 重复航迹本身就是缺陷：规划会把一个目标当成两个障碍物。
                 #    它也是 ID 切换的直接来源 —— 两条航迹都在，
@@ -288,7 +371,6 @@ class PerceptionScorer(Node):
             if len(nearby) >= 2:
                 row['second_match_dist_m'] = f'{nearby[1]:.3f}'
             if best is not None:
-                matched_perceived.add(best)
                 obstacle = msg.obstacles[best]
                 row['detected'] = 1
                 row['position_error_m'] = f'{best_distance:.3f}'
@@ -320,7 +402,7 @@ class PerceptionScorer(Node):
         # ⚠️ 车道外的多余目标不算虚警 —— 路侧杆件是**真实存在**的障碍物，
         #    只是不在真值列表里。把它们算成虚警会让判据永远红。
         for index, obstacle in enumerate(msg.obstacles):
-            if index in matched_perceived:
+            if index in assignment.values():
                 continue
             if abs(obstacle.pose.position.y - EGO_LANE_CENTER_Y_M) > EGO_LANE_HALF_WIDTH_M:
                 continue
@@ -460,6 +542,45 @@ class PerceptionScorer(Node):
         print(f'{"ID 切换次数":<34}{switches:>10}   <= 2        '
               f'{"PASS" if switches <= 2 else "FAIL"}     (全距离 {all_switches})')
         ok = ok and switches <= 2
+        # ⑥ 遮挡后 ID 保持（plan 表第 6 条 —— 2026-08-12 前从未实现，
+        #    编号从⑤直接跳到⑦就是那次遗漏留下的痕迹，故意保留提醒）
+        #
+        # 遮挡窗口 = 某真值被另一真值挡住视线的连续帧段（occluded 列）。
+        # 判据：窗口前最后一次配到的感知 ID == 窗口后第一次配到的感知 ID。
+        # ⚠️ 一个遮挡事件都没有 ⟹ 判据没被激励 ⟹ **FAIL 而不是空过** ——
+        #    「场景先于算法」：dynamic:=both 的设计目的就是互相遮挡，
+        #    没发生说明场景变了，绿灯只会骗人。
+        occlusion_windows = 0
+        occlusion_violations = 0
+        by_gt = defaultdict(list)
+        for row in in_range:
+            by_gt[row['gt_id']].append(row)
+        for gt_rows in by_gt.values():
+            previous_id = None
+            in_window = False
+            pre_window_id = None
+            for row in gt_rows:
+                if row.get('occluded'):
+                    if not in_window:
+                        in_window = True
+                        pre_window_id = previous_id
+                elif in_window:
+                    # 窗口结束后第一次真的配上才结算
+                    if row['detected'] and row['perceived_id'] != '':
+                        if pre_window_id is not None:
+                            occlusion_windows += 1
+                            if row['perceived_id'] != pre_window_id:
+                                occlusion_violations += 1
+                        in_window = False
+                        pre_window_id = None
+                if row['detected'] and row['perceived_id'] != '':
+                    previous_id = row['perceived_id']
+        occl_ok = occlusion_windows >= 1 and occlusion_violations == 0
+        print(f'{"遮挡后 ID 保持":<34}{occlusion_violations:>10}   == 0        '
+              f'{"PASS" if occl_ok else "FAIL"}     (窗口 {occlusion_windows} 个'
+              + ('' if occlusion_windows else ' —— 场景没激励这条判据！') + ')')
+        ok = ok and occl_ok
+
         # ⑦ 车道内虚警
         print(f'{"车道内虚警帧次":<34}{self.false_positives_in_lane:>10}   == 0        '
               f'{"PASS" if self.false_positives_in_lane == 0 else "FAIL"}'
@@ -508,6 +629,23 @@ def main() -> int:
         rclpy.shutdown()
         return 2
     print(f'{stimulus_line} ✓')
+
+    # ---- 真值流健康度：断流 ⟹ 本次运行无效（2026-08-12 复检补上）----------
+    # 断流时段里配对与刺激物自检都静默停止 —— 残缺时段打出的分不可信，
+    # 与「刺激物坏了还打分」同一类，同样拒绝打分而不是打折。
+    gap_bad = node.max_truth_gap_s > 1.0
+    tail_bad = (node.last_truth_s is not None and node.last_perceived_s is not None and
+                node.last_perceived_s - node.last_truth_s > 1.0)
+    if gap_bad or tail_bad:
+        print('\n✗✗ 本次运行**无效**：真值流断过 ✗✗')
+        print(f'   最大帧间隔 {node.max_truth_gap_s:.2f} s（限 1.0）'
+              + ('，且结尾缺真值 %.2f s' % (node.last_perceived_s - node.last_truth_s)
+                 if tail_bad else ''))
+        print('   查 obstacle_truth / parameter_bridge，不要看下面的数字。')
+        node.destroy_node()
+        rclpy.shutdown()
+        return 2
+    print(f'真值流：最大帧间隔 {node.max_truth_gap_s:.2f} s ✓')
     dup = [r for r in node.rows if r.get('extra_within_match_m')]
     if dup:
         seconds = sorted(float(r['second_match_dist_m']) for r in dup if r['second_match_dist_m'])

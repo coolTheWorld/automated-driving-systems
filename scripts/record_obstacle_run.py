@@ -279,6 +279,11 @@ class ObstacleRecorder(Node):
             'candidate_count': self.planner_status.get('candidate_count', ''),
             'control_state': self.latest_control.get('state', ''),
             'control_lateral_error_m': self.latest_control.get('lateral_error_m', ''),
+            # ⚠️ 2026-08-12 复检补上的三条：plan 的 CP-P3-B 表有 7 条判据，
+            #    本脚本此前只实现了 4 条 —— #5 (a_lat)、#6 (跟踪误差)、
+            #    #7 (规划周期) 从 P3 验收起就没人量过。
+            'control_lateral_accel_mps2': self.latest_control.get('lateral_accel_mps2', ''),
+            'planning_cycle_ms': self.planner_status.get('cycle_ms', ''),
         })
 
     def tick(self):
@@ -349,14 +354,64 @@ def score(recorder, scenario):
             '> %.2f' % recorder.safety_margin_m, 'SPEC §8 S04')
         passed &= check(
             '规划器最大横向偏移 (m)', '%.3f' % max_planner_offset_m,
-            max_planner_offset_m > 0.1, '> 0.10', '证明它确实决定了绕行')
+            max_planner_offset_m > 0.1, '> 0.10', '前提（不在 plan 表内）：证明绕行确实来自规划器')
         passed &= check(
             '不越车道边线：最小余量 (m)', '%.3f' % min_lane_edge_margin_m,
             min_lane_edge_margin_m > 0.0, '> 0',
             'ODD 不允许压对向（仅南侧直道 %d 拍）' % len(on_lane))
+
+        # ---- plan 表 #4：绕行后回到中心线 —— 量**车**，不是规划器 ----------
+        # ⚠️ 原来这条量的是规划器的 lateral_offset（阈值还写成 0.10）：
+        #    规划器想回中心 ≠ 车回了中心。plan 原文是「稳态 |d| ≤ 0.15 m」，
+        #    d 是车体的横向偏移。稳态窗口 = 南侧直道上、越过障碍物 15 m 之后
+        #    （绕行机动span约 10–15 m，之内还是暂态）。
+        obstacle_max_x = max(o[0] for o in recorder.obstacles)
+        steady = [r for r in rows
+                  if r['on_south_straight'] and r['rear_x_m'] > obstacle_max_x + 15.0]
+        if steady:
+            steady_d = max(abs(r['lateral_offset_m']) for r in steady)
+            passed &= check(
+                '回中心稳态 |d| (m)', '%.3f' % steady_d, steady_d <= 0.15, '<= 0.15',
+                'plan #4：量车体（%d 拍）；此前误量了规划器' % len(steady))
+        else:
+            passed &= check('回中心稳态 |d| (m)', '无样本', False, '<= 0.15',
+                            '稳态窗口没有样本 —— 路线或障碍物位置变了？')
         passed &= check(
-            '绕完回到中心线 (m)', '%.3f' % final_planner_offset_m,
-            final_planner_offset_m < 0.10, '< 0.10', 'w_c < w_o 的整链路验证')
+            '绕完规划器偏移归零 (m)', '%.3f' % final_planner_offset_m,
+            final_planner_offset_m < 0.10, '< 0.10', '辅助（不在 plan 表内）：w_c < w_o 链路验证')
+
+        # ---- plan 表 #5：最大横向加速度（|v·ω|，车实际受的）-----------------
+        a_lat = [abs(float(r['control_lateral_accel_mps2'])) for r in all_rows
+                 if r['control_lateral_accel_mps2']]
+        if a_lat:
+            passed &= check(
+                '最大横向加速度 (m/s²)', '%.3f' % max(a_lat), max(a_lat) <= 1.5, '<= 1.5',
+                'plan #5：2026-08-12 前从未量过')
+        else:
+            passed &= check('最大横向加速度 (m/s²)', '无数据', False, '<= 1.5')
+
+        # ---- plan 表 #6：跟踪误差（车 vs **规划轨迹**）----------------------
+        # 跟踪质量类 ⟹ 只在 TRACKING 拍里算（车没在跟轨迹时该量无定义）。
+        # control_node 自 P3-S4 起跟的就是 /planning/trajectory，
+        # 所以它的 lateral_error 正是「车 vs 规划轨迹」。
+        track_err = [abs(float(r['control_lateral_error_m'])) for r in rows
+                     if r['control_state'] == 'TRACKING' and r['control_lateral_error_m']]
+        if track_err:
+            passed &= check(
+                '跟踪误差 车vs规划轨迹 (m)', '%.3f' % max(track_err),
+                max(track_err) <= 0.15, '<= 0.15', 'plan #6：2026-08-12 前从未量过')
+        else:
+            passed &= check('跟踪误差 车vs规划轨迹 (m)', '无数据', False, '<= 0.15')
+
+        # ---- plan 表 #7：规划周期耗时 ---------------------------------------
+        cycle = [float(r['planning_cycle_ms']) for r in all_rows if r['planning_cycle_ms']]
+        if cycle:
+            passed &= check(
+                '规划周期耗时 (ms)', '%.1f' % max(cycle), max(cycle) <= 50.0, '<= 50',
+                'plan #7：节点 2026-08-12 才有 instrumentation')
+        else:
+            passed &= check('规划周期耗时 (ms)', '无数据', False, '<= 50',
+                            'planning_node 没发 cycle_ms —— 版本对吗？')
     else:
         passed &= check(
             '规划器报告不可行的拍数', '%d' % stopping_ticks, stopping_ticks > 0, '> 0',

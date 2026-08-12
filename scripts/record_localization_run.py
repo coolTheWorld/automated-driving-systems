@@ -73,6 +73,8 @@ class LocalizationRecorder(Node):
         self._duration_s = duration_s
         self._rows = []
         self._truth = None
+        self._prev_truth = None
+        self._dropped_unaligned = 0
         self._ndt_ms = 0.0
         self._state = ''
         self._start_ns = None
@@ -87,6 +89,7 @@ class LocalizationRecorder(Node):
             DiagnosticArray, '/localization/diagnostics', self._on_diag, qos)
 
     def _on_truth(self, msg: Odometry) -> None:
+        self._prev_truth = self._truth   # 插值要两条，见 _interpolated_truth
         self._truth = msg
         if self._first_truth is None:
             self._first_truth = msg
@@ -101,6 +104,37 @@ class LocalizationRecorder(Node):
                 if kv.key == 'ndt_time_ms':
                     self._ndt_ms = float(kv.value)
 
+    def _interpolated_truth(self, stamp_ns):
+        """Truth pose linearly interpolated to the estimate's own timestamp.
+
+        ⚠️ 2026-08-12 复检补上的缺口：原来直接拿**最后一条**缓存的真值相减，
+           真值 50 Hz ⟹ 最多陈旧 20 ms ⟹ 车速 5.5 m/s 时 **~0.11 m** 的
+           方法误差混进测量 —— 与 0.30 m 的判据同量级的一大块。
+           修法：缓存最近两条真值，把位置线性插值、朝向按角度插值到
+           估计消息自己的时间戳上。外推超过一个周期（>25 ms）的样本丢弃
+           （插值是内插不是预言）。
+
+        :param stamp_ns: 估计消息的时间戳（ns）
+        :return: (x, y, yaw) 或 None（真值不足/太陈旧）
+        """
+        if self._prev_truth is None or self._truth is None:
+            return None
+        t0 = rclpy.time.Time.from_msg(self._prev_truth.header.stamp).nanoseconds
+        t1 = rclpy.time.Time.from_msg(self._truth.header.stamp).nanoseconds
+        if t1 <= t0:
+            return None
+        # 允许少量外推（真值到达抖动），超过一个真值周期就放弃这个样本。
+        if stamp_ns > t1 + (t1 - t0) or stamp_ns < t0:
+            return None
+        ratio = (stamp_ns - t0) / (t1 - t0)
+        p0, p1 = self._prev_truth.pose.pose, self._truth.pose.pose
+        x = p0.position.x + ratio * (p1.position.x - p0.position.x)
+        y = p0.position.y + ratio * (p1.position.y - p0.position.y)
+        yaw0 = _yaw_from_quaternion(p0.orientation)
+        yaw1 = _yaw_from_quaternion(p1.orientation)
+        yaw = yaw0 + ratio * _wrap(yaw1 - yaw0)
+        return (x, y, yaw)
+
     def _on_estimate(self, msg: PoseWithCovarianceStamped) -> None:
         if self._truth is None:
             return
@@ -109,7 +143,11 @@ class LocalizationRecorder(Node):
             self._start_ns = now_ns
         elapsed_s = (now_ns - self._start_ns) * 1e-9
 
-        truth_pose = self._truth.pose.pose
+        interpolated = self._interpolated_truth(
+            rclpy.time.Time.from_msg(msg.header.stamp).nanoseconds)
+        if interpolated is None:
+            self._dropped_unaligned += 1
+            return
         estimate = msg.pose.pose
         dx = estimate.position.x - truth_pose.position.x
         dy = estimate.position.y - truth_pose.position.y
@@ -124,8 +162,8 @@ class LocalizationRecorder(Node):
 
         self._rows.append({
             't_s': round(elapsed_s, 4),
-            'truth_x': round(truth_pose.position.x, 4),
-            'truth_y': round(truth_pose.position.y, 4),
+            'truth_x': round(truth_x, 4),
+            'truth_y': round(truth_y, 4),
             'est_x': round(estimate.position.x, 4),
             'est_y': round(estimate.position.y, 4),
             'lateral_error_m': round(lateral_m, 5),
@@ -153,6 +191,17 @@ class LocalizationRecorder(Node):
             writer = csv.DictWriter(handle, fieldnames=list(self._rows[0]))
             writer.writeheader()
             writer.writerows(self._rows)
+
+        # 时间对齐丢弃量要**报出来**：偶发几条正常（真值到达抖动），
+        # 大量丢弃说明两条流的时钟对不上 —— 那时所有数字都不可信。
+        total = len(self._rows) + self._dropped_unaligned
+        if self._dropped_unaligned:
+            print(f'时间对齐：丢弃 {self._dropped_unaligned}/{total} 条无法内插的样本'
+                  f'（>5% 则本次测量不可信）')
+        if total > 0 and self._dropped_unaligned / total > 0.05:
+            print('✗ 时间对齐丢弃超过 5% —— 真值/估计两条流的时间戳对不上，'
+                  '本次运行的测量不可信', file=sys.stderr)
+            return 1
 
         # ⚠️ 只在**已经初始化**之后打分。冷启动的头几拍位置来自单次 GNSS
         #    （σ=2 m），把它算进最大值等于在考核"GNSS 那一枪准不准"。
