@@ -229,7 +229,23 @@ def render_npc_car(vehicle: dict, derived: dict) -> str:
            两个症状看起来毫不相干，根因是同一个。
            关掉重力之后模型不压在地面上，接触力消失，纯由 cmd_vel 驱动 ——
            这正是「道具」该有的行为：它是感知的**目标**，不是物理交互对象。
-      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。 -->
+
+      ⚠️ **同时删掉了 <collision>，两件事必须一起做。**（2026-08-12 实测逼出来的）
+         只关重力、留着 collision 的后果是一颗地雷：关掉重力**也关掉了受扰后
+         回到地面的唯一机制**，于是任何一次接触给的角速度都**永不衰减** ——
+         而 VelocityControl 是沿模型**自己的车体 x 轴**推它的，俯仰角一旦不为零，
+         道具就斜着往上飞，速度恰好是 v·sin(pitch)。
+         实测：两个 NPC 在 t=46 s 相撞，此后俯仰角以 1.48°/s 匀速增长、
+         高度按 t² 上升，20 s 后飞到 20 m 高。而 CP-P5-B 的现场症状是
+         **「检测率低、分类错、位置误差大」** —— 三条判据同时红，指向感知，
+         而错在道具。查了两轮才找到（见 docs/modules/perception.md §8）。
+         `dynamic:=oncoming`（只有一个道具、不可能相撞）下 50 s 全程 z=0.000，
+         这是那次的对照组。
+
+      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。
+         这一条不是推理，是删 collision 之后**重新实测过**的（点云里目标仍在）。
+      ⚠️ 代价：自车会从道具身上**穿过去**。可以接受 —— CP-P5-B 量的是感知质量，
+         「撞没撞上」由记录脚本按真值算最小间距来判，本来就不依赖物理引擎。 -->
       <gravity>false</gravity>
       <inertial>
         <pose>{d['chassis_center_x']:.6g} 0 {d['com_h']:.6g} 0 0 0</pose>
@@ -249,12 +265,7 @@ def render_npc_car(vehicle: dict, derived: dict) -> str:
         </box></geometry>
         <material><ambient>0.2 0.3 0.7 1</ambient><diffuse>0.2 0.3 0.7 1</diffuse></material>
       </visual>
-      <collision name="body">
-        <pose>{d['chassis_center_x']:.6g} 0 {d['chassis_center_z']:.6g} 0 0 0</pose>
-        <geometry><box>
-          <size>{d['length']:.6g} {geo['width_m']:.6g} {d['chassis_len_z']:.6g}</size>
-        </box></geometry>
-      </collision>
+      <!-- ⚠️ **没有 <collision>，这是有意的。** 见上面那段关于重力的注释的第二半。 -->
 
 {chr(10).join(wheels)}
     </link>
@@ -304,7 +315,23 @@ def render_pedestrian(actor: dict) -> str:
            两个症状看起来毫不相干，根因是同一个。
            关掉重力之后模型不压在地面上，接触力消失，纯由 cmd_vel 驱动 ——
            这正是「道具」该有的行为：它是感知的**目标**，不是物理交互对象。
-      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。 -->
+
+      ⚠️ **同时删掉了 <collision>，两件事必须一起做。**（2026-08-12 实测逼出来的）
+         只关重力、留着 collision 的后果是一颗地雷：关掉重力**也关掉了受扰后
+         回到地面的唯一机制**，于是任何一次接触给的角速度都**永不衰减** ——
+         而 VelocityControl 是沿模型**自己的车体 x 轴**推它的，俯仰角一旦不为零，
+         道具就斜着往上飞，速度恰好是 v·sin(pitch)。
+         实测：两个 NPC 在 t=46 s 相撞，此后俯仰角以 1.48°/s 匀速增长、
+         高度按 t² 上升，20 s 后飞到 20 m 高。而 CP-P5-B 的现场症状是
+         **「检测率低、分类错、位置误差大」** —— 三条判据同时红，指向感知，
+         而错在道具。查了两轮才找到（见 docs/modules/perception.md §8）。
+         `dynamic:=oncoming`（只有一个道具、不可能相撞）下 50 s 全程 z=0.000，
+         这是那次的对照组。
+
+      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。
+         这一条不是推理，是删 collision 之后**重新实测过**的（点云里目标仍在）。
+      ⚠️ 代价：自车会从道具身上**穿过去**。可以接受 —— CP-P5-B 量的是感知质量，
+         「撞没撞上」由记录脚本按真值算最小间距来判，本来就不依赖物理引擎。 -->
       <gravity>false</gravity>
       <inertial>
         <pose>0 0 {hz / 2.0:.6g} 0 0 0</pose>
@@ -317,10 +344,7 @@ def render_pedestrian(actor: dict) -> str:
         <geometry><box><size>{lx:.6g} {wy:.6g} {hz:.6g}</size></box></geometry>
         <material><ambient>0.8 0.4 0.1 1</ambient><diffuse>0.8 0.4 0.1 1</diffuse></material>
       </visual>
-      <collision name="body">
-        <pose>0 0 {hz / 2.0:.6g} 0 0 0</pose>
-        <geometry><box><size>{lx:.6g} {wy:.6g} {hz:.6g}</size></box></geometry>
-      </collision>
+      <!-- ⚠️ **没有 <collision>，这是有意的。** 见上面那段关于重力的注释的第二半。 -->
     </link>
 {_plugins('pedestrian')}
   </model>

@@ -58,6 +58,28 @@ MATCH_RADIUS_M = 2.5
 EGO_LANE_HALF_WIDTH_M = 1.75
 EGO_LANE_CENTER_Y_M = -51.75
 
+# ---- 刺激物自检：这一跑到底有没有在考感知 ---------------------------------
+#
+# ⚠️ **这两条不是感知判据，是判据的前提条件。** 违反时输出「本次运行无效」
+#    而不是「感知不达标」—— 两者必须分得开。
+#
+# 为什么值得单列（2026-08-12 实测，代价是两轮误判的根因）：
+#   CP-P5-B 首轮 6/7 不达标，三条判据（检测率、分类、位置误差）同时红。
+#   我据此查了两轮**感知代码**，两次给出根因判断，两次被自己随后的数据推翻。
+#   真正的原因是**被感知的东西坏了**：两个 NPC 道具相撞后翻滚着飞上天
+#   （20 s 飞到 20 m 高），飞出了雷达的垂直视场。
+#   感知代码从头到尾没有问题 —— 它如实报告了「那里什么都没有」。
+#
+#   「目标没被检测到」与「目标根本不在视场里」在判据表上长得**一模一样**，
+#   而排查方向截然相反。所以必须在量感知之前先量刺激物。
+#   这与 CLAUDE.md 里「判据的适用范围没圈准」是同一族的坑。
+#
+# 阈值取得很松（真值恒等于 0），只为抓灾难性的道具失效，不为抓精度：
+#   离地 0.10 m —— 比雷达噪声 σ=1 cm 大一个量级，不会误报；
+#   倾斜 2.0°  —— 实测那次飞行 20 s 内涨到 33.7°，2° 在 1.4 s 内就会触发。
+STIMULUS_MAX_LIFT_M = 0.10
+STIMULUS_MAX_TILT_DEG = 2.0
+
 BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
@@ -85,6 +107,10 @@ class PerceptionScorer(Node):
         self.assigned_ids = defaultdict(list)
         self.false_positives_in_lane = 0
         self.perceived_frames = 0
+        # 刺激物自检（见 STIMULUS_* 常量上方的说明）
+        self.stimulus_max_lift_m = 0.0
+        self.stimulus_max_tilt_deg = 0.0
+        self.stimulus_worst = ''
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -96,6 +122,36 @@ class PerceptionScorer(Node):
         self.truth_frames.append((stamp_to_seconds(msg.header.stamp), msg))
         if len(self.truth_frames) > 200:
             del self.truth_frames[:100]
+        self._check_stimulus(msg)
+
+    def _check_stimulus(self, msg):
+        """Watch the *stimulus*, not the perception: are the targets still on the ground?
+
+        ⚠️ 这不是感知判据，是**判据的前提条件**。它回答的是
+           「这一跑到底有没有在考感知」，与「感知考得好不好」是两件事。
+        """
+        for obstacle in msg.obstacles:
+            # 所有目标的真值 z 都是**包围盒中心**，贴地物体的包围盒中心恰好在 height/2。
+            lift_m = abs(obstacle.pose.position.z - 0.5 * obstacle.size_m.z)
+            # 倾斜角 = 物体自身 z 轴与世界 z 轴的夹角。用它而不是分别看
+            # roll/pitch：那两个量依赖 yaw 的取法，而这个不依赖，
+            # 任意朝向的目标都能用同一个阈值判。
+            q = obstacle.pose.orientation
+            up_z = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+            tilt_deg = math.degrees(math.acos(max(-1.0, min(1.0, up_z))))
+            if lift_m > self.stimulus_max_lift_m or tilt_deg > self.stimulus_max_tilt_deg:
+                self.stimulus_worst = (
+                    f'id={obstacle.id} 离地 {lift_m:.3f} m、倾斜 {tilt_deg:.2f}°')
+            self.stimulus_max_lift_m = max(self.stimulus_max_lift_m, lift_m)
+            self.stimulus_max_tilt_deg = max(self.stimulus_max_tilt_deg, tilt_deg)
+
+    def stimulus_ok(self) -> bool:
+        """Whether the run is even valid — i.e. the targets stayed on the ground.
+
+        :return: 刺激物完好为 True
+        """
+        return (self.stimulus_max_lift_m <= STIMULUS_MAX_LIFT_M and
+                self.stimulus_max_tilt_deg <= STIMULUS_MAX_TILT_DEG)
 
     def _ego_position(self):
         """Ego position in map, or None when TF is not available yet."""
@@ -268,7 +324,7 @@ class PerceptionScorer(Node):
 def main() -> int:
     """Entry point.
 
-    :return: 0 表示全部判据通过
+    :return: 0 = 全部判据通过；1 = 有判据未通过；2 = **本次运行无效**（刺激物坏了）
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--duration-s', type=float, default=45.0)
@@ -285,6 +341,25 @@ def main() -> int:
         rclpy.spin_once(node, timeout_sec=0.05)
     node.write(args.out)
     print(f'CSV: {args.out}')
+
+    # ⚠️ 刺激物自检**在打分之前**，而且不达标时**不打分** ——
+    #    刺激物坏了的时候那张判据表上的每一个数都是没有意义的，
+    #    印出来只会让人拿着它去查感知（那正是上次踩的坑）。
+    stimulus_line = (f'刺激物：最大离地 {node.stimulus_max_lift_m:.3f} m'
+                     f'（限 {STIMULUS_MAX_LIFT_M}），'
+                     f'最大倾斜 {node.stimulus_max_tilt_deg:.2f}°'
+                     f'（限 {STIMULUS_MAX_TILT_DEG}）')
+    if not node.stimulus_ok():
+        print('\n✗✗ 本次运行**无效**：目标道具在仿真里坏掉了，不是感知不达标 ✗✗')
+        print(f'   {stimulus_line}')
+        print(f'   最差：{node.stimulus_worst}')
+        print('   查 models/npc_car|pedestrian/model.sdf 与 npc_controller，'
+              '不要查 ads_perception。')
+        node.destroy_node()
+        rclpy.shutdown()
+        return 2
+    print(f'{stimulus_line} ✓')
+
     passed = node.score()
     node.destroy_node()
     rclpy.shutdown()

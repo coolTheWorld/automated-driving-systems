@@ -41,12 +41,34 @@
 //  ## 控制律为什么可以这么简单
 //
 //  `VelocityControl` 插件是**运动学**的：给什么速度就走什么速度，没有轮胎、
-//  没有滑移、没有执行机构延迟。所以「跑飞」在结构上不可能发生，
-//  一个比例朝向环就够了。
+//  没有滑移、没有执行机构延迟。所以「跑飞」在结构上不可能发生。
 //
 //  ⚠️ **不要把 Stanley 搬过来。** 那是被测对象的控制器，它的调参结论
 //  （k_e = 1.0 等）建立在真实动力学上。在一个理想积分器上再验一遍
 //  既没有意义，又会让人误以为 NPC 的行为能反映控制器质量。
+//
+//  ## ⚠️ 但「只对准航点」不够 —— 它跟的是**点**，不是**线**（2026-08-12 实测）
+//
+//  最初的版本只有一个朝向环：`angular.z = k · angle_diff(yaw, 指向航点的角)`。
+//  在一条直线上跑，这看起来完全够用，实际有一个致命的盲区：
+//
+//    掉头那一下会甩出约 **1.5 m** 的横向偏差（转弯半径 v/ω），
+//    而下一个航点在 **84 m** 之外 —— 1.5 m 的横向偏差只对应
+//    `atan(1.5/84) = 1.0°` 的朝向误差，横向收敛速度 0.07 m/s，
+//    要 **21 s** 才回得来，而那时它已经又到端点、又甩出去一次。
+//
+//  实测后果：NPC 车的 y 在 −49.7 与 **−46.75** 之间来回摆，而行人的车道
+//  中心是 −46.5 —— 于是**两个道具撞在一起**，各自拿到一个反向的角速度。
+//  再加上 `<gravity>false</gravity>`（那是为了不让它们下沉/倾倒），
+//  这个角速度**永不衰减**，而 VelocityControl 沿**车体 x 轴**推它们，
+//  于是道具斜着飞上天（实测 20 s 飞到 20 m 高）。
+//  CP-P5-B 的现场是「检测率低、分类错、位置误差大」，三条判据一起红，
+//  **指向感知，而错在道具**。
+//
+//  修法是把「对准点」换成「跟线段」：投影到当前线段上，取前视点作为瞄准点。
+//  同样 1.5 m 的横向偏差，前视 4 m 时朝向修正是 `atan(1.5/4) = 21°`，
+//  横向收敛 1.4 m/s —— 比原来快 **20 倍**，一秒内回到车道。
+//  这不是 Stanley（没有增益调参、没有动力学假设），是纯追踪最朴素的形式。
 // =============================================================================
 
 #include <algorithm>
@@ -106,6 +128,20 @@ public:
     // 约 0.5 s 内对齐航向。调大 → 转向更急（点云里能看到侧面）；
     // 调小 → 转弯时会画一个大圈，可能压出车道。
     heading_gain_ = declare_parameter<double>("heading_gain", 2.0);
+
+    // 前视距离：瞄准点取「投影点沿线段再往前 lookahead_m」。
+    // 这是把「跟点」变成「跟线」的**唯一**参数，见文件头那段实测。
+    //
+    // 横向偏差 e 对应的朝向修正是 atan(e / lookahead)：
+    //   调小 → 修正更猛、回线更快，但接近端点时瞄准点抖，会左右摆
+    //          （极限情况 lookahead → 0 时退化成「盯着脚下」，必然振荡）；
+    //   调大 → 更平顺，但横向收敛变慢；大到与航段等长时就退化回原来那个
+    //          「只对准端点」的版本 —— 也就是本文件头描述的那个 bug。
+    // 取 4.0 m：约等于 NPC 车 1 s 的行程，1.5 m 的横向偏差修 21°，一秒内收回。
+    lookahead_m_ = declare_parameter<double>("lookahead_m", 4.0);
+    if (!(lookahead_m_ > 0.0)) {
+      throw std::invalid_argument("npc_controller: lookahead_m 必须为正");
+    }
 
     // 朝向误差大的时候减速，避免边转边冲出去。
     // cos 加权：误差 90° 时速度归零，只原地转。
@@ -180,12 +216,36 @@ private:
       }
     }
 
+    // ---- 瞄准点：投影到**当前线段**上，再沿线段前视 lookahead_m ----------
+    //
+    // ⚠️ 不是「对准 target」。两者在直线上跑时几乎一样，只在**被甩出车道之后**
+    //    才分得出高下 —— 而那正是唯一出问题的时刻。推导见文件头。
+    const Waypoint & start = waypoints_[index_ == 0 ? waypoints_.size() - 1 : index_ - 1];
+    const double seg_x = target.x_m - start.x_m;
+    const double seg_y = target.y_m - start.y_m;
+    const double seg_len_sq = seg_x * seg_x + seg_y * seg_y;
+
+    double aim_x = target.x_m;
+    double aim_y = target.y_m;
+    if (seg_len_sq > 1.0e-9) {
+      const double seg_len = std::sqrt(seg_len_sq);
+      // 投影比例，夹到 [0,1]：车在线段外（还没上线 / 已冲过端点）时
+      // 不外推，否则瞄准点会跑到线段延长线上，掉头那一下直接冲出去。
+      const double ratio = std::clamp(
+        ((x_m_ - start.x_m) * seg_x + (y_m_ - start.y_m) * seg_y) / seg_len_sq, 0.0, 1.0);
+      const double aim_ratio = std::min(1.0, ratio + lookahead_m_ / seg_len);
+      aim_x = start.x_m + aim_ratio * seg_x;
+      aim_y = start.y_m + aim_ratio * seg_y;
+    }
+    // 退化情况（两个航点重合）下 aim 保持 target，行为退回原来的「对准点」。
+
     // 朝向误差。**必须用归一化的角度差** —— 直接相减的话，
     // 目标航向在 +π 而当前在 −π 时会算出 2π 的误差，车会朝反方向猛转一圈。
     // 这正是 ads_common::angles 存在的理由（P1 就下沉到公共包了）。
     // angle_diff(from, to) = 从 from 转到 to 的最短差，正值 = 左转。
     // 参数顺序**不能反** —— 反了误差符号就反，车会朝着背离航点的方向转。
-    const double heading_error_rad = ads_common::angle_diff(yaw_rad_, std::atan2(dy, dx));
+    const double heading_error_rad =
+      ads_common::angle_diff(yaw_rad_, std::atan2(aim_y - y_m_, aim_x - x_m_));
 
     // 朝向误差大时减速：cos 加权，90° 时归零（只转不走）。
     const double speed_scale =
@@ -203,6 +263,7 @@ private:
   bool loop_{true};
   double arrival_radius_m_{1.0};
   double heading_gain_{2.0};
+  double lookahead_m_{4.0};
   bool slow_down_when_turning_{true};
 
   size_t index_{0};
