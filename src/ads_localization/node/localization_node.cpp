@@ -340,9 +340,11 @@ public:
     //
     // 这是**固定阈值**的版本，不是严格的卡方检验。区别与理由：
     //   严格卡方要算 d² = yᵀS⁻¹y，其中 S = HPHᵀ + R，而 R 就是 NDT 的输出
-    //   协方差 —— 它现在 `covariance_scale = 1.0` **未标定**（见
-    //   docs/modules/localization.md §9.5）。R 偏小则好帧被误杀，偏大则坏帧
-    //   照样放行，于是卡方分布表里那些数（6 自由度 95% 分位 12.59）**没有意义**。
+    //   协方差 —— `covariance_scale` 虽已按 NEES 标定到 0.8（2026-08-11，
+    //   下面第 371 行附近），但那是**中位数对齐**，重尾还在（标定当天实测），
+    //   拿它当严格卡方的 R 仍会误杀重尾里的好帧。R 偏小则好帧被误杀，
+    //   偏大则坏帧照样放行，于是卡方分布表里那些数（6 自由度 95% 分位
+    //   12.59）**还不能用**。严格卡方列为 P8 前置。
     //   在标定之前先装一个阈值随便填的保险丝，比不装更糟 ——
     //   它会让人以为有防线，而没人知道它挡在哪里。
     //
@@ -721,6 +723,7 @@ private:
     }
 
     ndt_ok_ = true;
+    last_ndt_success_time_ = now();
     consecutive_ndt_failures_ = 0;
     PublishNdtPose(result, msg->header.stamp);
     try {
@@ -833,6 +836,19 @@ private:
   {
     const double gnss_age_s =
       last_gnss_time_.nanoseconds() == 0 ? 1e9 : (now() - last_gnss_time_).seconds();
+    // ⚠️ ndt_ok_ 必须带超时（2026-08-12 复检修复）：它原来是**无超时的锁存量**，
+    //    只在下一帧 NDT 跑过之后才可能翻 false —— 而雷达断流/点云持续被
+    //    stale-drop 时**根本没有下一帧**，状态机于是永远停在 NDT_AIDED，
+    //    诊断谎报正常，实际早已在纯航位推算上漂。
+    //    超时取 1.0 s = 雷达标称周期（0.1 s）的 10 倍，与规划器的障碍物
+    //    过期阈值同一个取法。
+    const double ndt_age_s =
+      last_ndt_success_time_.nanoseconds() == 0 ? 1e9 : (now() - last_ndt_success_time_).seconds();
+    if (ndt_ok_ && ndt_age_s > 1.0) {
+      ndt_ok_ = false;
+      RCLCPP_WARN(
+        get_logger(), "NDT 已 %.1f s 没有成功帧（雷达断流？），降出 NDT_AIDED", ndt_age_s);
+    }
     if (ndt_ok_ && ndt_map_) {
       state_ = LocalizationState::kNdtAided;
     } else if (gnss_age_s < gnss_timeout_s_) {
@@ -940,6 +956,7 @@ private:
   bool have_gnss_{false};
   bool have_odom_{false};
   bool ndt_ok_{false};
+  rclcpp::Time last_ndt_success_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_gnss_time_{0, 0, RCL_ROS_TIME};
   nav_msgs::msg::Odometry last_odom_;
   ads_localization::NdtAlignResult last_ndt_result_;

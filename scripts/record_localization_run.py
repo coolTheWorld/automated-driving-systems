@@ -148,10 +148,10 @@ class LocalizationRecorder(Node):
         if interpolated is None:
             self._dropped_unaligned += 1
             return
+        truth_x, truth_y, truth_yaw = interpolated
         estimate = msg.pose.pose
-        dx = estimate.position.x - truth_pose.position.x
-        dy = estimate.position.y - truth_pose.position.y
-        truth_yaw = _yaw_from_quaternion(truth_pose.orientation)
+        dx = estimate.position.x - truth_x
+        dy = estimate.position.y - truth_y
 
         # ⚠️ 横向误差 = 误差矢量在**车体横轴**上的投影，不是误差的模。
         #    两者在直道上接近，转弯时能差一倍，而 SPEC §1 写的是横向。

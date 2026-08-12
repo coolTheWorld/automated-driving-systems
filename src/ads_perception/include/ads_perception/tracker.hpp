@@ -178,6 +178,23 @@ struct TrackerParams
   /// 调小到 0.5 → 那 0.44 m 的一批留下来，重复照旧。
   double merge_distance_m{1.0};
 
+  /// 被另一条已确认航迹挡住视线时，未命中最多滑行多少帧。
+  ///
+  /// ⚠️ 这条规则解决一个**实测钉死的设计冲突**（2026-08-12）：CP-P5-B 第 6 条
+  ///    要求「遮挡后 ID 保持」，而实测遮挡持续 0.5–1.8 s（车 4.4 m 扫过视线），
+  ///    删除窗口 max_misses=0.5 s —— 任何真实遮挡都会删航迹换 ID。
+  ///    解法是多目标跟踪的标准做法：预测位置被**另一条已确认航迹**的盒子
+  ///    挡住视线时，未命中不计入删除计数（目标在别人身后，看不见 ≠ 消失），
+  ///    航迹按恒速模型在遮挡后面滑行，照常发布 —— 规划**应当**知道
+  ///    车后面有个行人。
+  ///
+  /// 取 30（3 s @ 10 Hz）：本 ODD 最长的可信遮挡 ~2 s（自车静止、视线转得慢）
+  /// 加 50% 余量。滑行是**有上限的**：没有它，一个在遮挡后面真的离开的目标
+  /// 会留下永生幽灵 —— 与 max_misses 防幽灵是同一个理由，只是这里的
+  /// "看不见"有一个可解释的原因，所以允许更久。
+  /// 调小到 5 → 与不做此规则无异；调大到 100 → 幽灵在遮挡后面活 10 s。
+  int max_occluded_misses{30};
+
   /// 两条航迹的速度差超过它就**不**合并，m/s。
   ///
   /// 位置近但速度截然不同 ⟹ 是两个恰好擦身而过的目标，不是重复。
@@ -233,6 +250,8 @@ struct Track
 
   int hits{0};  ///< 累计命中次数（**不要求连续**）
   int consecutive_misses{0};
+  /// 被遮挡状态下的连续未命中（不计入 consecutive_misses，另设上限）。
+  int occluded_misses{0};
   bool confirmed{false};  ///< 累计命中达到 confirm_hits
 
   Eigen::Vector2d position() const { return state.head<2>(); }
@@ -321,6 +340,15 @@ private:
   static Eigen::Vector2d AnchorOffset(
     double yaw_rad, double deficit_long_m, double deficit_lat_m, const Eigen::Vector2d & box_center,
     const Eigen::Vector2d & sensor_position);
+
+  /// 航迹的预测位置是否被**另一条已确认航迹**挡住了视线。
+  ///
+  /// 公开是为了测试能直接验几何（线段-OBB 相交，slab 法精确解）。
+  ///
+  /// @param track           被查的航迹
+  /// @param sensor_position 传感器位置，与航迹同系
+  /// @return 视线被挡为 true
+  bool IsOccludedByAnotherTrack(const Track & track, const Eigen::Vector2d & sensor_position) const;
 
   /// 把落在同一个目标上的重复航迹并成一条。
   ///

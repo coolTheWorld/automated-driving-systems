@@ -281,12 +281,22 @@ void Tracker::ApplyUpdate(
     // 记忆里的尺寸不再对应同一条轴。此时丢掉记忆重新开始，宁可退回旧行为。
     // ⚠️ 注意这里已经**不是**在处理 90° 翻转了 —— 那一档由 AlignedDetection
     //    化解掉了。留着这条分支是给"目标真的在转弯"用的。
-    track->length_m = aligned.length_m;
-    track->width_m = aligned.width_m;
+    //
+    // ⚠️ 存**原始检测**的尺寸与轴向，不是 aligned 的（2026-08-12 复检修复）：
+    //    aligned 可能已被换算成"宽 ≥ 长"（它按**旧**轴向的约定改写），直接
+    //    存回去会破坏「length ≥ width 且 yaw 是长轴」的不变式 —— 轴差落在
+    //    (45°, 70°) 窗口时，一辆尺寸量得完全正确的车被 ClassifyBySize 判成
+    //    UNKNOWN（length 1.7 < 2.5 且 width 4.3 > 2.8），ResolveHeading 还会
+    //    绕短轴消歧、差 90° 却标 resolved。原始检测由 L-Shape 保证
+    //    length ≥ width，天然满足不变式。钳位同样不能少。
+    track->yaw_rad = detection.yaw_rad;
+    track->length_m = std::min(params_.max_extent_m, detection.length_m);
+    track->width_m = std::min(params_.max_extent_m, detection.width_m);
   }
   track->height_m = detection.height_m;
   ++track->hits;
   track->consecutive_misses = 0;
+  track->occluded_misses = 0;
   if (track->hits >= params_.confirm_hits) {
     track->confirmed = true;
   }
@@ -314,6 +324,56 @@ void Tracker::ResolveHeading(Track * track) const
   const double error_b = std::abs(ads_common::angle_diff(candidate_b, velocity_heading));
   track->heading_rad = ads_common::normalize_angle(error_a <= error_b ? candidate_a : candidate_b);
   track->heading_resolved = true;
+}
+
+bool Tracker::IsOccludedByAnotherTrack(
+  const Track & track, const Eigen::Vector2d & sensor_position) const
+{
+  // 视线段：传感器 → 航迹预测位置。与任何一条**别的已确认**航迹的盒子相交
+  // 即为被遮挡。只认已确认的遮挡者 —— 拿一个未确认的噪点簇当"挡住我的东西"
+  // 会让噪点间接续命别的航迹。
+  const Eigen::Vector2d target = track.position();
+  for (const Track & other : tracks_) {
+    if (other.id == track.id || !other.confirmed) {
+      continue;
+    }
+    // 线段-OBB 相交（slab 法，精确）：转到盒子自身坐标系做 2D AABB 裁剪。
+    const double cos_yaw = std::cos(other.yaw_rad);
+    const double sin_yaw = std::sin(other.yaw_rad);
+    const Eigen::Vector2d to_p0 = sensor_position - other.position();
+    const Eigen::Vector2d to_p1 = target - other.position();
+    const Eigen::Vector2d p0(
+      cos_yaw * to_p0.x() + sin_yaw * to_p0.y(), -sin_yaw * to_p0.x() + cos_yaw * to_p0.y());
+    const Eigen::Vector2d p1(
+      cos_yaw * to_p1.x() + sin_yaw * to_p1.y(), -sin_yaw * to_p1.x() + cos_yaw * to_p1.y());
+    const Eigen::Vector2d direction = p1 - p0;
+    const double half[2] = {0.5 * other.length_m, 0.5 * other.width_m};
+    double t_min = 0.0;
+    double t_max = 1.0;
+    bool hit = true;
+    for (int axis = 0; axis < 2 && hit; ++axis) {
+      if (std::abs(direction[axis]) < 1e-9) {
+        if (std::abs(p0[axis]) > half[axis]) {
+          hit = false;  // 平行于该轴且在板外 —— 不可能相交
+        }
+        continue;
+      }
+      double t1 = (-half[axis] - p0[axis]) / direction[axis];
+      double t2 = (half[axis] - p0[axis]) / direction[axis];
+      if (t1 > t2) {
+        std::swap(t1, t2);
+      }
+      t_min = std::max(t_min, t1);
+      t_max = std::min(t_max, t2);
+      if (t_min > t_max) {
+        hit = false;
+      }
+    }
+    if (hit) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void Tracker::MergeDuplicateTracks()
@@ -380,6 +440,7 @@ void Tracker::Update(
     // 而 NaN 位置在马氏距离里被 isfinite 拦下 ⟹ 表现是"目标突然全丢"。
     ads_common::RequireFinite(detection.length_m, "Tracker::Update", "detection.length_m");
     ads_common::RequireFinite(detection.width_m, "Tracker::Update", "detection.width_m");
+    ads_common::RequireFinite(detection.height_m, "Tracker::Update", "detection.height_m");
   }
 
   Predict(dt_s);
@@ -392,6 +453,14 @@ void Tracker::Update(
     if (assignment[t] >= 0) {
       ApplyUpdate(detections[assignment[t]], sensor_position, &tracks_[t]);
       detection_used[assignment[t]] = 1;
+    } else if (
+      tracks_[t].confirmed && IsOccludedByAnotherTrack(tracks_[t], sensor_position) &&
+      tracks_[t].occluded_misses < params_.max_occluded_misses) {
+      // 被别的已确认航迹挡住视线：未命中**不计入删除计数**，按恒速滑行。
+      // 看不见 ≠ 消失 —— 这一条解决「遮挡 0.5–1.8 s vs 删除窗口 0.5 s」的
+      // 设计冲突，见 TrackerParams::max_occluded_misses 的推导。
+      // 只对已确认的航迹滑行：未确认的本来就还不算"存在"。
+      ++tracks_[t].occluded_misses;
     } else {
       ++tracks_[t].consecutive_misses;
       // ⚠️ 未命中时**不重置** hits —— 确认判据用的是**累计**命中而不是连续。

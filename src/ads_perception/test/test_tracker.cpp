@@ -691,3 +691,91 @@ TEST(Tracker, DoesNotMergeTwoTargetsThatMerelyPassCloseBy)
   EXPECT_NE(FindById(tracks, id_a), nullptr) << "A 的 ID 在交会时被并掉了";
   EXPECT_NE(FindById(tracks, id_b), nullptr) << "B 的 ID 在交会时被并掉了";
 }
+
+// ---------------------------------------------------------------------------
+//  ⚠️ 遮挡感知的航迹保持 —— CP-P5-B 第 6 条与生命周期冲突的解（2026-08-12）
+//
+//  实测：遮挡持续 0.5–1.8 s（车 4.4 m 扫过视线），而 max_misses = 0.5 s ——
+//  不做这条规则的话，任何真实遮挡都会删航迹换 ID，判据第 6 条物理上无法过。
+//  解法是 MOT 的标准做法：预测位置被另一条已确认航迹挡住视线时，
+//  未命中不计入删除计数（有上限）。
+//
+//  ## 故障注入实测（2026-08-12，跑完立刻回填）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 去掉遮挡分支（未命中一律计数） | 红 SurvivesAnOcclusionLongerThanMaxMisses |
+//  | 去掉滑行上限 | 红 OcclusionCoastingHasACap |
+// ---------------------------------------------------------------------------
+TEST(Tracker, SurvivesAnOcclusionLongerThanMaxMisses)
+{
+  // 场景（照实测搬）：车停在传感器与行人航迹之间，行人被挡 15 帧（1.5 s，
+  // 是 max_misses 窗口的 3 倍），随后重现 —— ID 必须保持。
+  Tracker tracker;
+  // 车：在 (10, 0)，轴向沿 y（横在视线上），4.4 × 1.8。
+  Detection car;
+  car.position = {10.0, 0.0};
+  car.yaw_rad = M_PI / 2.0;
+  car.length_m = 4.4;
+  car.width_m = 1.8;
+  car.height_m = 1.5;
+  // 行人：在车后面 (20, 0)，以 1.2 m/s 沿 +y 走。
+  auto ped = [](double y) { return MakePartial(20.0, y, 0.4, 0.4); };
+
+  double y = 0.0;
+  for (int frame = 0; frame < 5; ++frame, y += 0.12) {
+    tracker.Update({car, ped(y)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);
+  std::uint32_t ped_id = 0;
+  for (const Track & track : tracker.ConfirmedTracks()) {
+    if (track.width_m < 1.0) {
+      ped_id = track.id;
+    }
+  }
+  ASSERT_NE(ped_id, 0U);
+
+  // 遮挡 15 帧：只有车的检测，行人消失（被挡住）。
+  for (int frame = 0; frame < 15; ++frame, y += 0.12) {
+    tracker.Update({car}, kDt, kSensor);
+  }
+  ASSERT_NE(FindById(tracker.ConfirmedTracks(), ped_id), nullptr)
+    << "遮挡 1.5 s 后行人航迹被删了 —— 遮挡滑行没生效";
+
+  // 重现：行人从车后走出来（滑行预测的位置附近）。
+  const Track * coasted = FindById(tracker.ConfirmedTracks(), ped_id);
+  tracker.Update({car, ped(y)}, kDt, kSensor);
+  const Track * after = FindById(tracker.ConfirmedTracks(), ped_id);
+  printf(
+    "[          ] 遮挡 15 帧后滑行位置 y=%.2f（真值 %.2f），重现后 ID %s\n",
+    coasted->position().y(), y, after ? "保持" : "丢失");
+  ASSERT_NE(after, nullptr) << "重现后配不上滑行航迹 —— ID 换了";
+  EXPECT_EQ(tracker.ConfirmedTracks().size(), 2U);
+}
+
+TEST(Tracker, OcclusionCoastingHasACap)
+{
+  // 滑行必须有上限：目标真的在遮挡后面离开时，幽灵不能永生 ——
+  // 与 max_misses 防幽灵同一个理由。
+  TrackerParams params;
+  params.max_occluded_misses = 8;  // 收紧到 0.8 s，让用例快
+  Tracker tracker(params);
+  Detection car;
+  car.position = {10.0, 0.0};
+  car.yaw_rad = M_PI / 2.0;
+  car.length_m = 4.4;
+  car.width_m = 1.8;
+  car.height_m = 1.5;
+  for (int frame = 0; frame < 5; ++frame) {
+    tracker.Update({car, MakePartial(20.0, 0.0, 0.4, 0.4)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);
+
+  // 遮挡远超上限（8 + max_misses 5 + 余量）。
+  for (int frame = 0; frame < 20; ++frame) {
+    tracker.Update({car}, kDt, kSensor);
+  }
+  printf(
+    "[          ] 遮挡 20 帧（上限 8）后剩 %zu 条确认航迹\n", tracker.ConfirmedTracks().size());
+  EXPECT_EQ(tracker.ConfirmedTracks().size(), 1U) << "滑行没有上限 —— 幽灵永生";
+}

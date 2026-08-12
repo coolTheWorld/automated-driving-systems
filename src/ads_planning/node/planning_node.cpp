@@ -77,6 +77,14 @@ public:
     // 感知自己的航迹删除窗口是 0.5 s（max_misses），1.0 s 已是整条流水线死透。
     // 调小到 0.2 → 感知偶发慢一拍就误刹；调大到 5 → 动态目标按 20 m 前的位置判碰撞。
     obstacle_timeout_s_ = declare_parameter<double>("safety.obstacle_timeout_s", 1.0);
+    // 投影局部搜索半宽（段数）。30 段 × 0.5 m 采样 ≈ ±15 m —— 一个规划周期
+    // （0.1 s × 5.5 m/s ≈ 0.6 m）远走不出去。与 control 的 lateral.search_window
+    // 取同一个数。调小 → 车被扰动甩远后投影追不上；调大 → 退化向全局搜索。
+    const int projection_window = declare_parameter<int>("projection.search_window", 30);
+    if (projection_window <= 0) {
+      throw std::invalid_argument("projection.search_window 必须为正");
+    }
+    projection_search_window_ = static_cast<std::size_t>(projection_window);
     params_.lattice.weight_offset = declare_parameter<double>("cost.weight_offset");
     params_.lattice.weight_curvature = declare_parameter<double>("cost.weight_curvature");
     params_.lattice.weight_clearance = declare_parameter<double>("cost.weight_clearance");
@@ -156,6 +164,9 @@ private:
     // 换了路径就必须忘掉上一周期的横向选择 —— 那个值是相对**旧**参考线的，
     // 拿它去做新参考线的一致性项等于凭空引入一个偏好。
     previous_offset_m_.reset();
+    // hint 是相对**旧**参考线的段号，换路径必须清掉 —— 只有首次跟踪
+    // 新路径才该做全局搜索（reference_line.hpp 的使用约定）。
+    projection_hint_.reset();
     RCLCPP_INFO(
       get_logger(), "收到参考线：%zu 个点，%.1f m", reference_line_->points().size(),
       reference_line_->length_m());
@@ -248,6 +259,22 @@ private:
     try {
       // 起点用**后轴**位姿：lattice 的起点是车辆本体状态。
       // （控制侧的 Stanley 才用前轴 —— 那是控制律的推导对象，两者不是一回事。）
+      // ---- 局部搜索的 hint 回写（2026-08-12 复检修复）--------------------
+      //
+      // ⚠️ projection_hint_ 原来**从未被赋值**：声明与注释都写着「正确性
+      //    要求」，to_frenet 却每周期都拿着 nullopt 做全局最近点搜索 ——
+      //    恰是 reference_line.hpp 与 planning.md §3.1 点名的错误
+      //    （环线上自车前后有几何相近的两段，全局搜索会在两者间跳；
+      //    control_node 为同一问题每拍回写 hint，本节点漏了）。
+      //    可追溯的失效：目标在同车道后方时路线首末共线，末端过冲米级
+      //    即跳回 s≈0 重发全程轨迹；或越出车道 >1.75 m 时投影跳到对向
+      //    车道、每拍抛异常、永久「规划失败」。
+      //
+      // 先显式投影一次拿到段号，再把同一个 hint 交给 to_frenet ——
+      // 同一函数、同一 hint，两次结果一致，多花一次窗口搜索（微秒级）。
+      const ads_common::PathProjection projection =
+        reference_line_->project(ego_pose, projection_hint_, projection_search_window_);
+      projection_hint_ = projection.index;
       const FrenetState start = to_frenet(*reference_line_, ego_pose, projection_hint_);
       result = plan(*reference_line_, start, current_obstacles(), params_, previous_offset_m_);
     } catch (const std::exception & e) {
@@ -355,6 +382,7 @@ private:
   /// 最近点投影的局部搜索提示。**不是性能优化是正确性要求** ——
   /// 环线上自车前后必然有几何距离相近的两段路径，全局最近点会在两者间跳。
   std::optional<std::size_t> projection_hint_;
+  std::size_t projection_search_window_{30};
 };
 
 }  // namespace ads_planning

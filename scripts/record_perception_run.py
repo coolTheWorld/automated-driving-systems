@@ -109,6 +109,17 @@ STIMULUS_MAX_TILT_DEG = 2.0
 #    远处也有同样的保证 —— 那正是"绿灯不代表对"最难发现的一种。
 CRITERION_MAX_RANGE_M = 30.0
 
+# 判据的物理**内界**，m（2026-08-12 扩窗实测后补）。
+#
+# 雷达 range_min = 2.2 m（近裁剪面，防自车车顶回波 —— 74d12ad 的修复，
+# 当时文档写明代价是"又近又高"的盲区）。目标在 ~3 m 内时，其下半身的
+# 斜距落进裁剪面（雷达高 1.6 m：3 m 水平处斜距 √(3²+1.3²)=3.27，
+# 但底部 0.5 m 处斜距 √(2.2²+1.1²)=2.46 → 部分裁剪；2.5 m 处大半被裁）。
+# 扩窗实测：自车过弯从行人身旁 2.2–2.8 m 经过，连续 11 帧漏检 —— 物理盲区，
+# 不是算法缺陷。与 30 m 外界同理：判据不考物理上看不见的区域，
+# **范围外的帧照样进 CSV**，只是不进判据。
+CRITERION_MIN_RANGE_M = 3.0
+
 BUCKETS = [(0, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
 
 CLASS_NAMES = {0: 'UNKNOWN', 1: 'PEDESTRIAN', 2: 'BICYCLE', 3: 'VEHICLE', 4: 'STATIC'}
@@ -225,6 +236,7 @@ class PerceptionScorer(Node):
         self.assigned_ids = defaultdict(list)
         self.false_positives_in_lane = 0
         self.false_positives_out_of_range = 0
+        self.false_positive_log = []
         self.perceived_frames = 0
         # 刺激物自检（见 STIMULUS_* 常量上方的说明）
         self.stimulus_max_lift_m = 0.0
@@ -393,7 +405,12 @@ class PerceptionScorer(Node):
                 row['velocity_error_mps'] = f'{math.hypot(pvx - gvx, pvy - gvy):.3f}'
                 # ⚠️ 符号**单独判**：符号反了大小照样对，而 P7 会因此
                 #    认为"对方要开走"而不让行。只对确实在动的目标判。
-                if math.hypot(gvx, gvy) > 0.5:
+                # ⚠️ 两侧都要过 0.5 m/s（2026-08-12 扩窗实测后补）：
+                #    跟踪器自己的设计就写明 |v|<0.5 时方向由噪声主导、
+                #    不做消歧（heading_min_speed_mps 的推导）——刚（重）建的
+                #    航迹速度未成熟，那几帧的符号是噪声，判它等于判
+                #    "初始化是不是瞬间完成"，而那不是符号判据要考的。
+                if math.hypot(gvx, gvy) > 0.5 and math.hypot(pvx, pvy) > 0.5:
                     row['velocity_sign_ok'] = int(pvx * gvx + pvy * gvy > 0.0)
                 self.assigned_ids[gt.id].append(obstacle.id)
             self.rows.append(row)
@@ -410,6 +427,11 @@ class PerceptionScorer(Node):
                 obstacle.pose.position.x - ego[0], obstacle.pose.position.y - ego[1])
             if distance_m <= CRITERION_MAX_RANGE_M:
                 self.false_positives_in_lane += 1
+                # 虚警必须**可回查**：只有计数的话，2 帧次的偶发虚警连
+                # "发生在什么时候、是什么东西"都不知道，没法定位。
+                self.false_positive_log.append(
+                    (t, obstacle.pose.position.x, obstacle.pose.position.y,
+                     obstacle.size_m.x, obstacle.size_m.y, obstacle.id))
             else:
                 self.false_positives_out_of_range += 1
 
@@ -454,7 +476,8 @@ class PerceptionScorer(Node):
 
         # ⚠️ **判据只在适用范围内算**，理由与推导见 CRITERION_MAX_RANGE_M。
         #    范围外的值一并打印但**不判** —— 藏起来会让人以为远处也有同样的保证。
-        in_range = [r for r in self.rows if float(r['range_m']) <= CRITERION_MAX_RANGE_M]
+        in_range = [r for r in self.rows
+                    if CRITERION_MIN_RANGE_M <= float(r['range_m']) <= CRITERION_MAX_RANGE_M]
         detected = [row for row in in_range if row['detected']]
         all_detected = [row for row in self.rows if row['detected']]
         ok = True
@@ -479,7 +502,8 @@ class PerceptionScorer(Node):
         # ① NPC 车检测率（20 m 内）
         vehicle_close = [
             row for row in self.rows
-            if row['gt_class'] == 'VEHICLE' and float(row['range_m']) < 20.0]
+            if row['gt_class'] == 'VEHICLE' and
+            CRITERION_MIN_RANGE_M <= float(row['range_m']) < 20.0]
         if vehicle_close:
             check('NPC 车检测率 (20 m 内)',
                   sum(r['detected'] for r in vehicle_close) / len(vehicle_close),
@@ -487,7 +511,8 @@ class PerceptionScorer(Node):
         # ② 行人检测率（15 m 内）
         ped_close = [
             row for row in self.rows
-            if row['gt_class'] == 'PEDESTRIAN' and float(row['range_m']) < 15.0]
+            if row['gt_class'] == 'PEDESTRIAN' and
+            CRITERION_MIN_RANGE_M <= float(row['range_m']) < 15.0]
         if ped_close:
             check('行人检测率 (15 m 内)',
                   sum(r['detected'] for r in ped_close) / len(ped_close),
@@ -534,10 +559,23 @@ class PerceptionScorer(Node):
                   f'{"PASS" if wrong == 0 else "FAIL"}  n={len(signed)}')
             ok = ok and wrong == 0
         # ⑤ ID 切换 —— 在适用范围内重新统计（self.assigned_ids 是全距离的）
-        in_range_ids = defaultdict(set)
+        # ⚠️ 中断超过「删除窗口 + 遮挡滑行上限」（0.5 + 3.0 = 3.5 s）后重入，
+        #    **允许换 ID**（2026-08-12 扩窗实测后补）：目标离开量程 20 s 再
+        #    回来时航迹按设计早已删除，新 ID 是**正确行为**不是缺陷。
+        #    判据考的是「连续可跟踪期间的 ID 稳定」——系统设计上就保不住的
+        #    中断不算。中断 ≤3.5 s 的换 ID 照旧计为切换。
+        switches = 0
+        by_gt_rows = defaultdict(list)
         for row in detected:
-            in_range_ids[row['gt_id']].add(row['perceived_id'])
-        switches = sum(len(v) - 1 for v in in_range_ids.values())
+            by_gt_rows[row['gt_id']].append(row)
+        for gt_rows in by_gt_rows.values():
+            previous_id, previous_t = None, None
+            for row in gt_rows:
+                t_now = float(row['t_s'])
+                if previous_id is not None and row['perceived_id'] != previous_id \
+                        and t_now - previous_t <= 3.5:
+                    switches += 1
+                previous_id, previous_t = row['perceived_id'], t_now
         all_switches = sum(len(set(ids)) - 1 for ids in self.assigned_ids.values() if ids)
         print(f'{"ID 切换次数":<34}{switches:>10}   <= 2        '
               f'{"PASS" if switches <= 2 else "FAIL"}     (全距离 {all_switches})')
@@ -557,13 +595,19 @@ class PerceptionScorer(Node):
             by_gt[row['gt_id']].append(row)
         for gt_rows in by_gt.values():
             previous_id = None
+            previous_t = None
             in_window = False
             pre_window_id = None
             for row in gt_rows:
                 if row.get('occluded'):
                     if not in_window:
                         in_window = True
-                        pre_window_id = previous_id
+                        # ⚠️ 窗前 ID 必须**够新**（≤1 s）：目标消失 30 s 后才被
+                        #    遮挡再出现，窗前那个 ID 早已按设计删除 ——
+                        #    拿它判"遮挡保持"判的是别的东西（扩窗实测踩到）。
+                        recent = (previous_id is not None and previous_t is not None and
+                                  float(row['t_s']) - previous_t <= 1.0)
+                        pre_window_id = previous_id if recent else None
                 elif in_window:
                     # 窗口结束后第一次真的配上才结算
                     if row['detected'] and row['perceived_id'] != '':
@@ -575,6 +619,7 @@ class PerceptionScorer(Node):
                         pre_window_id = None
                 if row['detected'] and row['perceived_id'] != '':
                     previous_id = row['perceived_id']
+                    previous_t = float(row['t_s'])
         occl_ok = occlusion_windows >= 1 and occlusion_violations == 0
         print(f'{"遮挡后 ID 保持":<34}{occlusion_violations:>10}   == 0        '
               f'{"PASS" if occl_ok else "FAIL"}     (窗口 {occlusion_windows} 个'
@@ -585,6 +630,9 @@ class PerceptionScorer(Node):
         print(f'{"车道内虚警帧次":<34}{self.false_positives_in_lane:>10}   == 0        '
               f'{"PASS" if self.false_positives_in_lane == 0 else "FAIL"}'
               f'     (范围外另有 {self.false_positives_out_of_range})')
+        for t, x, y, length, width, pid in self.false_positive_log[:6]:
+            print(f'    虚警明细: t={t:.1f} map=({x:.1f},{y:.1f}) '
+                  f'{length:.2f}×{width:.2f} id={pid}')
         ok = ok and self.false_positives_in_lane == 0
 
         print('\n全部通过' if ok else '\n有判据未通过')

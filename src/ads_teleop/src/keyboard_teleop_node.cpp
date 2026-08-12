@@ -303,12 +303,22 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  {
+  int exit_code = 0;
+  try {
     // raw + 非阻塞的作用域包住 spin：spin 返回后（Ctrl-C 或按 q）
     // 析构函数立刻还原终端，不会把用户的 shell 留在不回显状态。
+    //
+    // ⚠️ try/catch 不是装饰（2026-08-12 复检补上）：未捕获异常下 GCC
+    //    **不保证栈回退**，StdinRawMode 的析构不执行，终端被留在
+    //    raw + 无回显 + O_NONBLOCK —— 用户的 shell 看起来"死了"，
+    //    只能盲敲 reset。参数覆盖类型错误就足以触发。
     ads_teleop::StdinRawMode raw_mode;
     rclcpp::spin(std::make_shared<ads_teleop::KeyboardTeleop>());
+  } catch (const std::exception & e) {
+    // raw_mode 已随作用域退出还原终端，这里才能安全打印。
+    fprintf(stderr, "keyboard_teleop 异常退出：%s\n", e.what());
+    exit_code = 1;
   }
   rclcpp::shutdown();
-  return 0;
+  return exit_code;
 }

@@ -361,6 +361,11 @@ private:
       RCLCPP_WARN(
         get_logger(), "目标点在 %s 系，换不到 %s 系：%s", goal_in.header.frame_id.c_str(),
         map_frame_.c_str(), error.what());
+      // ⚠️ 与其余失败分支一致地清屏（2026-08-12 复检对齐）：这一支原来漏了
+      //    clear_route()，失败后 RViz 里还画着**上一条**路径 —— 用户看到的是
+      //    「点了新目标，路径没变」，分不清是没收到还是失败了。
+      //    设计文档 §6.4 写明失败时发空 Path 清屏，六个分支一个都不能漏。
+      clear_route();
       return;
     }
 

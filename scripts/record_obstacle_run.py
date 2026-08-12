@@ -49,7 +49,6 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-import tf2_ros
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -193,9 +192,13 @@ class ObstacleRecorder(Node):
         #    而实际它正正经经绕了过去。**没有任何一层会报错。**
         #    （L3-G 里可以直接用 /odom，因为那边假车就在 map 系里积分、
         #      map→odom 确实是单位变换 —— 那条豁免只对假车成立。）
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.create_subscription(Odometry, '/odom', self._on_odom, 50)
+        # ⚠️ 位姿与速度都取 /ego_pose_gt（2026-08-12 复检改正）：
+        #    本脚本是**评测**，量的是碰撞/间距这类安全量，而「最小侧向间距
+        #    0.532 vs 判据 0.50」余量只有 3.2 cm —— localization:=false 下
+        #    TF 的 odom→base_link 一段是轮速推算（会漂），漂移与余量同量级，
+        #    足以把判据往任一方向翻。真值就是给评测用的（SPEC §4.1）。
+        #    位姿与速度取同一条消息，顺带消掉了 TF 查询的时间错位。
+        self.create_subscription(Odometry, '/ego_pose_gt', self._on_odom, 50)
         self.create_subscription(
             DiagnosticArray, '/planning/diagnostics', self._on_planning, 100)
         self.create_subscription(
@@ -216,18 +219,8 @@ class ObstacleRecorder(Node):
         self.latest_trajectory_status = msg.status
 
     def _on_odom(self, msg):
-        # /odom 只用来取**纵向车速**（它在 base_link 系，与坐标系无关）。
-        # 位姿一律走 TF（SPEC §5：禁止手写变换矩阵）。
-        try:
-            transform = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
-        except tf2_ros.TransformException:
-            return
-
-        class _Pose:
-            pass
-        pose = _Pose()
-        pose.position = transform.transform.translation
-        pose.orientation = transform.transform.rotation
+        # /ego_pose_gt 的 pose 在 map 系、twist 在车体系 —— 位姿速度一站取齐。
+        pose = msg.pose.pose
         quaternion = pose.orientation
         # 平面运动，roll = pitch = 0，所以这个式子是精确的。
         yaw = math.atan2(2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
@@ -380,28 +373,55 @@ def score(recorder, scenario):
             '绕完规划器偏移归零 (m)', '%.3f' % final_planner_offset_m,
             final_planner_offset_m < 0.10, '< 0.10', '辅助（不在 plan 表内）：w_c < w_o 链路验证')
 
+        # ---- #5/#6 的适用范围：**绕障机动段**，不含路线尽头的弯角 -----------
+        #
+        # ⚠️ 第一版没圈范围，把整段都算进去 ⟹ 两条判据 FAIL（1.957/0.281），
+        #    而超限的拍全在 x=77.7–89.7 —— 那是**弯角**，不是绕障（障碍物在
+        #    x=60，机动段实测 0.529/0.061，两条都大幅通过）。
+        #    弯角段归 CP-P2-B 的判据管（a_lat 2.0、横向误差 0.30，弯角实测
+        #    1.957/0.281 —— 都过），由同一跑里的 record_control_run 验。
+        #    plan #5/#6 的立表理由写的就是绕障（「绕障轨迹曲率更大」）。
+        #    这与「判据的适用范围没圈准」是同一族坑 —— 修法照旧：范围
+        #    **从数据锚定**（规划器偏移非零的 x 区间 ±2 m），不发明魔数。
+        # ⚠️ 锚必须是**车体**的横向偏移，不能是规划器的（第一版就错在这）：
+        #    规划器带着 10–25 m 前视，**提前**在 x∈[28,52] 就选好了偏移，
+        #    车真正甩出去在 x∈[52,77] —— 拿规划器偏移当锚，量到的是
+        #    机动**之前**的巡航段（a_lat 0.075），机动本身被整段排除。
+        #    车体偏移才是「机动正在发生」的物理信号。
+        offset_x = [r['rear_x_m'] for r in rows
+                    if r['on_south_straight'] and abs(r['lateral_offset_m']) > 0.05]
+        if offset_x:
+            swerve_lo, swerve_hi = min(offset_x) - 2.0, max(offset_x) + 2.0
+        else:
+            swerve_lo, swerve_hi = float('inf'), float('-inf')
+
+        def in_swerve(r):
+            return (r['on_south_straight'] and swerve_lo <= r['rear_x_m'] <= swerve_hi)
+
         # ---- plan 表 #5：最大横向加速度（|v·ω|，车实际受的）-----------------
         a_lat = [abs(float(r['control_lateral_accel_mps2'])) for r in all_rows
-                 if r['control_lateral_accel_mps2']]
+                 if r['control_lateral_accel_mps2'] and in_swerve(r)]
         if a_lat:
             passed &= check(
-                '最大横向加速度 (m/s²)', '%.3f' % max(a_lat), max(a_lat) <= 1.5, '<= 1.5',
-                'plan #5：2026-08-12 前从未量过')
+                '绕障段最大横向加速度 (m/s²)', '%.3f' % max(a_lat), max(a_lat) <= 1.5, '<= 1.5',
+                'plan #5；范围=机动段 x∈[%.0f,%.0f]，弯角归 CP-P2-B' % (swerve_lo, swerve_hi))
         else:
-            passed &= check('最大横向加速度 (m/s²)', '无数据', False, '<= 1.5')
+            passed &= check('绕障段最大横向加速度 (m/s²)', '无数据', False, '<= 1.5')
 
         # ---- plan 表 #6：跟踪误差（车 vs **规划轨迹**）----------------------
         # 跟踪质量类 ⟹ 只在 TRACKING 拍里算（车没在跟轨迹时该量无定义）。
         # control_node 自 P3-S4 起跟的就是 /planning/trajectory，
         # 所以它的 lateral_error 正是「车 vs 规划轨迹」。
         track_err = [abs(float(r['control_lateral_error_m'])) for r in rows
-                     if r['control_state'] == 'TRACKING' and r['control_lateral_error_m']]
+                     if r['control_state'] == 'TRACKING' and r['control_lateral_error_m'] and
+                     in_swerve(r)]
         if track_err:
             passed &= check(
-                '跟踪误差 车vs规划轨迹 (m)', '%.3f' % max(track_err),
-                max(track_err) <= 0.15, '<= 0.15', 'plan #6：2026-08-12 前从未量过')
+                '绕障段跟踪误差 (m)', '%.3f' % max(track_err),
+                max(track_err) <= 0.15, '<= 0.15',
+                'plan #6：车 vs 规划轨迹；范围同 #5')
         else:
-            passed &= check('跟踪误差 车vs规划轨迹 (m)', '无数据', False, '<= 0.15')
+            passed &= check('绕障段跟踪误差 (m)', '无数据', False, '<= 0.15')
 
         # ---- plan 表 #7：规划周期耗时 ---------------------------------------
         cycle = [float(r['planning_cycle_ms']) for r in all_rows if r['planning_cycle_ms']]

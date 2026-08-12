@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "ads_common/angles.hpp"
+#include "ads_common/numeric_checks.hpp"
 
 namespace ads_common
 {
@@ -124,6 +125,16 @@ ReferenceLine::ReferenceLine(std::vector<Pose2D> poses)
 PathProjection ReferenceLine::project(
   const Pose2D & query, std::optional<std::size_t> hint, std::size_t window) const
 {
+  // ⚠️ 本函数曾是这个类唯一不校验入参的公开入口（2026-08-12 复检发现）：
+  //    查询位姿含 NaN/±inf 时不抛异常，而是静默返回 index=搜索窗起点、
+  //    ratio=0，附带一组**有限且貌似合理**的 s/x/y/heading —— 只有误差字段
+  //    是 NaN。下游拿这个"合理"的投影继续算，症状会出现在别的模块。
+  //    NaN 参与任何比较都是 false ⟹ 最近距离搜索静默选不中任何段 ——
+  //    与 CLAUDE.md「用比较去拦非有限值」同族，必须显式拦。
+  RequireFinite(query.x_m, "ReferenceLine::project", "query.x_m");
+  RequireFinite(query.y_m, "ReferenceLine::project", "query.y_m");
+  RequireFinite(query.heading_rad, "ReferenceLine::project", "query.heading_rad");
+
   const std::size_t segment_count = points_.size() - 1;
 
   // ---------------------------------------------------------------------------

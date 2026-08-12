@@ -176,6 +176,13 @@ public:
     // /odom 停多久算断了。0.5 s = bridge 看门狗的阈值，取同一个数是有意的：
     // 两层同时判定失联，日志能互相印证。
     odom_timeout_s_ = declare_parameter<double>("safety.odom_timeout_s", 0.5);
+    // 轨迹起点跳变多远算「换了一条路」（重置 hint 与速度环积分）。
+    // 依据：正常刷新时新起点离旧起点不超过一个规划周期的行程
+    // （0.1 s × 5.5 m/s ≈ 0.6 m），取 2.0 留 3 倍余量；绕行重规划的起点
+    // 仍在自车附近，不该触发。调小 → 正常刷新被误判、积分频繁清零（等于
+    // 只剩 P）；调大 → 真换路后带着旧积分跑，第一拍冲出去。
+    // ⚠️ 2026-08-12 前是写死在成员初始化里的魔数，违反 SPEC §7 第 3 条。
+    trajectory_jump_threshold_m_ = declare_parameter<double>("safety.trajectory_jump_m", 2.0);
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
 
@@ -374,6 +381,17 @@ private:
     measured_speed_mps_ = msg->twist.twist.linear.x;
     measured_yaw_rate_radps_ = msg->twist.twist.angular.z;
     last_odom_time_ = now();
+
+    // ⚠️ 履行 stanley.hpp 的契约（2026-08-12 复检补上）：lib 把负车速夹到 0
+    //    是数值保护，代价是真挂了倒挡会被安静地当成静止 —— 所以**这一层**
+    //    必须对持续为负的车速打限流告警。阈值 −0.05：/odom 停车抖动是
+    //    ±0.001 量级，−0.05 已是持续倒行才有的数。
+    if (measured_speed_mps_ < -0.05) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "车速持续为负（%.3f m/s）—— 本项目不支持倒车，Stanley 会把它当静止处理",
+        measured_speed_mps_);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -711,6 +729,11 @@ private:
     //    不依赖轴距、不依赖"转角指令是否已经执行到位"。
     status.values.push_back(
       MakeKeyValue("lateral_accel_mps2", std::abs(measured_speed_mps_ * measured_yaw_rate_radps_)));
+    // ⚠️ 口径申明（2026-08-12 复检补注）：path_s_m 是**前轴**投影的弧长
+    //    （projection 来自 Stanley 那次投影），而下一行 path_remaining_m
+    //    按**后轴**算 —— 两个弧长字段差一个轴距的投影。这是历史口径，
+    //    record_control_run 的全部基线 CSV 都按它积累，**改值会让新旧数据
+    //    不可比**，所以只标注不改。要"后轴弧长"用 path_remaining_m 反推。
     status.values.push_back(MakeKeyValue("path_s_m", projection.s_m));
     status.values.push_back(MakeKeyValue("path_remaining_m", remaining_m));
     // 与 path_remaining_m 的区别见 on_timer 里的说明：冲过终点后前者恒为 0，后者继续增长。
@@ -755,7 +778,7 @@ private:
   /// 而换目标/重路由时起点通常跳几十米。调小 → 正常刷新被误判成换路，
   /// 速度环积分每拍清零（退化成纯 P）；调大 → 真换路时没重置，
   /// 最近点提示会拿旧索引去新轨迹上查。
-  double trajectory_jump_threshold_m_{2.0};
+  double trajectory_jump_threshold_m_{0.0};  // 来自参数，见构造函数
   double last_trajectory_start_x_m_{0.0};
   double last_trajectory_start_y_m_{0.0};
   bool last_trajectory_start_valid_{false};

@@ -122,20 +122,20 @@ public:
     fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
 
     // ---- 跟踪 -----------------------------------------------------------
-    ads_perception::TrackerParams tracker_params;
-    tracker_params.process_accel_stddev_mps2 =
+    tracker_params_.process_accel_stddev_mps2 =
       declare_parameter<double>("tracker.process_accel_stddev_mps2", 2.0);
-    tracker_params.measurement_stddev_m =
+    tracker_params_.measurement_stddev_m =
       declare_parameter<double>("tracker.measurement_stddev_m", 0.3);
-    tracker_params.gate_chi_square = declare_parameter<double>("tracker.gate_chi_square", 9.21);
+    tracker_params_.gate_chi_square = declare_parameter<double>("tracker.gate_chi_square", 9.21);
     // ⚠️ 确认用**累计**命中而不是连续 —— S1 实测目标在连续帧之间闪烁，
     //    要求连续 3 帧命中的话概率只有 12.5%。见 tracker.hpp 的文件头。
-    tracker_params.confirm_hits = declare_parameter<int>("tracker.confirm_hits", 3);
-    tracker_params.max_misses = declare_parameter<int>("tracker.max_misses", 5);
-    tracker_params.heading_min_speed_mps =
+    tracker_params_.confirm_hits = declare_parameter<int>("tracker.confirm_hits", 3);
+    tracker_params_.max_misses = declare_parameter<int>("tracker.max_misses", 5);
+    tracker_params_.max_occluded_misses = declare_parameter<int>("tracker.max_occluded_misses", 30);
+    tracker_params_.heading_min_speed_mps =
       declare_parameter<double>("tracker.heading_min_speed_mps", 0.5);
-    tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params);
-    max_misses_ = tracker_params.max_misses;
+    tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params_);
+    max_misses_ = tracker_params_.max_misses;
 
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
     // 点云比这么旧就丢。与 localization_node 那条同一个理由：
@@ -163,7 +163,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(), "perception_node 就绪：聚类容差 %.2f m，最小簇 %d 点，确认需 %d 次命中",
-      cluster_params_.tolerance_m, cluster_params_.min_cluster_size, tracker_params.confirm_hits);
+      cluster_params_.tolerance_m, cluster_params_.min_cluster_size, tracker_params_.confirm_hits);
   }
 
 private:
@@ -300,7 +300,6 @@ private:
     if (last_stamp_.nanoseconds() != 0) {
       dt_s = (stamp - last_stamp_).seconds();
     }
-    last_stamp_ = stamp;
     if (!(dt_s > 0.0) || !std::isfinite(dt_s)) {
       // ⚠️ dt ≤ 0 通常意味着**两套仿真同时在发 /clock**（CLAUDE.md 有专门一条）。
       //    此时所有测量值都作废，该去查残留进程而不是在这里凑合。
@@ -308,6 +307,21 @@ private:
         get_logger(), *get_clock(), 3000, "dt = %.4f s，跳过这一帧 —— 是不是有两套仿真在跑？",
         dt_s);
       return;
+    }
+    // ⚠️ **守卫通过之后才更新 last_stamp_**（2026-08-12 复检修复）：
+    //    原来它在守卫**之前**无条件更新 —— 两套仿真的时间戳交错时，守卫只
+    //    拦得住负 dt 的那一半帧，另一半带着 |时钟偏移| 量级的巨 dt 进跟踪器：
+    //    Predict 沿旧速度外推 ~200 m，Q 按 dt⁴ 膨胀 6 个数量级，卡方门限对
+    //    场内一切放行 —— 而日志只有"dt 负，跳过"，看着像守卫在正常拦截。
+    last_stamp_ = stamp;
+    // dt 上限：单仿真下长时间丢帧后的巨 dt 是真实流逝，但跟踪器的恒速外推
+    // 在几秒之外已无意义（目标早换了机动），不如按"跟丢重来"处理。
+    // 取 1.0 s = max_misses（0.5 s）的 2 倍：正常丢几帧到不了这里。
+    if (dt_s > 1.0) {
+      RCLCPP_WARN(
+        get_logger(), "点云间隔 %.2f s 过大（时钟跳变或长时间断流），本帧按首帧处理", dt_s);
+      tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params_);
+      dt_s = 0.1;
     }
     // 传感器在 map 系的位置 = base_link 原点（`transform` 正是 base_link → map）。
     //
@@ -458,6 +472,7 @@ private:
   ads_perception::EuclideanClusterParams cluster_params_;
   ads_perception::LShapeFitParams fit_params_;
   ads_perception::SizeClassifierParams classifier_params_;
+  ads_perception::TrackerParams tracker_params_;
   std::unique_ptr<ads_perception::Tracker> tracker_;
   int max_misses_{5};
 
