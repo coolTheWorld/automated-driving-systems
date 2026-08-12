@@ -44,6 +44,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <vector>
 
@@ -83,6 +84,45 @@ Scene MakeSlopedGround(double slope_rad, double noise_stddev = 0.01)
   // 地面：40 m × 20 m，0.25 m 网格 → 12800 点。与实测一帧的量级相当。
   for (double x = -10.0; x <= 30.0; x += 0.25) {
     for (double y = -10.0; y <= 10.0; y += 0.25) {
+      scene.points.emplace_back(x, y, x * tangent + noise(rng));
+      scene.truth_is_ground.push_back(1U);
+      scene.height_above_ground_m.push_back(-1.0);
+    }
+  }
+  return scene;
+}
+
+/// 按**真实雷达角分辨率**造地面点 —— 密度随距离 1/d² 衰减。
+///
+/// 每条扫描线打在地面上画一个圆：第 k 条线的俯角 θ_k 决定半径 d_k = h/tan(θ_k)，
+/// 圆上的点按水平角分辨率分布。于是近处的圆密集、远处稀疏 ——
+/// 那正是均匀网格造不出来、而 RANSAC 的「内点最多」判据会被它带偏的性质。
+Scene MakeLidarLikeGround(double slope_rad = 0.0, double noise_stddev = 0.02)
+{
+  Scene scene;
+  std::mt19937 rng(9876);
+  std::normal_distribution<double> noise(0.0, noise_stddev);
+  const double sensor_height_m = 1.6;
+  const double vertical_step_rad = (0.1745 - (-0.4363)) / 31.0;
+  const double horizontal_step_rad = 0.2 * M_PI / 180.0;
+  const double tangent = std::tan(slope_rad);
+
+  // 只有向下的线才打得到地面。俯角从 25° 到接近 0（最远）。
+  for (int line = 0; line < 32; ++line) {
+    const double elevation_rad = -0.4363 + line * vertical_step_rad;
+    if (elevation_rad >= -0.01) {
+      break;  // 水平或向上的线打不到地面
+    }
+    const double radius_m = sensor_height_m / std::tan(-elevation_rad);
+    if (radius_m > 60.0) {
+      continue;  // 超出量程
+    }
+    // 一圈的点数 = 2π / 水平角分辨率，但只取前方半圈（车后方也有，量级相同）。
+    const int samples = static_cast<int>(2.0 * M_PI / horizontal_step_rad);
+    for (int i = 0; i < samples; ++i) {
+      const double azimuth_rad = i * horizontal_step_rad;
+      const double x = radius_m * std::cos(azimuth_rad);
+      const double y = radius_m * std::sin(azimuth_rad);
       scene.points.emplace_back(x, y, x * tangent + noise(rng));
       scene.truth_is_ground.push_back(1U);
       scene.height_above_ground_m.push_back(-1.0);
@@ -353,4 +393,68 @@ TEST(GroundSegmentation, StaysWithinTheTimeBudget)
   // CP-P5-A ⑤：< 40 ms（给 S3/S4 留预算，全链路总共 100 ms）。
   // ⚠️ Debug 构建会慢好几倍，这条判据默认按 Release 定 —— CI 跑的正是 Release。
   EXPECT_LT(elapsed_ms, 40.0) << "地面分割超预算，S3/S4 就没空间了";
+}
+
+// ---------------------------------------------------------------------------
+//  ⚠️ 帧间稳定性 —— CP-P5-B 首轮失败的根因就在这里
+// ---------------------------------------------------------------------------
+//  实测（2026-08-11，Gazebo 全栈）：同一场景相邻两帧，非地面点 5056 vs 3871
+//  （波动 77%），而簇数随之 8 vs 48、最大簇占非地面点的 87% vs 4%。
+//  多出来的那批点是**残留的地面点**，它们铺在地上把所有东西连成一片
+//  ⟹ 欠分割 ⟹ 巨簇的中心离任何真值目标都远 ⟹ 记成"漏检"。
+//
+//  RANSAC 每帧独立跑，随机采样不同 ⟹ 选中的平面不同。
+//  **换种子等价于换一帧输入**，所以这条用例扫种子。
+//
+//  ⚠️ 前面那些用例抓不到它：它们只跑默认种子，而问题恰恰是
+//     "某些采样会给出次优平面"。**单种子的用例对随机算法没有区分力。**
+// ---------------------------------------------------------------------------
+TEST(GroundSegmentation, GivesTheSameGroundAcrossDifferentRandomSeeds)
+{
+  // ⚠️ **地面必须按真实的角分辨率造，不能用均匀网格。**（2026-08-11 实测）
+  //
+  //    第一版用 40×20 m 的 0.25 m 均匀网格，20 个种子的波动只有 **0.1%** ——
+  //    完全复现不了实测的 77%。**判据在那个场景上没有区分力。**
+  //
+  //    差别在于**点密度**：真实雷达的地面点按 1/d² 衰减（近处每平方米上千点、
+  //    远处稀疏），而 RANSAC 的判据是「内点最多」—— 于是一个**贴合近处、
+  //    在远处偏离**的平面可能比真平面内点还多。均匀网格里不存在这个偏向，
+  //    所以任何倾斜都会立刻损失大量内点、被淘汰。
+  //
+  //    这是本仓库第三次栽在"合成数据太干净"上（前两次：地面分割必须带坡度、
+  //    聚类必须按真实角分辨率采样）。**规律是：凡是判据要抓的现象依赖
+  //    输入的某个统计性质，合成数据就必须把那个性质造出来。**
+  Scene scene = MakeLidarLikeGround();
+  AddBox(&scene, 12.0, 2.0, 4.4, 1.8, 1.5, 0.0);
+  AddBox(&scene, 8.0, -3.0, 0.5, 0.5, 0.8, 0.0);
+  AddBox(&scene, 18.0, -5.0, 0.4, 0.4, 1.7, 0.0);
+  AddBox(&scene, 5.0, 4.0, 2.0, 0.6, 1.0, 0.0);
+
+  std::vector<int> ground_counts;
+  std::vector<double> tilts_deg;
+  for (std::uint32_t seed = 1; seed <= 20; ++seed) {
+    GroundSegmentationParams params;
+    params.seed = seed;
+    const GroundSegmentationResult result = SegmentGround(scene.points, params);
+    ASSERT_TRUE(result.found) << "种子 " << seed << " 没找到地面";
+    ground_counts.push_back(result.ground_count);
+    tilts_deg.push_back(std::acos(result.normal.z()) * 180.0 / M_PI);
+  }
+
+  const int lowest = *std::min_element(ground_counts.begin(), ground_counts.end());
+  const int highest = *std::max_element(ground_counts.begin(), ground_counts.end());
+  const double mean =
+    std::accumulate(ground_counts.begin(), ground_counts.end(), 0.0) / ground_counts.size();
+  const double spread = (highest - lowest) / mean;
+  const double worst_tilt = *std::max_element(tilts_deg.begin(), tilts_deg.end());
+
+  printf(
+    "[          ] 20 个种子：地面点 %d–%d（均值 %.0f，波动 %.1f%%），最大倾角 %.3f°\n", lowest,
+    highest, mean, spread * 100.0, worst_tilt);
+
+  // ⚠️ **判据是「波动」不是「均值」。** 均值好看说明不了问题 ——
+  //    实测那两帧的均值也在正常范围内，坏的是它们之间差了 77%。
+  EXPECT_LT(spread, 0.05) << "不同采样给出的地面差太多 —— 残留点会把目标连成一片";
+  // 地面是平的，任何一次采样都不该拟合出倾斜平面。
+  EXPECT_LT(worst_tilt, 1.0) << "某些采样拟合出了倾斜的地面";
 }
