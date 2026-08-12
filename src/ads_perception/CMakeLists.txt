@@ -21,7 +21,8 @@ find_package(ads_common REQUIRED)
 # SPEC §3.3「算法与 ROS 强制解耦」。机械校验在下面的 BUILD_TESTING 段
 # （no_ros_dependencies），跟着 colcon test 走 —— **从本包第一天就在**。
 add_library(${PROJECT_NAME} SHARED
-  src/ground_segmentation.cpp)
+  src/ground_segmentation.cpp
+  src/euclidean_cluster.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -64,6 +65,14 @@ if(BUILD_TESTING)
   #    见 ground_segmentation.hpp 的文件头与 plan.md P5-1 决策二。
   ament_add_gtest(test_ground_segmentation test/test_ground_segmentation.cpp)
   target_link_libraries(test_ground_segmentation ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：欧式聚类。
+  #
+  # ⚠️ 点云按**真实雷达角分辨率**采样，不是均匀网格 —— 均匀采样下聚类
+  #    怎么写都对，而真实点云里同一目标的相邻两线相隔 0.4–0.6 m
+  #    （比水平点间距大 5.6 倍），**那才是 tolerance 被顶住的地方**。
+  ament_add_gtest(test_euclidean_cluster test/test_euclidean_cluster.cpp)
+  target_link_libraries(test_euclidean_cluster ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_perception.so 的 DT_NEEDED 里不许有 ROS 库。
   add_test(NAME no_ros_dependencies
