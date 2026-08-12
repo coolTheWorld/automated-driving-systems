@@ -22,7 +22,9 @@ find_package(ads_common REQUIRED)
 # （no_ros_dependencies），跟着 colcon test 走 —— **从本包第一天就在**。
 add_library(${PROJECT_NAME} SHARED
   src/ground_segmentation.cpp
-  src/euclidean_cluster.cpp)
+  src/euclidean_cluster.cpp
+  src/lshape_fit.cpp
+  src/size_classifier.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -73,6 +75,14 @@ if(BUILD_TESTING)
   #    （比水平点间距大 5.6 倍），**那才是 tolerance 被顶住的地方**。
   ament_add_gtest(test_euclidean_cluster test/test_euclidean_cluster.cpp)
   target_link_libraries(test_euclidean_cluster ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：L-Shape 朝向拟合 + 尺寸分类。
+  #
+  # ⚠️ 核心判据是**180° 二义性**：一帧点云里没有信息能区分车头朝哪，
+  #    所以拟合只给「轴向」（值域 [0, π)）。用例必须证明它**没有**假装
+  #    解决这件事 —— 猜错的概率是 50%，而错了之后 P6 会预测出一条逆行轨迹。
+  ament_add_gtest(test_lshape_fit test/test_lshape_fit.cpp)
+  target_link_libraries(test_lshape_fit ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_perception.so 的 DT_NEEDED 里不许有 ROS 库。
   add_test(NAME no_ros_dependencies
