@@ -43,6 +43,35 @@
 //    · **删除用「连续未命中」** —— 目标真的消失了才该删
 //      p=0.5 时连续 5 帧未命中的概率 3.1%，那是可接受的误删率
 //
+//  ## ⚠️⚠️ 为什么直接滤「包围盒中心」是错的（2026-08-12 实测）
+//
+//  包围盒中心**不是目标身上的一个固定点** —— 它随观测几何漂移，因为雷达
+//  只打得到朝向自己的那些面。CP-P5-B 实测（对向 NPC 车，真值 4.40×1.80）：
+//
+//      距离      沿视线位置误差   感知长度
+//      0–10 m       0.004         4.38     ← 侧面露出来了，长度量得准
+//      15–20 m      0.453         3.33
+//      20–25 m      2.150         1.77     ← 只剩车头那一面
+//      25–30 m      2.223         1.77       (1.77 ≈ 车**宽**，轴向已翻 90°)
+//
+//  误差**几乎全在视线方向上**（垂直分量中位数只有 0.026 m），88% 的样本
+//  "感知比真值更近" —— 这是可见面伪影的三个签名。
+//  **对照组**：行人（0.4 m，无面可遮）全程 0.047 m，同样的代码同样的距离。
+//
+//  后果不只是位置：中心一跳，卡尔曼就把它读成**速度**。实测最坏的几帧
+//  在 3.6 m 处，相邻两帧长度 4.364 → 3.578，中心挪 0.4 m，
+//  0.1 s 一帧 ⟹ **8.8 m/s 的假速度**，而真值只有 4.0 —— 连符号都反了。
+//
+//  所以本层做两件事：
+//    ① **记住轴向一致时观测到的最大尺寸**（`Track::length_m/width_m`）；
+//    ② 用它把每帧的中心**补全**到"整个目标的中心"再喂给滤波器
+//       （`CompletedCenter`）—— 关联的门限也用补全后的位置，否则预测的是
+//       补全中心、观测是原始中心，两者差 1 m 以上会**判不进门 ⟹ ID 跳变**。
+//
+//  ⚠️ 它**修不了**远处那个 2.2 m 的偏差：目标一直在远处时我们从没见过它的
+//     侧面，没有可记的尺寸。那需要**形状先验**（"这是车 ⟹ 长 4.4 m"），
+//     而先验又依赖分类、分类又依赖尺寸 —— 循环。如实记在这里，别再查一遍。
+//
 //  ## 180° 二义性在这里消歧
 //
 //  S3 的 L-Shape 只能给出**轴向**（`[0, π)`）—— 一帧点云里没有信息能区分
@@ -112,6 +141,28 @@ struct TrackerParams
   /// 取 0.5：低于这个速度，速度方向由噪声主导 —— 拿噪声去定朝向
   /// 还不如老实说"不知道"。行人正常步速 1.2 m/s，所以走动的人能被消歧。
   double heading_min_speed_mps{0.5};
+
+  /// 尺寸记忆：检测的轴向与航迹已知轴向的夹角**不超过它**时才合并尺寸，rad。
+  ///
+  /// ⚠️ 这道闸不是保守，是**必需**（2026-08-12 实测）：远处只看得见车头
+  ///    那一面时，L-Shape 拟出的矩形是 1.76 × 0.08，而它会把较大的那个范围
+  ///    叫做 `length` —— 于是"长轴"指的其实是**车宽**，轴向整个翻了 90°。
+  ///    不判轴向一致就合并的话，会沿**错误的轴**把盒子外扩 1.3 m。
+  ///    实测长/宽比：0–10 m 是 2.5（轴向稳），25–30 m 是 25.5（已翻）。
+  ///
+  /// 取 0.35 rad（20°）：比拟合噪声大得多，又远小于 90° 的翻转。
+  /// 调大到 45° → 翻转与噪声分不开，会用错轴补全；
+  /// 调小到 5°  → 目标转弯时记忆频繁失效，退化成不做补全。
+  double extent_memory_max_axis_diff_rad{0.35};
+
+  /// 记忆尺寸的上限，m。
+  ///
+  /// ⚠️ 这是给「记最大值」兜底的：一次欠分割（两辆车并成一簇）会**永久**
+  ///    放大航迹尺寸，因为最大值只增不减。上限把损失框住。
+  ///    取 6.0：大于园区里任何合法目标（车 4.4 m），小到能拦住明显的并簇。
+  ///    ⚠️ 它拦不住 5 m 量级的欠分割 —— 那一档只能靠 S2 的聚类容差，
+  ///       写在这里是为了下一个人不要以为有了上限就安全了。
+  double max_extent_m{6.0};
 };
 
 /// 一次检测（S2 聚类 + S3 拟合的产物）。
@@ -135,10 +186,16 @@ struct Track
   Eigen::Vector4d state{Eigen::Vector4d::Zero()};
   Eigen::Matrix4d covariance{Eigen::Matrix4d::Identity()};
 
-  /// 最近一次关联上的检测的尺寸与轴向。
+  /// 最近一次关联上的检测的轴向。
   double yaw_rad{0.0};
+
+  /// 长/宽：**轴向一致的前提下已观测到的最大值**，不是最近一帧的值。
+  ///
+  /// ⚠️ 这是本层最反直觉的一点，理由见 `TrackerParams::extent_memory_*`
+  ///    与文件头「为什么滤包围盒中心是错的」。轴向翻转时会**重置**成当帧值。
   double length_m{0.0};
   double width_m{0.0};
+  /// 高度：**最近一帧**的值，不做记忆（它不参与中心补全）。
   double height_m{0.0};
 
   /// 消歧之后的**车头朝向**，`[−π, π)`。
@@ -167,8 +224,15 @@ public:
   /// @param detections 本帧的检测。**允许为空**（那正是"目标闪烁"时的常态，
   ///                   此时所有航迹只做预测，靠 max_misses 决定去留）。
   /// @param dt_s       距上一帧的时间，s。必须为正。
+  /// @param sensor_position 传感器在**与 detections 相同的坐标系**里的位置。
+  ///                   用来判断"看不见的那半截在哪一侧"，见文件头。
+  ///                   ⚠️ **故意不给默认值**：默认成原点在 map 系里就是
+  ///                   "传感器在地图原点"，那会让补全方向系统性地错，
+  ///                   而结果看起来完全合理 —— 这种错误最难发现。
   /// @throws std::invalid_argument dt 非正或非有限，或检测含非有限值。
-  void Update(const std::vector<Detection> & detections, double dt_s);
+  void Update(
+    const std::vector<Detection> & detections, double dt_s,
+    const Eigen::Vector2d & sensor_position);
 
   /// 全部航迹（含未确认的）。
   const std::vector<Track> & tracks() const { return tracks_; }
@@ -179,10 +243,32 @@ public:
   /// 会对每一个障碍物做碰撞检查，虚警的代价是车无故刹停。
   std::vector<Track> ConfirmedTracks() const;
 
+  /// 检测的轴向与航迹的是否算"同一个轴"（差值折到 `[0, π/2]` 再比）。
+  ///
+  /// 公开是为了让测试能直接验这道闸 —— 它是尺寸记忆能否安全启用的前提。
+  bool AxesConsistent(double detection_yaw_rad, double track_yaw_rad) const;
+
+  /// 把观测到的盒子中心补全到航迹已知的尺寸。
+  ///
+  /// 看不见的那部分**一定藏在背离传感器的一侧**（雷达只打得到朝向自己的面），
+  /// 所以沿盒子自身的两个轴，各朝背离传感器的方向挪半个缺口。
+  /// 轴向不一致或没有缺口时原样返回。
+  ///
+  /// @param detection       本帧检测
+  /// @param track           提供已知尺寸的航迹
+  /// @param sensor_position 传感器位置，与 detection 同系
+  /// @return 补全后的中心
+  Eigen::Vector2d CompletedCenter(
+    const Detection & detection, const Track & track,
+    const Eigen::Vector2d & sensor_position) const;
+
 private:
   void Predict(double dt_s);
-  void Associate(const std::vector<Detection> & detections, std::vector<int> * assignment);
-  void ApplyUpdate(const Detection & detection, Track * track);
+  void Associate(
+    const std::vector<Detection> & detections, const Eigen::Vector2d & sensor_position,
+    std::vector<int> * assignment);
+  void ApplyUpdate(
+    const Detection & detection, const Eigen::Vector2d & sensor_position, Track * track);
   void ResolveHeading(Track * track) const;
 
   TrackerParams params_;

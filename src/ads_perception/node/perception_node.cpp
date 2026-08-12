@@ -309,7 +309,13 @@ private:
         dt_s);
       return;
     }
-    tracker_->Update(detections, dt_s);
+    // 传感器在 map 系的位置 = base_link 原点（`transform` 正是 base_link → map）。
+    //
+    // ⚠️ 用 base_link 原点而不是雷达实际安装点（前方约 1.4 m）是有意的：
+    //    补全只需要"哪一侧背离传感器"这个**方向**，而 1.4 m 的偏移在
+    //    10 m 处只改变 8° 的视线角，不可能改变任何一侧的符号。
+    //    真去查 base_link→lidar_link 的 TF 反而多一处可以失败的地方。
+    tracker_->Update(detections, dt_s, Eigen::Vector2d(translation.x, translation.y));
     stats.track_ms = Elapsed(&stage);
 
     const std::vector<ads_perception::Track> tracks = tracker_->ConfirmedTracks();

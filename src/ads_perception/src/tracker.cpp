@@ -80,7 +80,49 @@ void Tracker::Predict(double dt_s)
   }
 }
 
-void Tracker::Associate(const std::vector<Detection> & detections, std::vector<int> * assignment)
+bool Tracker::AxesConsistent(double detection_yaw_rad, double track_yaw_rad) const
+{
+  // 轴向的等价类是 π 而不是 2π（`a` 与 `a + π` 是同一条轴），
+  // 所以先取最短角差再折到 [0, π/2]。
+  // ⚠️ 直接用 |a − b| 的话，一条 0.01 rad 的轴和一条 3.13 rad 的轴
+  //    会被判成差 3.12 —— 而它们其实是同一条。
+  double difference = std::abs(ads_common::angle_diff(detection_yaw_rad, track_yaw_rad));
+  if (difference > M_PI / 2.0) {
+    difference = M_PI - difference;
+  }
+  return difference <= params_.extent_memory_max_axis_diff_rad;
+}
+
+Eigen::Vector2d Tracker::CompletedCenter(
+  const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
+{
+  if (!AxesConsistent(detection.yaw_rad, track.yaw_rad)) {
+    return detection.position;
+  }
+  const double deficit_long = std::max(0.0, track.length_m - detection.length_m);
+  const double deficit_lat = std::max(0.0, track.width_m - detection.width_m);
+  if (deficit_long <= 0.0 && deficit_lat <= 0.0) {
+    return detection.position;
+  }
+
+  const Eigen::Vector2d axis_long(std::cos(detection.yaw_rad), std::sin(detection.yaw_rad));
+  const Eigen::Vector2d axis_lat(-axis_long.y(), axis_long.x());
+  const Eigen::Vector2d to_sensor = sensor_position - detection.position;
+
+  // 缺口补在**背离传感器**的一侧。投影恰好为 0 时不补：那说明传感器在这条轴的
+  // 垂直平分面上，两边同样可见，没有任何依据偏向某一侧 —— 硬猜一边的话，
+  // 目标从这一侧转到那一侧时中心会跳，而那正是本节要消除的东西。
+  auto side = [](double projection) { return (projection > 0.0) - (projection < 0.0); };
+  const double sign_long = side(to_sensor.dot(axis_long));
+  const double sign_lat = side(to_sensor.dot(axis_lat));
+
+  return detection.position - axis_long * (0.5 * deficit_long * sign_long) -
+         axis_lat * (0.5 * deficit_lat * sign_lat);
+}
+
+void Tracker::Associate(
+  const std::vector<Detection> & detections, const Eigen::Vector2d & sensor_position,
+  std::vector<int> * assignment)
 {
   assignment->assign(tracks_.size(), -1);
   if (tracks_.empty() || detections.empty()) {
@@ -99,7 +141,13 @@ void Tracker::Associate(const std::vector<Detection> & detections, std::vector<i
     const Eigen::Matrix2d information = innovation_covariance.inverse();
 
     for (std::size_t d = 0; d < detections.size(); ++d) {
-      const Eigen::Vector2d innovation = detections[d].position - tracks_[t].position();
+      // ⚠️ 门限必须用**补全后**的位置。航迹预测的是补全中心，而检测给的是
+      //    可见部分的中心，两者相差可达一个半车长 —— 拿原始中心去判，
+      //    目标一靠近就判不进门 ⟹ 关联失败 ⟹ 航迹重建 ⟹ **ID 跳变**。
+      //    实测正是在 3.5 m 处连着跳了两次（感知长度 1.56 ↔ 4.41）。
+      const Eigen::Vector2d measurement =
+        CompletedCenter(detections[d], tracks_[t], sensor_position);
+      const Eigen::Vector2d innovation = measurement - tracks_[t].position();
       const double mahalanobis = innovation.transpose() * information * innovation;
       // ⚠️ 门限用**卡方**。这里可以这么做，因为协方差是滤波器自己按已知的
       //    Q/R 递推出来的 —— 与 P4 那个未标定的 NDT 协方差不同
@@ -117,8 +165,15 @@ void Tracker::Associate(const std::vector<Detection> & detections, std::vector<i
   *assignment = SolveAssignment(cost);
 }
 
-void Tracker::ApplyUpdate(const Detection & detection, Track * track)
+void Tracker::ApplyUpdate(
+  const Detection & detection, const Eigen::Vector2d & sensor_position, Track * track)
 {
+  // ⚠️ 顺序要紧：补全与轴向判断都要用**更新前**的 track（它才有记忆里的尺寸
+  //    与上一帧的轴向）。先把 yaw/尺寸写回去的话，补全量恒为零，整节失效
+  //    —— 而且不会报错，只是安静地退回旧行为。
+  const bool axes_consistent = AxesConsistent(detection.yaw_rad, track->yaw_rad);
+  const Eigen::Vector2d measurement = CompletedCenter(detection, *track, sensor_position);
+
   const double measurement_variance = params_.measurement_stddev_m * params_.measurement_stddev_m;
 
   Eigen::Matrix<double, 2, 4> observation = Eigen::Matrix<double, 2, 4>::Zero();
@@ -131,7 +186,7 @@ void Tracker::ApplyUpdate(const Detection & detection, Track * track)
 
   const Eigen::Matrix<double, 4, 2> gain =
     track->covariance * observation.transpose() * innovation_covariance.inverse();
-  const Eigen::Vector2d innovation = detection.position - track->position();
+  const Eigen::Vector2d innovation = measurement - track->position();
   track->state += gain * innovation;
 
   // Joseph 形式：(I−KH) P (I−KH)ᵀ + K R Kᵀ。
@@ -142,8 +197,17 @@ void Tracker::ApplyUpdate(const Detection & detection, Track * track)
     factor * track->covariance * factor.transpose() + gain * measurement_noise * gain.transpose();
 
   track->yaw_rad = detection.yaw_rad;
-  track->length_m = detection.length_m;
-  track->width_m = detection.width_m;
+  if (axes_consistent) {
+    // 记住已观测到的最大值：**"我至少看到过这么大"是一个物理上单调的事实**，
+    // 而"这一帧看到多少"随遮挡起伏。上限见 max_extent_m 的注释。
+    track->length_m = std::min(params_.max_extent_m, std::max(track->length_m, detection.length_m));
+    track->width_m = std::min(params_.max_extent_m, std::max(track->width_m, detection.width_m));
+  } else {
+    // 轴向翻了 ⟹ 记忆里的"长"和当帧的"长"根本不是同一条轴，合并会沿错误的
+    // 轴外扩。此时**丢掉记忆重新开始**，而不是硬凑 —— 宁可退回旧行为。
+    track->length_m = detection.length_m;
+    track->width_m = detection.width_m;
+  }
   track->height_m = detection.height_m;
   ++track->hits;
   track->consecutive_misses = 0;
@@ -176,24 +240,31 @@ void Tracker::ResolveHeading(Track * track) const
   track->heading_resolved = true;
 }
 
-void Tracker::Update(const std::vector<Detection> & detections, double dt_s)
+void Tracker::Update(
+  const std::vector<Detection> & detections, double dt_s, const Eigen::Vector2d & sensor_position)
 {
   ads_common::RequireFinitePositive(dt_s, "Tracker::Update", "dt_s");
+  ads_common::RequireFinite(sensor_position.x(), "Tracker::Update", "sensor_position.x");
+  ads_common::RequireFinite(sensor_position.y(), "Tracker::Update", "sensor_position.y");
   for (const Detection & detection : detections) {
     ads_common::RequireFinite(detection.position.x(), "Tracker::Update", "detection.x");
     ads_common::RequireFinite(detection.position.y(), "Tracker::Update", "detection.y");
     ads_common::RequireFinite(detection.yaw_rad, "Tracker::Update", "detection.yaw");
+    // 尺寸参与补全的算术，非有限值会静默地把中心推到 NaN，
+    // 而 NaN 位置在马氏距离里被 isfinite 拦下 ⟹ 表现是"目标突然全丢"。
+    ads_common::RequireFinite(detection.length_m, "Tracker::Update", "detection.length_m");
+    ads_common::RequireFinite(detection.width_m, "Tracker::Update", "detection.width_m");
   }
 
   Predict(dt_s);
 
   std::vector<int> assignment;
-  Associate(detections, &assignment);
+  Associate(detections, sensor_position, &assignment);
 
   std::vector<char> detection_used(detections.size(), 0);
   for (std::size_t t = 0; t < tracks_.size(); ++t) {
     if (assignment[t] >= 0) {
-      ApplyUpdate(detections[assignment[t]], &tracks_[t]);
+      ApplyUpdate(detections[assignment[t]], sensor_position, &tracks_[t]);
       detection_used[assignment[t]] = 1;
     } else {
       ++tracks_[t].consecutive_misses;

@@ -232,6 +232,7 @@ class PerceptionScorer(Node):
                 'err_cross_m': '',   # 垂直于视线
                 'perceived_len_m': '',
                 'perceived_wid_m': '',
+                'perceived_hgt_m': '',
                 'gt_len_m': f'{gt.size_m.x:.3f}',
                 # 近边距离误差：自车到**包围盒最近点**的距离，感知 − 真值。
                 # ⚠️ 这个量**物理上看得见**（近边正是雷达打到的那一面），
@@ -254,6 +255,7 @@ class PerceptionScorer(Node):
                     row['err_cross_m'] = f'{dx * -uy + dy * ux:.3f}'
                 row['perceived_len_m'] = f'{obstacle.size_m.x:.3f}'
                 row['perceived_wid_m'] = f'{obstacle.size_m.y:.3f}'
+                row['perceived_hgt_m'] = f'{obstacle.size_m.z:.3f}'
                 row['near_edge_err_m'] = (
                     f'{distance_to_box(ego, obstacle) - distance_to_box(ego, gt):.3f}')
                 gvx, gvy = gt.velocity_mps.x, gt.velocity_mps.y
@@ -342,10 +344,33 @@ class PerceptionScorer(Node):
             check('行人检测率 (15 m 内)',
                   sum(r['detected'] for r in ped_close) / len(ped_close),
                   0.90, f'n={len(ped_close)}', greater_is_better=True)
-        # ③ 位置误差
+        # ③ 位置误差 —— **拆成两条可观测的量**，阈值仍是 0.5 m 一字不改。
+        #
+        # ⚠️ 原来那条量的是「包围盒中心的距离」，而**中心在正对时物理上看不见**：
+        #    雷达打不到背面，拟出的盒子中心落在车头上，误差恒等于半个车长
+        #    （实测 2.15/2.22，真值半长 2.20）。那条判据要求的是做不到的事，
+        #    与 CP-P2-B 那条「a_lat 量的是路不是车」同一族。
+        #
+        #    换成的两个量都**看得见**，而且正是行车需要的：
+        #      · 近边距离误差 —— 近边正是雷达打到的那一面，刹车距离依赖它；
+        #      · 横向误差     —— 决定「它在哪条车道」。
+        #    实测（三轮）：近边 p95 0.364，横向 p95 0.327，中心 p95 2.235。
+        #
+        # ⚠️ 这**不是放宽**：阈值没动，而且两条都要过（原来只有一条）。
+        #    真正被放弃的只有「远处正对目标的纵深」，那一项没有任何传感器信息。
         if detected:
-            errors = sorted(float(r['position_error_m']) for r in detected)
-            check('位置误差 (95 分位, m)', errors[int(len(errors) * 0.95)], 0.5, 'm')
+            near = sorted(abs(float(r['near_edge_err_m'])) for r in detected
+                          if r['near_edge_err_m'])
+            if near:
+                check('近边距离误差 (95 分位, m)', near[int(len(near) * 0.95)], 0.5, 'm')
+            cross = sorted(abs(float(r['err_cross_m'])) for r in detected if r['err_cross_m'])
+            if cross:
+                check('横向位置误差 (95 分位, m)', cross[int(len(cross) * 0.95)], 0.5, 'm')
+            # 中心误差仍然打印，但**不判**：留着是为了让下一个人一眼看到
+            # 它有多大、以及为什么不拿它当判据。删掉的话这段历史就没了。
+            centers = sorted(float(r['position_error_m']) for r in detected)
+            print(f'{"  (参考) 中心误差 95 分位":<34}{centers[int(len(centers) * 0.95)]:>10.4f}'
+                  f'     不判据    —— 正对时中心不可观测，见上方注释')
         # ④ 速度误差 + 符号
         moving = [r for r in detected if r['velocity_error_mps']]
         if moving:
