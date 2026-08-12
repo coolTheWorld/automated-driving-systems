@@ -50,6 +50,32 @@ ament_export_include_directories(include)
 ament_export_dependencies(eigen3_cmake_module Eigen3 ads_common)
 
 # -----------------------------------------------------------------------------
+# 节点：ROS 包装层（P5-S5）
+# -----------------------------------------------------------------------------
+# 这一层**只做翻译**：ROS 消息 ↔ lib 的调用。四阶段算法一行都不在这里，
+# 所以它没有自己的单元测试也不可怕 —— 该测的都在 lib 的 L1 用例里。
+find_package(rclcpp REQUIRED)
+find_package(ads_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+
+add_executable(perception_node node/perception_node.cpp)
+target_link_libraries(perception_node ${PROJECT_NAME})
+ament_target_dependencies(perception_node
+  rclcpp ads_msgs sensor_msgs geometry_msgs diagnostic_msgs tf2 tf2_ros)
+
+install(TARGETS perception_node
+  DESTINATION lib/${PROJECT_NAME})
+
+# 感知的调参装进本包 share（理由同 ads_control：ROS 包安装后必须自包含）。
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../config/perception_params.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
+
+# -----------------------------------------------------------------------------
 # L1 单元测试
 # -----------------------------------------------------------------------------
 if(BUILD_TESTING)

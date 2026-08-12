@@ -23,6 +23,18 @@
   <!-- RequireFinite 三兄弟。纯 C++、无 ROS。 -->
   <depend>ads_common</depend>
 
+  <!-- 节点层（node/perception_node.cpp）。
+       ⚠️ 这些依赖属于 perception_node 这个 target，
+          libads_perception.so 依然**一个 ROS 库都不许链接** ——
+          由 target_link_libraries 的作用域 + no_ros_dependencies 那道 CTest 保证。 -->
+  <depend>rclcpp</depend>
+  <depend>ads_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>

@@ -109,6 +109,7 @@ def _resolve_sim_source(context, *args, **kwargs):
                 'rviz': LaunchConfiguration('rviz'),
                 'obstacles': LaunchConfiguration('obstacles'),
                 'dynamic': LaunchConfiguration('dynamic'),
+                'perception': LaunchConfiguration('perception'),
                 'localization': LaunchConfiguration('localization'),
             }.items(),
         ),
@@ -233,6 +234,48 @@ def _load_gazebo_launch_module():
     return module
 
 
+def _perception_nodes(context, *args, **kwargs):
+    """
+    Build the P5 perception node, or nothing when the switch is off.
+
+    ⚠️ **它与 `obstacle_truth` 的 `/perception/obstacles` 互斥。**
+       两者同时发同一个话题不会报错，而 P4 实测过这类错误
+       **数值上也不一定看得出来**（多一个 map→odom 发布者时误差只从
+       0.012 变成 0.043 m，全部判据仍绿）。所以由这个开关二选一：
+       `perception:=true` 时把真值发布器的 `publish_as_perception` 关掉
+       （见 gazebo_sim.launch.py），真值只走 `/perception/obstacles_gt`。
+
+    :param context: launch 运行时上下文
+    :return: 要执行的 launch 动作列表；perception:=false 时为空
+    """
+    if LaunchConfiguration('perception').perform(context).lower() not in ('true', '1'):
+        return []
+
+    params_yaml = (Path(get_package_share_directory('ads_perception')) / 'config'
+                   / 'perception_params.yaml')
+    config = yaml.safe_load(params_yaml.read_text(encoding='utf-8'))
+
+    # 平铺成 ROS 参数名。**逐个列出而不是自动展开**，理由与 control_node 一样：
+    # 自动展开时 YAML 里多一个键就会静默变成一个节点不认识的参数，
+    # 而 ROS 2 对未声明的参数默认是**忽略**的 —— 于是"改了配置没生效"。
+    flat = {}
+    for section in ('ground', 'cluster', 'lshape', 'tracker'):
+        for key, value in config[section].items():
+            flat[f'{section}.{key}'] = value
+    flat['max_cloud_age_s'] = config['max_cloud_age_s']
+    flat['use_sim_time'] = True
+
+    return [
+        Node(
+            package='ads_perception',
+            executable='perception_node',
+            name='perception_node',
+            parameters=[flat],
+            output='screen',
+        ),
+    ]
+
+
 def _localization_nodes(context, *args, **kwargs):
     """
     Build the P4 localization node, or nothing when the switch is off.
@@ -341,6 +384,12 @@ def generate_launch_description():
                          '与 obstacles 互相独立，可自由组合'),
         ),
         DeclareLaunchArgument(
+            'perception', default_value='false',
+            description=('P5：true 时起 perception_node，由它发 /perception/obstacles，'
+                         '同时**关掉**真值发布器往那个话题上发（两者互斥）。\n'
+                         '默认 false —— 那是 CP-P2-B / CP-P3-B / CP-P4-B 的回归基线，'
+                         '它们建立在真值障碍物上')),
+        DeclareLaunchArgument(
             'localization', default_value='false',
             description=('P4：true 时起 localization_node，由它发动态 map→odom，'
                          '同时**关掉**仿真侧那条来自 spawn 位姿的静态 TF。\n'
@@ -349,6 +398,7 @@ def generate_launch_description():
 
         OpaqueFunction(function=_resolve_sim_source),
         OpaqueFunction(function=_localization_nodes),
+        OpaqueFunction(function=_perception_nodes),
 
         # ---------------------------------------------------------------------
         # 算法节点挂在这里

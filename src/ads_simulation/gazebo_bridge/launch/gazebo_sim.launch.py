@@ -399,7 +399,16 @@ def _obstacle_actions(context, *args, **kwargs):
     #    而 `obstacles:=none dynamic:=both` 恰恰会让前六个数组是空的。
     #    所以空的就**不传**，让节点用它自己的默认值（也是空 vector）——
     #    节点那边的长度一致性校验对「全空」是通过的。
-    truth_params = {'frame_id': 'map', 'use_sim_time': True}
+    # ⚠️ perception:=true 时真值**不再**兼发 /perception/obstacles ——
+    #    那个话题交给 perception_node。两个发布者同时发不会报错，
+    #    而 P4 实测过这类错误数值上也不一定看得出来（见 SPEC §3.3）。
+    publish_as_perception = (
+        LaunchConfiguration('perception').perform(context).lower() not in ('true', '1'))
+    truth_params = {
+        'frame_id': 'map',
+        'use_sim_time': True,
+        'publish_as_perception': publish_as_perception,
+    }
     static_arrays = {
         'obstacles.center_x_m': center_x,
         'obstacles.center_y_m': center_y,
@@ -486,6 +495,11 @@ def generate_launch_description():
             description=('P3 验收场景的静态障碍物：none / avoid / block。'
                          '**默认 none** —— 那是 CP-P2-B 的回归基线，'
                          '世界必须与 P2 时一模一样')),
+        DeclareLaunchArgument(
+            'perception', default_value='false',
+            description=('P5：true 时真值发布器**不再**兼发 /perception/obstacles，'
+                         '那个话题交给 perception_node（两者互斥）。'
+                         '真值始终走 /perception/obstacles_gt')),
         DeclareLaunchArgument(
             'dynamic', default_value='none',
             description=('P5 感知场景的**动态**目标：none / oncoming / cross / both。'

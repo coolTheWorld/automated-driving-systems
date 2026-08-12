@@ -1,0 +1,473 @@
+// Copyright 2026 孙帅
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// =============================================================================
+//  perception_node —— 感知模块的 ROS 包装层
+//
+//  订阅  /lidar/points            sensor_msgs/PointCloud2   base_link 系，10 Hz
+//  发布  /perception/obstacles    ads_msgs/ObstacleArray    **map 系**
+//  发布  /perception/diagnostics  DiagnosticArray           各阶段点数与耗时
+//
+//  四阶段流水线（算法**一行都不在这里**，全在 lib/）：
+//      地面分割 → 欧式聚类 → L-Shape 拟合 + 尺寸分类 → 匈牙利关联 + 跟踪
+//
+//  ## ⚠️ 坐标系：前三阶段在 base_link，跟踪在 map
+//
+//  · **地面分割必须在 base_link 做** —— 它假设地面 z ≈ 0，而那只在传感器系
+//    成立（base_link 原点就定在地面高度）。搬到 map 系去做的话，
+//    地面高度变成一个随位置变化的量，RANSAC 仍然能拟合，但
+//    `max_height_m` 那道"只在这个高度以下找地面"的筛选就失效了。
+//  · **跟踪必须在 map 系** —— 恒速模型要求惯性系。在 base_link 里跟踪的话，
+//    自车一转弯**所有目标都在动**，恒速假设立刻破产，速度估计全是自车运动。
+//
+//  所以 L-Shape 拟合之后做一次 base_link → map 的变换，再喂给跟踪器。
+//
+//  ## ⚠️ 与真值发布器互斥
+//
+//  `obstacle_truth` 在 `publish_as_perception = true` 时也发
+//  `/perception/obstacles`。两者**不能同时发** —— SPEC §3.3 的「每一段
+//  有且只有一个发布者」在话题上同样成立，而 P4 实测过：多一个发布者
+//  **不报错、数值上也不一定看得出来**。
+//  由 launch 的 `perception:=true/false` 二选一，见 stack.launch.py。
+//
+//  ## ⚠️ 只发**已确认**的航迹
+//
+//  未确认的航迹可能只是噪点簇。下游（规划）会对每个障碍物做碰撞检查，
+//  虚警的代价是车无故刹停 —— 而那看起来像"规划器有毛病"。
+// =============================================================================
+
+// ⚠️ Eigen 的头没有扩展名，cpplint 把它归成「C 系统头」，必须排在
+//    C++ 标准库之前 —— 见 CLAUDE.md 的 lint 陷阱表。
+#include <Eigen/Core>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <memory>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
+
+#include "ads_msgs/msg/obstacle.hpp"
+#include "ads_msgs/msg/obstacle_array.hpp"
+#include "ads_perception/euclidean_cluster.hpp"
+#include "ads_perception/ground_segmentation.hpp"
+#include "ads_perception/lshape_fit.hpp"
+#include "ads_perception/size_classifier.hpp"
+#include "ads_perception/tracker.hpp"
+
+namespace
+{
+
+/// 各阶段的耗时与规模，只用于诊断。
+struct StageStats
+{
+  int input_points{0};
+  int non_ground_points{0};
+  int clusters{0};
+  int detections{0};
+  int confirmed_tracks{0};
+  double ground_ms{0.0};
+  double cluster_ms{0.0};
+  double fit_ms{0.0};
+  double track_ms{0.0};
+  double total_ms{0.0};
+};
+
+}  // namespace
+
+class PerceptionNode : public rclcpp::Node
+{
+public:
+  PerceptionNode() : Node("perception_node")
+  {
+    // ---- 地面分割 -------------------------------------------------------
+    ground_params_.max_iterations = declare_parameter<int>("ground.max_iterations", 100);
+    ground_params_.distance_threshold_m =
+      declare_parameter<double>("ground.distance_threshold_m", 0.15);
+    ground_params_.max_slope_rad = declare_parameter<double>("ground.max_slope_rad", 0.26);
+    ground_params_.max_height_m = declare_parameter<double>("ground.max_height_m", 1.0);
+    ground_params_.min_inliers = declare_parameter<int>("ground.min_inliers", 100);
+
+    // ---- 聚类 -----------------------------------------------------------
+    // ⚠️ tolerance 被雷达线间距从下面顶着（25 m 处 0.493 m），
+    //    min_cluster_size 由 S1 的实测点数定（20–25 m 只有 7 点）。
+    //    两个都是安全关键值，理由见 euclidean_cluster.hpp。
+    cluster_params_.tolerance_m = declare_parameter<double>("cluster.tolerance_m", 0.5);
+    cluster_params_.min_cluster_size = declare_parameter<int>("cluster.min_cluster_size", 5);
+    cluster_params_.max_cluster_size = declare_parameter<int>("cluster.max_cluster_size", 20000);
+
+    // ---- L-Shape --------------------------------------------------------
+    fit_params_.angle_step_rad = declare_parameter<double>("lshape.angle_step_rad", 0.01745);
+    fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
+
+    // ---- 跟踪 -----------------------------------------------------------
+    ads_perception::TrackerParams tracker_params;
+    tracker_params.process_accel_stddev_mps2 =
+      declare_parameter<double>("tracker.process_accel_stddev_mps2", 2.0);
+    tracker_params.measurement_stddev_m =
+      declare_parameter<double>("tracker.measurement_stddev_m", 0.3);
+    tracker_params.gate_chi_square = declare_parameter<double>("tracker.gate_chi_square", 9.21);
+    // ⚠️ 确认用**累计**命中而不是连续 —— S1 实测目标在连续帧之间闪烁，
+    //    要求连续 3 帧命中的话概率只有 12.5%。见 tracker.hpp 的文件头。
+    tracker_params.confirm_hits = declare_parameter<int>("tracker.confirm_hits", 3);
+    tracker_params.max_misses = declare_parameter<int>("tracker.max_misses", 5);
+    tracker_params.heading_min_speed_mps =
+      declare_parameter<double>("tracker.heading_min_speed_mps", 0.5);
+    tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params);
+    max_misses_ = tracker_params.max_misses;
+
+    map_frame_ = declare_parameter<std::string>("map_frame", "map");
+    // 点云比这么旧就丢。与 localization_node 那条同一个理由：
+    // 用旧帧算出来的障碍物位置对应的是**过去**的时刻，而下游会当成现在的。
+    max_cloud_age_s_ = declare_parameter<double>("max_cloud_age_s", 0.15);
+
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+
+    obstacle_pub_ =
+      create_publisher<ads_msgs::msg::ObstacleArray>("/perception/obstacles", rclcpp::QoS(10));
+    diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+      "/perception/diagnostics", rclcpp::QoS(10));
+
+    // ⚠️ 点云用 **reliable + 深度 10**，与 lidar_preprocessor 的发布端一致。
+    //    best-effort 会静默丢帧（实测只剩标称的 35%），而症状是
+    //    「感知偶尔漏一帧」—— 没有任何日志。见 CLAUDE.md 陷阱表。
+    cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/lidar/points", rclcpp::QoS(10).reliable(),
+      [this](sensor_msgs::msg::PointCloud2::SharedPtr msg) { OnCloud(std::move(msg)); });
+
+    RCLCPP_INFO(
+      get_logger(), "perception_node 就绪：聚类容差 %.2f m，最小簇 %d 点，确认需 %d 次命中",
+      cluster_params_.tolerance_m, cluster_params_.min_cluster_size, tracker_params.confirm_hits);
+  }
+
+private:
+  void OnCloud(sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  {
+    const auto started = std::chrono::steady_clock::now();
+    StageStats stats;
+
+    // ---- 陈旧点云直接丢 -------------------------------------------------
+    const double age_s = (now() - rclcpp::Time(msg->header.stamp)).seconds();
+    if (age_s > max_cloud_age_s_) {
+      ++dropped_stale_clouds_;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "点云已经旧了 %.0f ms（上限 %.0f），丢弃。用旧帧算出来的障碍物位置对应的是"
+        "**过去**的时刻，而下游会当成现在的。累计丢 %ld 帧",
+        age_s * 1e3, max_cloud_age_s_ * 1e3, dropped_stale_clouds_);
+      return;
+    }
+
+    // ---- 取 map ← base_link 的变换 --------------------------------------
+    // ⚠️ 用**点云自己的**时间戳查，不是 now()：车 4 m/s 时差 100 ms 就是 0.4 m，
+    //    而那个偏差会被算成检测误差。
+    geometry_msgs::msg::TransformStamped transform;
+    try {
+      transform = tf_buffer_->lookupTransform(
+        map_frame_, msg->header.frame_id, rclcpp::Time(msg->header.stamp),
+        rclcpp::Duration::from_seconds(0.05));
+    } catch (const std::exception & e) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000, "拿不到 %s ← %s 的变换：%s", map_frame_.c_str(),
+        msg->header.frame_id.c_str(), e.what());
+      return;
+    }
+
+    // ---- 读点 -----------------------------------------------------------
+    std::vector<Eigen::Vector3d> points;
+    points.reserve(msg->width * msg->height);
+    sensor_msgs::PointCloud2ConstIterator<float> it_x(*msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> it_y(*msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> it_z(*msg, "z");
+    for (; it_x != it_x.end(); ++it_x, ++it_y, ++it_z) {
+      // ⚠️ gpu_lidar 的无回波射线返回 **±inf 不是 NaN**，两者都要滤。
+      //    不滤的话下游的 SegmentGround / ClusterEuclidean 会抛异常
+      //    （它们的契约就是这样），而那会让整个回调中断。
+      if (!std::isfinite(*it_x) || !std::isfinite(*it_y) || !std::isfinite(*it_z)) {
+        continue;
+      }
+      points.emplace_back(*it_x, *it_y, *it_z);
+    }
+    stats.input_points = static_cast<int>(points.size());
+    if (points.empty()) {
+      return;
+    }
+
+    // ---- ① 地面分割（base_link 系，地面 z ≈ 0 是它的前提）--------------
+    auto stage = std::chrono::steady_clock::now();
+    const ads_perception::GroundSegmentationResult ground =
+      ads_perception::SegmentGround(points, ground_params_);
+    stats.ground_ms = Elapsed(&stage);
+
+    std::vector<Eigen::Vector3d> non_ground;
+    if (ground.found) {
+      non_ground.reserve(points.size() - ground.ground_count);
+      for (std::size_t i = 0; i < points.size(); ++i) {
+        if (ground.is_ground[i] == 0U) {
+          non_ground.push_back(points[i]);
+        }
+      }
+    } else {
+      // ⚠️ 没找到地面时**不要把所有点都当障碍物** —— 那会让下游看到
+      //    一大片虚警并立刻刹停。宁可这一帧什么都不报（航迹靠 max_misses
+      //    撑住），也不要报一堆假的。
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "这一帧没找到地面（%d 点），跳过。不把全部点当障碍物是有意的："
+        "那会让规划看到一大片虚警并立刻刹停",
+        stats.input_points);
+      ++frames_without_ground_;
+      return;
+    }
+    stats.non_ground_points = static_cast<int>(non_ground.size());
+
+    // ---- ② 欧式聚类 ------------------------------------------------------
+    const std::vector<ads_perception::Cluster> clusters =
+      ads_perception::ClusterEuclidean(non_ground, cluster_params_);
+    stats.cluster_ms = Elapsed(&stage);
+    stats.clusters = static_cast<int>(clusters.size());
+
+    // ---- ③ L-Shape 拟合 + 转到 map 系 -----------------------------------
+    const double yaw = QuaternionYaw(transform.transform.rotation);
+    const double cos_yaw = std::cos(yaw);
+    const double sin_yaw = std::sin(yaw);
+    const auto & translation = transform.transform.translation;
+
+    std::vector<ads_perception::Detection> detections;
+    std::vector<Eigen::Vector3d> cluster_points;
+    detections.reserve(clusters.size());
+    for (const ads_perception::Cluster & cluster : clusters) {
+      cluster_points.clear();
+      cluster_points.reserve(cluster.indices.size());
+      for (const int index : cluster.indices) {
+        cluster_points.push_back(non_ground[index]);
+      }
+      const ads_perception::LShapeBox box = ads_perception::FitLShape(cluster_points, fit_params_);
+      if (!box.valid) {
+        continue;
+      }
+
+      // base_link → map。目标都在地面上，所以只需要平面旋转 + 平移。
+      ads_perception::Detection detection;
+      detection.position.x() = cos_yaw * box.center.x() - sin_yaw * box.center.y() + translation.x;
+      detection.position.y() = sin_yaw * box.center.x() + cos_yaw * box.center.y() + translation.y;
+      // ⚠️ 轴向也要转 —— 它是在 base_link 系里量的。
+      //    忘了转的症状是"车直行时朝向对、一转弯全体目标的朝向跟着自车转"。
+      detection.yaw_rad = box.yaw_rad + yaw;
+      detection.length_m = box.length_m;
+      detection.width_m = box.width_m;
+      detection.height_m = box.height_m;
+      detections.push_back(detection);
+    }
+    stats.fit_ms = Elapsed(&stage);
+    stats.detections = static_cast<int>(detections.size());
+
+    // ---- ④ 跟踪（map 系 —— 恒速模型要求惯性系）--------------------------
+    const rclcpp::Time stamp(msg->header.stamp);
+    double dt_s = 0.1;  // 首帧没有上一帧，用标称周期
+    if (last_stamp_.nanoseconds() != 0) {
+      dt_s = (stamp - last_stamp_).seconds();
+    }
+    last_stamp_ = stamp;
+    if (!(dt_s > 0.0) || !std::isfinite(dt_s)) {
+      // ⚠️ dt ≤ 0 通常意味着**两套仿真同时在发 /clock**（CLAUDE.md 有专门一条）。
+      //    此时所有测量值都作废，该去查残留进程而不是在这里凑合。
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000, "dt = %.4f s，跳过这一帧 —— 是不是有两套仿真在跑？",
+        dt_s);
+      return;
+    }
+    tracker_->Update(detections, dt_s);
+    stats.track_ms = Elapsed(&stage);
+
+    const std::vector<ads_perception::Track> tracks = tracker_->ConfirmedTracks();
+    stats.confirmed_tracks = static_cast<int>(tracks.size());
+    stats.total_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+
+    PublishObstacles(tracks, msg->header.stamp);
+    CountIdSwitches(tracks);
+    PublishDiagnostics(stats, msg->header.stamp);
+  }
+
+  void PublishObstacles(
+    const std::vector<ads_perception::Track> & tracks, const builtin_interfaces::msg::Time & stamp)
+  {
+    ads_msgs::msg::ObstacleArray array;
+    array.header.stamp = stamp;
+    array.header.frame_id = map_frame_;
+    array.obstacles.reserve(tracks.size());
+
+    for (const ads_perception::Track & track : tracks) {
+      ads_msgs::msg::Obstacle obstacle;
+      obstacle.header = array.header;
+      obstacle.id = track.id;
+      obstacle.classification = static_cast<std::uint8_t>(ads_perception::ClassifyBySize(
+        track.length_m, track.width_m, track.height_m, classifier_params_));
+
+      obstacle.pose.position.x = track.position().x();
+      obstacle.pose.position.y = track.position().y();
+      obstacle.pose.position.z = 0.5 * track.height_m;
+
+      // ⚠️ 朝向：消歧成功就用车头朝向，否则**退回轴向**。
+      //    轴向有 180° 二义性，但那是**如实**的 —— 猜一个的话有 50% 的
+      //    机会让 P6 预测出一条逆行轨迹（见 lshape_fit.hpp 的文件头）。
+      tf2::Quaternion quaternion;
+      quaternion.setRPY(0.0, 0.0, track.heading_resolved ? track.heading_rad : track.yaw_rad);
+      obstacle.pose.orientation.x = quaternion.x();
+      obstacle.pose.orientation.y = quaternion.y();
+      obstacle.pose.orientation.z = quaternion.z();
+      obstacle.pose.orientation.w = quaternion.w();
+
+      obstacle.size_m.x = track.length_m;
+      obstacle.size_m.y = track.width_m;
+      obstacle.size_m.z = track.height_m;
+      obstacle.velocity_mps.x = track.velocity().x();
+      obstacle.velocity_mps.y = track.velocity().y();
+      obstacle.velocity_mps.z = 0.0;
+
+      // 存在概率：按连续未命中衰减。刚命中的是 1.0，丢得越久越低。
+      //
+      // ⚠️ **SPEC §11 禁止拿它做碰撞检查的过滤。** 它只是信息 ——
+      //    一个"存在概率 0.2"的东西照样会把车撞坏。
+      obstacle.existence_probability = static_cast<float>(std::max(
+        0.0, 1.0 - static_cast<double>(track.consecutive_misses) / std::max(1, max_misses_)));
+
+      array.obstacles.push_back(obstacle);
+    }
+    obstacle_pub_->publish(array);
+  }
+
+  void CountIdSwitches(const std::vector<ads_perception::Track> & tracks)
+  {
+    // ID 切换 = 上一帧有、这一帧没了的航迹数。
+    //
+    // ⚠️ 它**不区分**"目标真的走了"和"航迹断了又重建" —— 前者是正常的。
+    //    所以这个量只作诊断，CP-P5-B 的 ID 稳定性判据要在实测脚本里
+    //    按真值配对来算，而不是拿这个数。**不要把诊断量当判据。**
+    std::unordered_set<std::uint32_t> current;
+    for (const ads_perception::Track & track : tracks) {
+      current.insert(track.id);
+    }
+    for (const std::uint32_t id : previous_ids_) {
+      if (current.count(id) == 0) {
+        ++id_disappearances_;
+      }
+    }
+    previous_ids_ = std::move(current);
+  }
+
+  void PublishDiagnostics(const StageStats & stats, const builtin_interfaces::msg::Time & stamp)
+  {
+    // 1 Hz 就够 —— 这是给人看的，不是控制回路的一部分。
+    const rclcpp::Time now_stamp(stamp);
+    if (now_stamp.nanoseconds() - last_diag_ns_ < 1'000'000'000LL) {
+      return;
+    }
+    last_diag_ns_ = now_stamp.nanoseconds();
+
+    diagnostic_msgs::msg::DiagnosticArray array;
+    array.header.stamp = stamp;
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.name = "perception";
+    status.hardware_id = "ads_perception";
+    status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    status.message = std::to_string(stats.confirmed_tracks) + " tracks";
+
+    const auto add = [&status](const std::string & key, double value) {
+      diagnostic_msgs::msg::KeyValue pair;
+      pair.key = key;
+      pair.value = std::to_string(value);
+      status.values.push_back(pair);
+    };
+    add("input_points", stats.input_points);
+    add("non_ground_points", stats.non_ground_points);
+    add("clusters", stats.clusters);
+    add("detections", stats.detections);
+    add("confirmed_tracks", stats.confirmed_tracks);
+    // ⚠️ **分阶段耗时**，不是只发一个总数。CLAUDE.md 那条「频率低 = 算力不够
+    //    是最容易犯的想当然」—— 没有分层数据的话，超预算时第一反应会是
+    //    砍雷达分辨率，而 S3 的教训是那样只快了 4%（病根在 QoS）。
+    add("ground_ms", stats.ground_ms);
+    add("cluster_ms", stats.cluster_ms);
+    add("fit_ms", stats.fit_ms);
+    add("track_ms", stats.track_ms);
+    add("total_ms", stats.total_ms);
+    add("dropped_stale_clouds", static_cast<double>(dropped_stale_clouds_));
+    add("frames_without_ground", static_cast<double>(frames_without_ground_));
+    add("id_disappearances", static_cast<double>(id_disappearances_));
+    array.status.push_back(status);
+    diag_pub_->publish(array);
+  }
+
+  static double Elapsed(std::chrono::steady_clock::time_point * since)
+  {
+    const auto now_point = std::chrono::steady_clock::now();
+    const double milliseconds =
+      std::chrono::duration<double, std::milli>(now_point - *since).count();
+    *since = now_point;
+    return milliseconds;
+  }
+
+  static double QuaternionYaw(const geometry_msgs::msg::Quaternion & q)
+  {
+    return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  }
+
+  ads_perception::GroundSegmentationParams ground_params_;
+  ads_perception::EuclideanClusterParams cluster_params_;
+  ads_perception::LShapeFitParams fit_params_;
+  ads_perception::SizeClassifierParams classifier_params_;
+  std::unique_ptr<ads_perception::Tracker> tracker_;
+  int max_misses_{5};
+
+  std::string map_frame_;
+  double max_cloud_age_s_{0.15};
+  rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
+  std::int64_t last_diag_ns_{0};
+  std::int64_t dropped_stale_clouds_{0};
+  std::int64_t frames_without_ground_{0};
+  std::int64_t id_disappearances_{0};
+  std::unordered_set<std::uint32_t> previous_ids_;
+
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  rclcpp::Publisher<ads_msgs::msg::ObstacleArray>::SharedPtr obstacle_pub_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+};
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  try {
+    rclcpp::spin(std::make_shared<PerceptionNode>());
+  } catch (const std::exception & e) {
+    RCLCPP_FATAL(rclcpp::get_logger("perception_node"), "启动失败：%s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
+  rclcpp::shutdown();
+  return 0;
+}
