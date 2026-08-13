@@ -250,8 +250,12 @@ def _dynamic_actor_specs(context) -> list[dict]:
         actor = config['actors'][name]
         waypoints = [(float(x), float(y)) for x, y in actor['waypoints']]
 
-        if name == 'npc_car':
+        if actor['classification'] == 'vehicle':
             # ⚠️ 尺寸从 vehicle_params 读，与 gen_dynamic_actors.py **同一个源头**。
+            # ⚠️ 按 classification 分支，不按名字（P6-S1 修）：原来写 `name ==
+            #    'npc_car'`，新增 curve_car 时它掉进行人分支 → KeyError('length_m')
+            #    → **整个 launch 秒死**，只留下已 spawn 的 gz 空转 —— 现场是
+            #    「dynamic:=curve 起不来，别的场景都好好的」。
             length = float(vehicle_geo['length_m'])
             width = float(vehicle_geo['width_m'])
             height = float(vehicle_geo['height_m'])

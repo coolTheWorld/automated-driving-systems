@@ -71,6 +71,48 @@ def _load_vehicle_model_module():
 # =============================================================================
 #  机械校验 —— 与 gen_obstacles.py 校验可行性不等式是同一个思路
 # =============================================================================
+def derive_inner_loop_clockwise(loop: dict) -> list[tuple[float, float]]:
+    """Derive the inner clockwise lane circuit from the loop parameters.
+
+    与 dynamic_actors.yaml 的 `loop_lane` 注释同一套推导：
+    直道中心线向环内偏 lane_offset、四角圆弧半径 = corner_radius − lane_offset，
+    首点是北直道上的 spawn（相位锚点），四角各"入口 + 弧上按 arc_step_deg
+    采样 + 出口"，loop=true 下最后一点沿北车道接回首点。
+
+    :param loop: dynamic_actors.yaml 的 loop_lane 段
+    :return: [(x, y), ...] 世界坐标航点
+    """
+    half_len = float(loop['half_length_m'])
+    half_wid = float(loop['half_width_m'])
+    radius_ref = float(loop['corner_radius_m'])
+    offset = float(loop['lane_offset_m'])
+    step_deg = int(loop['arc_step_deg'])
+    spawn_x = float(loop['spawn_x_m'])
+
+    r = radius_ref - offset          # 内圈弧半径
+    cx = half_len - radius_ref       # 弯心 |x|
+    cy = half_wid - radius_ref       # 弯心 |y|
+    lane_y = half_wid - offset       # 南北直道内圈车道 |y|
+    lane_x = half_len - offset       # 东西路内圈车道 |x|
+
+    def arc(center_x: float, center_y: float, a0_deg: int, a1_deg: int):
+        step = -step_deg if a1_deg < a0_deg else step_deg
+        pts = []
+        a = a0_deg + step
+        while (step < 0 and a > a1_deg) or (step > 0 and a < a1_deg):
+            pts.append((center_x + r * math.cos(math.radians(a)),
+                        center_y + r * math.sin(math.radians(a))))
+            a += step
+        return pts
+
+    waypoints = [(spawn_x, lane_y)]
+    waypoints += [(cx, lane_y)] + arc(cx, cy, 90, 0) + [(lane_x, cy)]        # NE
+    waypoints += [(lane_x, -cy)] + arc(cx, -cy, 0, -90) + [(cx, -lane_y)]    # SE
+    waypoints += [(-cx, -lane_y)] + arc(-cx, -cy, -90, -180) + [(-lane_x, -cy)]  # SW
+    waypoints += [(-lane_x, cy)] + arc(-cx, cy, 180, 90) + [(-cx, lane_y)]   # NW
+    return waypoints
+
+
 def validate(cfg: dict, vehicle: dict) -> None:
     """Reject configurations that would silently ruin the acceptance runs.
 
@@ -88,6 +130,27 @@ def validate(cfg: dict, vehicle: dict) -> None:
     x_lo, x_hi = float(lane['valid_from_x_m']), float(lane['valid_to_x_m'])
 
     for name, actor in cfg['actors'].items():
+        if actor.get('route') == 'inner_loop_clockwise':
+            # ④ 环线航点是**推导量**：按 loop_lane 重推一遍逐点对账。
+            #    手改任何一个数（或改了 loop_lane 忘了重贴航点）都在这里被拒。
+            #    「锚定车道中心线」由此机械保证 —— 内圈车道与自车车道全程
+            #    平行、间隔 = 2×lane_offset = 3.5 m，天然不侵入，
+            #    所以直道区间/侵入两条检查对它不适用（也检查不了弯段）。
+            derived_wps = derive_inner_loop_clockwise(cfg['loop_lane'])
+            given = [(float(x), float(y)) for x, y in actor['waypoints']]
+            if len(given) != len(derived_wps):
+                sys.exit(
+                    f'✗ {name} 的航点数 {len(given)} ≠ 推导值 {len(derived_wps)}。\n'
+                    f'  route: inner_loop_clockwise 的航点是推导量，'
+                    f'用 derive_inner_loop_clockwise() 重新生成后整段替换。')
+            for i, ((gx, gy), (dx, dy)) in enumerate(zip(given, derived_wps)):
+                if abs(gx - dx) > 1e-3 or abs(gy - dy) > 1e-3:
+                    sys.exit(
+                        f'✗ {name} 航点 #{i} = ({gx}, {gy}) 偏离推导值 '
+                        f'({dx:.4f}, {dy:.4f}) 超过 1 mm。\n'
+                        f'  这些航点锚定车道中心线，是推导量不是配置项。')
+            continue
+
         if name == 'npc_car':
             half_width = float(vehicle['geometry']['width_m']) / 2.0
         else:
@@ -174,15 +237,22 @@ def _plugins(name: str) -> str:
     </plugin>"""
 
 
-def render_npc_car(vehicle: dict, derived: dict) -> str:
-    """Render the NPC car model — same geometry as ego, **no sensors**.
+def render_npc_car(vehicle: dict, derived: dict, name: str = 'npc_car',
+                   title: str = 'NPC 车：P5 感知的动态目标') -> str:
+    """Render a vehicle prop model — same geometry as ego, **no sensors**.
 
     ⚠️ 「去掉传感器」不是可选项。复用自车模型时若把 `<sensor>` 块也带上，
     世界里就会多出一个 32 线雷达在渲染，RTF 直接腰斩 ——
     而症状是「加了辆车怎么就卡了」，人会去查 GPU 而不是查模型。
 
+    ⚠️ P6-S1 起同一个模板渲染两辆道具车（npc_car / curve_car）：
+    只有模型名与标题参数化，其余逐字节相同 —— npc_car 的产物必须与
+    P5 基线**逐字节一致**（--check 守着）。
+
     :param vehicle: vehicle_params.yaml 的内容
     :param derived: gen_vehicle_model.derive() 的结果
+    :param name: 模型名（模型/link/插件话题都用它）
+    :param title: SDF 头部注释的第一行标题
     :return: model.sdf 的内容
     """
     geo = vehicle['geometry']
@@ -209,7 +279,7 @@ def render_npc_car(vehicle: dict, derived: dict) -> str:
 <!-- 由 scripts/gen_dynamic_actors.py 从 config/dynamic_actors.yaml 与
      config/vehicle_params.yaml 生成 —— **不要手改**。改了下次 --check 就红。
 
-     NPC 车：P5 感知的动态目标。几何与自车**同源**（同一份 vehicle_params），
+     {title}。几何与自车**同源**（同一份 vehicle_params），
      区别只有三处，每一处都有理由：
        ① **没有任何传感器**   —— 多一个 32 线雷达在渲染，RTF 腰斩
        ② **没有转向/驱动关节** —— VelocityControl 直接推模型，不需要
@@ -218,8 +288,8 @@ def render_npc_car(vehicle: dict, derived: dict) -> str:
         真值发布器负责这个换算（Obstacle.msg 要的是**包围盒中心**）。
         不换算的症状是一个恒定的纵向偏差被算成检测误差。 -->
 <sdf version="1.9">
-  <model name="npc_car">
-    <link name="npc_car_base">
+  <model name="{name}">
+    <link name="{name}_base">
       <!-- ⚠️ **关掉重力。** 这一条是实测逼出来的（2026-08-11 探针）：
            VelocityControl 只设置线速度，物理引擎仍在算重力与接触力，于是
              · NPC 车以 −0.0098 m/s **恒速下沉**（穿透地面，5 s 沉 5 cm）；
@@ -269,7 +339,7 @@ def render_npc_car(vehicle: dict, derived: dict) -> str:
 
 {chr(10).join(wheels)}
     </link>
-{_plugins('npc_car')}
+{_plugins(name)}
   </model>
 </sdf>
 """
@@ -394,6 +464,11 @@ def main() -> int:
             cfg['actors']['pedestrian']),
         REPO / 'models' / 'pedestrian' / 'model.config': render_config(
             'pedestrian', 'P5 感知的动态目标：行人（一个盒子，理由见 dynamic_actors.yaml）'),
+        REPO / 'models' / 'curve_car' / 'model.sdf': render_npc_car(
+            vehicle, derived, name='curve_car',
+            title='curve_car：P6 预测的过弯激励 —— 沿内圈车道顺时针绕整圈，永不掉头'),
+        REPO / 'models' / 'curve_car' / 'model.config': render_config(
+            'curve_car', 'P6 预测的动态目标：沿内圈车道绕圈的车（过弯激励，理由见 dynamic_actors.yaml）'),
     }
 
     failed = False
