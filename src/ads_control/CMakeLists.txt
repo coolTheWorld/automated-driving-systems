@@ -191,6 +191,14 @@ if(BUILD_TESTING)
     ENV
       ROS_DOMAIN_ID=46)
 
+  # 轨迹静默看门狗（P7-S0）：规划器死掉后车必须刹停，不许把旧轨迹跟完。
+  # 规划器缺席正是被测场景，所以链路里刻意没有 planning_node —— 轨迹由测试发。
+  add_launch_test(test/test_trajectory_timeout.py
+    TIMEOUT 90
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=48)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——

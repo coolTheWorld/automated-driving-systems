@@ -161,7 +161,8 @@ if(BUILD_TESTING)
       #    的两个闭环同时在跑，默认 domain 0 下话题和 TF 全是共享的。
       #    实测：不隔离时本测试的「/tf_static 上不许有 map→odom」会读到
       #    ads_control 那个测试起的 static_transform_publisher，两边一起红。
-      #    分配表：ads_control 41 / 42，ads_localization 43。
+      #    分配表：ads_control 41/42/46/48，ads_localization 43，
+      #    ads_perception 44，gazebo_bridge 45，ads_prediction 47。
       ROS_DOMAIN_ID=43)
 
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。

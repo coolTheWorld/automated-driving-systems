@@ -81,12 +81,13 @@ namespace
 /// 它们的表象全是「车不动」，分不清就只能靠猜。
 enum class ControlState
 {
-  kTracking,     ///< 正常跟踪
-  kNoPath,       ///< 还没收到路径，或收到的是空路径
-  kNoTransform,  ///< 拿不到 map → base_link
-  kOdomStale,    ///< /odom 断了或太旧
-  kOffPath,      ///< 横向误差超过安全阈值
-  kGoalReached,  ///< 已到终点（**不是故障**，但同样要刹住并说清楚）
+  kTracking,         ///< 正常跟踪
+  kNoPath,           ///< 还没收到路径，或收到的是空路径
+  kNoTransform,      ///< 拿不到 map → base_link
+  kOdomStale,        ///< /odom 断了或太旧
+  kOffPath,          ///< 横向误差超过安全阈值
+  kTrajectoryStale,  ///< 轨迹话题静默超时 —— 规划器死了/卡了
+  kGoalReached,      ///< 已到终点（**不是故障**，但同样要刹住并说清楚）
 };
 
 const char * StateName(ControlState state)
@@ -102,6 +103,8 @@ const char * StateName(ControlState state)
       return "ODOM_STALE";
     case ControlState::kOffPath:
       return "OFF_PATH";
+    case ControlState::kTrajectoryStale:
+      return "TRAJECTORY_STALE";
     case ControlState::kGoalReached:
       return "GOAL_REACHED";
   }
@@ -176,6 +179,12 @@ public:
     // /odom 停多久算断了。0.5 s = bridge 看门狗的阈值，取同一个数是有意的：
     // 两层同时判定失联，日志能互相印证。
     odom_timeout_s_ = declare_parameter<double>("safety.odom_timeout_s", 0.5);
+    // /planning/trajectory 静默多久算规划器死了（P7-S0 补的安全洞：此前
+    // 规划器停发后本节点会把最后一条轨迹**跟完**——滚动窗口最长 30 m）。
+    // 0.5 s = 5 个规划周期，与 odom/bridge 看门狗同一个量级。
+    // ⚠️ 正常到终点**不会**误触发：规划器只在剩余 < 0.5 m 时合法静默，
+    //    而那时本节点已在 goal_reached 分支里刹车（检查点位避开它，见 on_timer）。
+    trajectory_timeout_s_ = declare_parameter<double>("safety.trajectory_timeout_s", 0.5);
     // 轨迹起点跳变多远算「换了一条路」（重置 hint 与速度环积分）。
     // 依据：正常刷新时新起点离旧起点不超过一个规划周期的行程
     // （0.1 s × 5.5 m/s ≈ 0.6 m），取 2.0 留 3 倍余量；绕行重规划的起点
@@ -260,6 +269,9 @@ private:
       RCLCPP_INFO(
         get_logger(), "收到 %zu 个点的轨迹（上游没有目标或已走完），转入减速停车",
         msg->points.size());
+      // <2 点是**协议内**的合法消息（"现在没有目标"），照样算规划器活着。
+      // 喂在分支末尾而不是回调开头 —— 先校验后喂狗（CLAUDE.md 陷阱表那条家规）。
+      last_trajectory_time_ = now();
       return;
     }
 
@@ -328,6 +340,8 @@ private:
     } else if (msg->status != ads_msgs::msg::Trajectory::STATUS_STOPPING) {
       stopping_announced_ = false;
     }
+    // 喂在解析成功之后（先校验后喂狗，与上面 <2 点分支同一条家规）。
+    last_trajectory_time_ = now();
   }
 
   /// @brief 按投影在轨迹上插值目标速度。
@@ -513,6 +527,24 @@ private:
       RCLCPP_INFO(
         get_logger(), "已到达终点附近（剩余 %.3f m ≤ %.3f m），目标速度归零", remaining_m,
         goal_stop_distance_m_);
+    }
+
+    // ---- 轨迹静默超时（P7-S0）----
+    // 规划器死掉/卡死时，此前的行为是把最后一条轨迹**跟完**（最长 30 m）——
+    // 「不发轨迹 ⟹ 下游刹停」这个上游注释里的假设从来不成立。
+    // 检查点位**在 goal_reached 之后**：规划器在剩余 < 0.5 m 时合法静默
+    // （kRouteExhausted 不发消息），那不是故障；其余任何时刻静默超过阈值
+    // 都按失联降级刹停。<2 点消息与停车轨迹都会喂时间戳，所以 block 场景的
+    // 稳态（每拍单点消息）不会触发。
+    if (!goal_reached && last_trajectory_time_.nanoseconds() != 0) {
+      const double trajectory_age_s = (tick_start - last_trajectory_time_).seconds();
+      if (trajectory_age_s > trajectory_timeout_s_) {
+        degrade(
+          ControlState::kTrajectoryStale, dt_s,
+          "/planning/trajectory 已经 " + std::to_string(trajectory_age_s) + " s 没更新（阈值 " +
+            std::to_string(trajectory_timeout_s_) + " s）——规划器死了？按失联刹停");
+        return;
+      }
     }
 
     // ---- 控制律 ----
@@ -759,6 +791,7 @@ private:
   double goal_stop_distance_m_{0.5};
   double max_lateral_error_m_{1.5};
   double odom_timeout_s_{0.5};
+  double trajectory_timeout_s_{0.5};
   double max_decel_mps2_{0.0};
   std::size_t search_window_{30};
   std::string map_frame_;
@@ -794,6 +827,7 @@ private:
   /// 横摆角速度，rad/s，来自 /odom。只用于算实测横向加速度，不进控制律。
   double measured_yaw_rate_radps_{0.0};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_trajectory_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_tick_{0, 0, RCL_ROS_TIME};
   ControlState last_state_{ControlState::kNoPath};
   bool goal_announced_{false};

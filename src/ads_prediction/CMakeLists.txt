@@ -106,7 +106,7 @@ if(BUILD_TESTING)
 
   # L3-G：假障碍物流 + prediction_node 的闭环（不需要 GPU，进 CI）。
   # DOMAIN_ID 分配表：41=ads_control 闭环、42=障碍物闭环、43=定位闭环、
-  # 44=感知闭环、45=bridge 看门狗、46=odom 鲁棒性、**47=本测试**。
+  # 44=感知闭环、45=bridge 看门狗、46=odom 鲁棒性、**47=本测试**、48=轨迹超时。
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_closed_loop_prediction.py
     TIMEOUT 120

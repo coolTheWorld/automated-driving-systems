@@ -77,6 +77,7 @@ def control_params() -> dict:
         'goal.stop_distance_m': control['goal']['stop_distance_m'],
         'safety.max_lateral_error_m': control['safety']['max_lateral_error_m'],
         'safety.odom_timeout_s': control['safety']['odom_timeout_s'],
+        'safety.trajectory_timeout_s': control['safety']['trajectory_timeout_s'],
         'control_rate_hz': control['control_rate_hz'],
         'use_sim_time': True,
     }
