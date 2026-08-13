@@ -182,6 +182,8 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **改了 `ads_msgs` 只重建了直接相关的包** | planning_node **段错误**（exit −11），现场是「自车不动」——目标点、路由、感知全正常，人会去查规划 | 消息布局变了，没重建的下游带着**旧类型支持**反序列化新消息 → 内存错位。改 msg 后一律 `colcon build --packages-above ads_msgs`（P6-S4 实测，Obstacle.msg 加一个 bool 就炸） |
 | **QoS 只设 durability 不设 reliability** | 发布端 `get_subscription_count()=1`（配上了！）却**静默不投递**，连发 45 次都收不到 | reliability 落默认值与订阅端 RELIABLE 不兼容——DDS 配对成功≠投递兼容。发布 `/goal_pose` 这类单次指令必须显式 `RELIABLE + TRANSIENT_LOCAL`（照抄 record_control_run） |
 | **评测的段归属按瞬间判，不按评测窗判** | 直行段判据的尾巴全是「窗口里其实在过弯」的帧（FDE 5–13 m），人会去查直线外推 | 凡是「t 时刻的预测对 t+h 的真值」类评测，样本属于哪个工况要看 **[t, t+h] 整个窗**（三点采样）。同族：U 转排除窗要用 1 s 滑窗，整窗 45° 会把合法过弯（22°/s×3s=67°）也排除掉 |
+| **`declare_parameter<std::vector<double>>(name, {})` 的 `{}`** | launch 不传该参数时节点 FATAL「must be initialized」——而**传了参数的场景全绿** | `{}` 被 rclcpp 解释成 `ParameterValue{}`（NOT_SET），不是空数组。要写 **`std::vector<double>{}`**。P7-S4 实测：npc_controller 的 dwell_s 这么写后，P5/P6 场景（不传）道具全瘫、P7 场景（传）一切正常 —— **「从没吃过默认值的默认值」等于没测过**，改共享节点的参数接口时，不传参数的场景也要跑一个 |
+| **模块输出的病理在没有消费者时是隐形的** | P6 双层验收全过；P7 行为层（第一个消费者）上线**当天**，预测里的建筑片段假 CV（滑移锚点的**真实**位移骗过位移一致性闸）让车每根柱子让一次行 | FDE 判据只打分目标车/行人，路侧航迹的假预测**不进任何判据** —— 验收「全过」只覆盖被打分的那部分输出。接新消费者的第一轮实测要当成对上游的**再验收**；P6 由此补了 ODD 尺寸闸（length>5.5→STATIC） |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
@@ -201,8 +203,11 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 `ads_prediction`（**P6，CP-P6-B 已达成** 2026-08-12）有三个 lib：`motion_model`
 （恒速 + 静态 + 不确定椭圆，全解析）、`lane_follow`（nearest_lane 归属 →
 successors 枚举链 → ReferenceLine 弧长参数化，路口分叉多假设、末端如实截断）、
-`model_selector`（速度/ODD 上限/**位移一致性**/尺寸档位 —— **不用 classification**，
-TargetSnapshot 结构上没有那个字段）。推导、参数与 S4 仪器五课见
+`model_selector`（速度/ODD 上限/**位移一致性**/尺寸档位/**ODD 尺寸上闸
+length>5.5→STATIC（P7-S4 补：建筑片段的滑移锚点有「真实」位移，位移一致性
+闸原理上拦不住 —— 第一个消费者上线当天暴露）** —— **不用 classification**，
+TargetSnapshot 结构上没有那个字段）。视界 **6 s**（P7-S4 从 3 延长：让行
+可见时界必须 ≥ 自车清空冲突区时长；FDE@3s 判据照旧在 t=3 采样，抽轮零劣化）。推导、参数与 S4 仪器五课见
 [docs/modules/prediction.md](docs/modules/prediction.md)，**改这个模块前先读它**。
 三条硬规则：运动方向**永远取速度矢量不取 yaw**（180° 二义）；声称的速度必须有
 **净位移背书**（结构物假速度占 24.5% 的实测病理）；**决策二仅此一例** ——
@@ -225,13 +230,24 @@ CP-P6-B 是**双层协议**：`--layer truth` 全过再跑 `--layer perception` 
 （正对时"长轴"指的是车宽，轴向翻 90°，要换说法而不是放弃）、
 **重复航迹是独立于 ID 跳变的缺陷**（规划会把一个目标当成两个障碍物）。
 
-`ads_planning`（P3，**建设中**）目前有六个 lib：**`frenet`**（Frenet ↔ 笛卡尔双向变换，
-**CP-P3-A 已达成**）、**`quintic`**（五次多项式，六个边界条件的闭式解）、
-**`collision`**（OBB 分离轴判交 + **精确**间距）、**`lattice`**（`d_T` × `S` 二维采样 +
-安全间距准入 + 代价排序）、**`speed_profile`**（曲率限速 + 前后向扫描，
-**P3-S4 从 `ads_control` 搬来** —— 算目标是规划，跟目标才是控制）、
-**`trajectory`**（几何 + 速度装配 + **绕不过去时的停车剖面**）。
-`node/planning_node.cpp` 已跑通，在 `stack.launch.py` 和 L3-G 里都接上了。
+`ads_planning`（P3 + **P7 行为决策，CP-P7-B 已达成** 2026-08-13）有九个 lib：
+P3 的六个 —— **`frenet`**、**`quintic`**、**`collision`**（OBB 判交 + 精确间距）、
+**`lattice`**、**`speed_profile`**（曲率限速 + 前后向扫描 + **P7 的可选
+`speed_caps_mps` 逐点上限**）、**`trajectory`**（装配 + 停车剖面 + **P7 的可选
+纵向约束注入** —— stop_at 走「几何截断 + terminal=0」的同一条停车路径）；
+P7 的三个 —— **`conflict`**（ego 路径时间标注 + 两类冲突：自车道类用**感知
+近边 + 阻挡判据**（与 planning.md §6 可行性不等式同一个不等式），横穿类用
+预测轨迹 + min(2σ, 3.5) 膨胀 + 时间窗重叠）、**`behavior_tree`**（四节点微型
+树，显式写在代码里）、**`longitudinal`**（约束合成取 min + 仲裁滞回）。
+推导与 S4 实测改掉的六处见 [docs/modules/behavior.md](docs/modules/behavior.md)，
+**改行为层前先读它**。三条结构性红线：树只选标签不裁决约束；约束合成在
+树外取最保守；静态准入检查原样保留 —— 树上**不存在**关掉碰撞检查的分支。
+⚠️ 两条最反直觉：**FOLLOW 判「阻挡」不判「在车道里」**（否则 P3 的可绕
+锥桶被当前车，车停住不绕）；**STATIC 预测不进横穿判定**（起步律椭圆会把
+路侧静物变成永久让行 —— STATIC 的威胁是位置性的，归阻挡/准入管）。
+`node/planning_node.cpp` 订阅 `/prediction/trajectories`（P7-S3 起 prediction
+开关**不再是纯旁路**），`expect_perception`/`expect_prediction` 由 launch
+随开关置位 —— 链路该在而从未到达时指名报错不发轨迹。
 
 ⚠️ **P4-S4 起 `map→odom` 由 `localization_node` 动态发布**（`localization:=true` 时），
 仿真侧那条来自 spawn 位姿的静态 TF 同时关掉 —— **两者不能同时发**。
@@ -324,6 +340,8 @@ ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false      # headless
 # 世界必须与 P2 时一模一样，所以障碍物是**运行时注入**的，不进 campus_loop.sdf。
 ros2 launch ads_bringup stack.launch.py obstacles:=avoid   # 贴边锥桶，应当绕过去
 ros2 launch ads_bringup stack.launch.py obstacles:=block   # 车道中心锥桶，应当停住
+# P7 行为场景（S1 起）：dynamic:=follow / crossing / junction（前车跟停 /
+# 行人横穿 / 无信号路口车流让行）。P5/P6 的 oncoming/cross/both/curve 照旧。
 ros2 launch gazebo_bridge gazebo_sim.launch.py                      # 只起仿真侧，调链路时更快
 ros2 run ads_map map_node                                           # 只起地图节点（不需要仿真器）
 
@@ -412,6 +430,14 @@ ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false prediction:=true 
 python3 scripts/record_prediction_run.py --duration-s 72 --layer truth --out /tmp/p6.csv
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false perception:=true prediction:=true dynamic:=curve
 python3 scripts/record_prediction_run.py --duration-s 72 --layer perception --out /tmp/p6p.csv
+
+# CP-P7-B：行为决策验收，双层协议（真值层全过 → 感知层；⑨ 有感知层照印条款）。
+#   goal 由预热发布器在绝对仿真钟 37.0 发；junction 的 goal 是 (-1.75,-30)
+#   （横穿路南行车道 —— 路由唯一解经 j_north 左转，让行几何由地图保证）。
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false prediction:=true dynamic:=follow
+python3 scripts/record_behavior_run.py --scenario follow --layer truth --duration-s 90 --out /tmp/b.csv
+#   场景 = follow / crossing / junction；层 truth = perception:=false，perception 层 = true。
+#   回归 ⑩（CP-P2-B/P3-B/P6-B 抽轮）用各自已有的记录脚本，别重新发明。
 
 # 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
 python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
