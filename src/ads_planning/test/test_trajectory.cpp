@@ -313,3 +313,106 @@ TEST(Trajectory, ThrowsOnNegativeStopMargin)
 }
 
 }  // namespace
+
+// =============================================================================
+//  行为约束注入（P7-S3）—— stop_at 走停车剖面机制、caps 走逐点上限
+//
+//  ## 故障注入实测（2026-08-13，写完立刻做的）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | kStopping 分支不取行为/静态停车点的更早者（去掉行为截断）
+//    | **红** 1 例：BehaviorStopEarlierThanStaticObstacleWins |
+// =============================================================================
+
+TEST(BehaviorConstraint, StopTruncatesAtTheRequestedPoint)
+{
+  const ReferenceLine line = MakeStraightLine();
+  ads_planning::LongitudinalConstraint constraint;
+  constraint.stop_at_s_m = 15.0;
+  const PlanResult result = plan(line, AtOrigin(), {}, MakeParams(), std::nullopt, &constraint);
+
+  ASSERT_EQ(result.status, PlanStatus::kOk);
+  ASSERT_GE(result.points.size(), 2u);
+  // 末点落在停车点上（向下取到采样格），且速度为 0。
+  EXPECT_LE(result.points.back().s_m, 15.0 + 1e-9);
+  EXPECT_GT(result.points.back().s_m, 15.0 - kSampleStepM - 1e-9);
+  EXPECT_NEAR(result.points.back().speed_mps, 0.0, 1e-12);
+  // 减速段是标准剖面：停车点前 5 m 处 v = √(2·a_dec·5)。
+  for (const auto & point : result.points) {
+    if (std::abs(point.s_m - (result.points.back().s_m - 5.0)) < 1e-9) {
+      EXPECT_NEAR(point.speed_mps, std::sqrt(2.0 * kMaxDecelMps2 * 5.0), 1e-9);
+    }
+  }
+}
+
+TEST(BehaviorConstraint, StopBeyondTheWindowChangesNothing)
+{
+  // 停车点在 30 m 窗口之外：轨迹必须与无约束时**逐点严格相等** ——
+  // 行为层只收紧不放宽，「没约束到」与「没有约束」得是同一件事。
+  const ReferenceLine line = MakeStraightLine();
+  const PlanResult baseline = plan(line, AtOrigin(), {}, MakeParams());
+
+  ads_planning::LongitudinalConstraint constraint;
+  constraint.stop_at_s_m = 100.0;
+  const PlanResult constrained =
+    plan(line, AtOrigin(), {}, MakeParams(), std::nullopt, &constraint);
+
+  ASSERT_EQ(constrained.points.size(), baseline.points.size());
+  for (std::size_t i = 0; i < baseline.points.size(); ++i) {
+    EXPECT_EQ(constrained.points[i].speed_mps, baseline.points[i].speed_mps) << "第 " << i << " 点";
+    EXPECT_EQ(constrained.points[i].s_m, baseline.points[i].s_m) << "第 " << i << " 点";
+  }
+}
+
+TEST(BehaviorConstraint, StopEarlierThanStaticObstacleWins)
+{
+  // 车道被堵（kStopping 路径）+ 行为停车点更早：取更早者。
+  // 反向注入（去掉 kStopping 分支里的行为截断）时本用例红。
+  const ReferenceLine line = MakeStraightLine();
+  const std::vector<Rectangle> obstacles{BoxAt(20.0, 0.85), BoxAt(20.0, 0.0), BoxAt(20.0, -0.85)};
+  const PlanResult blocked = plan(line, AtOrigin(), obstacles, MakeParams());
+  ASSERT_EQ(blocked.status, PlanStatus::kStopping);
+  const double static_stop_s = blocked.points.back().s_m;
+
+  ads_planning::LongitudinalConstraint constraint;
+  constraint.stop_at_s_m = 8.0;
+  ASSERT_LT(8.0, static_stop_s) << "前提：行为停车点确实更早，否则本用例什么都没测";
+  const PlanResult both =
+    plan(line, AtOrigin(), obstacles, MakeParams(), std::nullopt, &constraint);
+  ASSERT_EQ(both.status, PlanStatus::kStopping);
+  EXPECT_LE(both.points.back().s_m, 8.0 + 1e-9);
+  EXPECT_NEAR(both.points.back().speed_mps, 0.0, 1e-12);
+}
+
+TEST(BehaviorConstraint, StopBehindEgoDegradesToSinglePointZero)
+{
+  // ego 已越过行为停车点（本不该发生）：单点零速，下游按 NO_PATH 刹停保持。
+  const ReferenceLine line = MakeStraightLine();
+  ads_planning::LongitudinalConstraint constraint;
+  constraint.stop_at_s_m = -1.0;
+  const PlanResult result = plan(line, AtOrigin(), {}, MakeParams(), std::nullopt, &constraint);
+  ASSERT_EQ(result.points.size(), 1u);
+  EXPECT_NEAR(result.points[0].speed_mps, 0.0, 1e-12);
+}
+
+TEST(BehaviorConstraint, CapsFlowThroughToTheProfile)
+{
+  // s ∈ [10, 20]（参考线系）压到 2.0：窗口内该段处处 ≤ 2.0，
+  // 且两端按扫描斜坡过渡（斜坡本身在 test_speed_profile 里已闭式对账，
+  // 这里只验「参考线系 → 候选系」的映射没有错位）。
+  const ReferenceLine line = MakeStraightLine();
+  ads_planning::LongitudinalConstraint constraint;
+  constraint.caps.push_back(ads_planning::SpeedCap{10.0, 20.0, 2.0});
+  const PlanResult result = plan(line, AtOrigin(), {}, MakeParams(), std::nullopt, &constraint);
+
+  ASSERT_EQ(result.status, PlanStatus::kOk);
+  bool saw_capped = false;
+  for (const auto & point : result.points) {
+    if (point.s_m >= 10.0 && point.s_m <= 20.0) {
+      EXPECT_LE(point.speed_mps, 2.0 + 1e-9) << "s = " << point.s_m;
+      saw_capped = true;
+    }
+  }
+  EXPECT_TRUE(saw_capped) << "窗口没覆盖到限速段 —— 用例本身没激励";
+}

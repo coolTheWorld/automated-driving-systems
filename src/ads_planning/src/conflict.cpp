@@ -108,9 +108,12 @@ std::optional<FollowConflict> find_follow_conflict(
   std::optional<FollowConflict> nearest;
   for (const TargetBox & target : targets) {
     const auto projection = line.project(Pose2D{target.center_x_m, target.center_y_m, 0.0});
-    // 横向判**近边**：中心恰在走廊边上的目标，半个身子已经在道里了。
-    const double lateral_near_m = std::abs(projection.lateral_error_m) - 0.5 * target.width_m;
-    if (lateral_near_m > params.corridor_half_m) {
+    // **阻挡判据**（不是「在走廊里」）：目标的横向区间必须与每一个横向
+    // 候选都冲突（t_lo ≤ B 且 t_hi ≥ −B），可绕的贴边障碍物归 lattice 管。
+    // 判据结构见 blocking_half_m 的注释与 behavior.md §2.1。
+    const double t_lo_m = projection.lateral_error_m - 0.5 * target.width_m;
+    const double t_hi_m = projection.lateral_error_m + 0.5 * target.width_m;
+    if (t_lo_m > params.blocking_half_m || t_hi_m < -params.blocking_half_m) {
       continue;
     }
     // 近边弧长：目标沿车道摆放时精确；斜置目标偏保守（近边只会更近）—— 可接受。

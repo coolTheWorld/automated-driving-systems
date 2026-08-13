@@ -2979,6 +2979,20 @@ S0 control 轨迹超时（决策五）─┘
   到达半径后复验命中。两条都进了 YAML 注释。
 - **S2**：`docs/modules/behavior.md` 推导初稿（先写推导再写代码）；`conflict.hpp`（ego 路径逐点标 t + 预测轨迹时空重叠 → 冲突区间；横穿类含 2σ 膨胀、自车道类用近边）；`behavior_tree.hpp`（四种节点 + 显式树）；`longitudinal.hpp`（指令类型 + 保守合成）；`speed_profile` 加 caps 数组；L1 对闭式解 + 注入验红（含红线用例：STATIC 前车必须触发跟停；去掉保守合成 → 红）。
 - **S3**：planning_node 订阅预测 + 行为集成 + `expect_perception`/`expect_prediction` + 诊断行为状态字段 + L3-G（域 48 复用 S0 的测试文件或新开）。
+  ✅ **已完成（2026-08-13）**。plan() 加可选纵向约束（stop_at 走「几何截断 +
+  terminal=0」的现成停车路径，与静态停车取 min；caps 映射到逐点上限），
+  5 个 L1 注入用例 + 1 注入验红；planning_node 订阅 `/prediction/trajectories`、
+  预测过期/缺席与障碍物同一套处理、`expect_perception/expect_prediction` 收口
+  （launch 随 perception/prediction 开关置位）、诊断加 behavior_state/follow_id/
+  crossing_count/stop_at 四字段；新 L3-G `test_closed_loop_behavior.py`（域 49）：
+  跟停 **4.24–4.30 m**（解析 4.0 + 采样格）→ 保持 → 释放 → GOAL_REACHED，
+  注入（约束不进 plan）红在 **1.81 m**（静态准入间距）。
+  **风险表第一行如期爆了并当场修**：初版 FOLLOW 用「车道半宽走廊」判前车，
+  test_closed_loop_obstacle 当场红（P3 的可绕锥桶被当成前车，车停住不绕）。
+  修法是把判据换成**阻挡**：B = 车半宽 + margin − max_offset = 0.55，
+  t_lo ≤ B 且 t_hi ≥ −B ⟺ 挡死所有横向候选 —— 与 planning.md §6 可行性
+  不等式是同一个不等式（推导量，零新配置）。修后绕障回归恢复
+  （侧向间距 0.524 > 0.5）。ads_control 138 + ads_planning 243 全绿。
 - **S4**：`record_behavior_run.py`（S03/S05/junction 三场景判据 + 双层协议 + 真值量距）+ 编排（复用 CP-P6-B 的绝对钟锚 + 预热 goal 发布器）。
 - **S5**：文档/CLAUDE/SPEC（§8 表 S06 注解）/todo/记忆同步；`colcon test` 全绿。
 

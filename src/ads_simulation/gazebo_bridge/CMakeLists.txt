@@ -123,7 +123,7 @@ if(BUILD_TESTING)
     TIMEOUT 60
     ENV
       # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，
-      #    分配表：ads_control 41/42/46/48、ads_localization 43、
+      #    分配表：ads_control 41/42/46/48/49、ads_localization 43、
       #    ads_perception 44、gazebo_bridge 45、ads_prediction 47。
       ROS_DOMAIN_ID=45)
 endif()

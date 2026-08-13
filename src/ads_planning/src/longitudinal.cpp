@@ -63,6 +63,9 @@ BehaviorArbiter::BehaviorArbiter(const BehaviorParams & params, int release_cycl
 : params_(params), release_cycles_(release_cycles)
 {
   RequireFinitePositive(params.corridor_half_m, "BehaviorParams", "corridor_half_m");
+  // blocking_half 只要求有限：max_lateral_offset 大于车半宽+间距时它合法为负
+  // （那时只有横跨中心两侧的目标才算阻挡）。
+  ads_common::RequireFinite(params.blocking_half_m, "BehaviorParams", "blocking_half_m");
   RequireFinitePositive(params.stand_off_m, "BehaviorParams", "stand_off_m");
   RequireFinitePositive(params.yield_margin_m, "BehaviorParams", "yield_margin_m");
   RequireFiniteNonNegative(params.time_margin_s, "BehaviorParams", "time_margin_s");

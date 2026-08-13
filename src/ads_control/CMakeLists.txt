@@ -199,6 +199,14 @@ if(BUILD_TESTING)
       FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
       ROS_DOMAIN_ID=48)
 
+  # 行为闭环（P7-S3）：车道内静止目标 → FOLLOW 跟停在 stand_off 带内 →
+  # 目标消失 → 释放恢复到终点。障碍物由测试发，不需要 GPU，进 CI。
+  add_launch_test(test/test_closed_loop_behavior.py
+    TIMEOUT 150
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=49)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——

@@ -62,6 +62,7 @@ BehaviorParams MakeParams()
 {
   BehaviorParams params;
   params.corridor_half_m = 1.75;
+  params.blocking_half_m = 0.55;  // = 0.9 + 0.5 − 0.85（推导量，见 conflict.hpp）
   params.stand_off_m = 4.0;
   params.yield_margin_m = 2.0;
   params.time_margin_s = 1.0;

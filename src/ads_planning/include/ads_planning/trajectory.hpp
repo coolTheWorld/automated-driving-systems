@@ -35,6 +35,8 @@
 #include <optional>
 #include <vector>
 
+#include "ads_planning/longitudinal.hpp"
+
 #include "ads_common/reference_line.hpp"
 #include "ads_planning/collision.hpp"
 #include "ads_planning/frenet.hpp"
@@ -133,6 +135,15 @@ struct PlanParams
 /// @param obstacles 障碍物矩形（`map` 系，几何中心）。
 /// @param params    见 `PlanParams`。
 /// @param previous_target_offset_m 上一周期的 `PlanResult::lateral_offset_m`。
+/// @param constraint 行为层的纵向约束（P7-S3，可选）。
+///        `stop_at_s_m` 是**参考线弧长系**的停车点（后轴），注入方式是把
+///        选中候选的几何截断在那里 + terminal=0 —— 与静态障碍物的停车剖面
+///        走**同一条代码路径**，不另写减速逻辑。停车点在静态停车点之后时
+///        取更早者（min，与 merge 同一条保守原则）。
+///        `caps` 映射到 `SpeedProfileParams::speed_caps_mps` 逐点取 min。
+///        ⚠️ 候选自身弧长与参考线弧长差一个 `start.s_m` 平移；绕行候选的
+///        横向过渡还会带来毫米级伸缩 —— 相对 stand_off（4 m）量级可忽略，
+///        如实记下不假装精确。
 /// @throw std::invalid_argument 参数或障碍物非法（由 `plan_lateral` 抛出）。
 ///
 /// @note **不可行时不返回"最不糟的那条候选"**，而是转入 `kStopping`。
@@ -141,7 +152,8 @@ struct PlanParams
 PlanResult plan(
   const ads_common::ReferenceLine & line, const FrenetState & start,
   const std::vector<Rectangle> & obstacles, const PlanParams & params,
-  std::optional<double> previous_target_offset_m = std::nullopt);
+  std::optional<double> previous_target_offset_m = std::nullopt,
+  const LongitudinalConstraint * constraint = nullptr);
 
 }  // namespace ads_planning
 

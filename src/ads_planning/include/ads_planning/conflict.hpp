@@ -45,8 +45,23 @@ namespace ads_planning
 /// 0 会被消费方指名报错，而不是悄悄用一个"看起来合理"的数开车。
 struct BehaviorParams
 {
-  /// 走廊半宽，m。取车道半宽 1.75 —— 在我的车道里的东西就是我的前车。
+  /// 横穿走廊半宽，m。取车道半宽 1.75。**只用于横穿类**（预测点落进
+  /// 这个范围就算侵入我的车道）。
+  ///
+  /// ⚠️ FOLLOW **不用它**（S3 集成时实测改的）：P3 的贴边锥桶（近缘 −0.95）
+  ///    落在 1.75 的走廊里，用走廊判前车会把「可绕」的东西当成跟停对象 ——
+  ///    test_closed_loop_obstacle 当场变红。前车的判据是 blocking_half_m。
   double corridor_half_m;
+
+  /// 自车道类（FOLLOW）的**阻挡**阈值，m。**推导量**（planning_node 从
+  /// lattice 参数算，不单独配）：
+  ///     B = 车半宽 + safety_margin − max_lateral_offset = 0.9 + 0.5 − 0.85 = 0.55
+  /// 目标横向区间 [t_lo, t_hi] 满足 t_lo ≤ B 且 t_hi ≥ −B ⟺ 它与**每一个**
+  /// 横向候选的外廓都间距不足 ⟺ 绕不过去 ⟺ 它是前车。
+  /// 这与 planning.md §6 的可行性不等式是**同一个不等式**（推导见
+  /// behavior.md §2.1）—— 规划器用它判「绕得过去吗」，行为层用它判
+  /// 「这是不是前车」，两处共用一个几何真理。
+  double blocking_half_m;
   /// 跟停时车头面到目标近边的站立间距，m。= 感知盲区 3 + 余量 1（判据 ② 下界）。
   double stand_off_m;
   /// 让行时车头面到冲突区入口的距离，m。冲突区不是实体，比 stand_off 小。
@@ -132,10 +147,12 @@ double time_at(
   const std::vector<double> & arc_lengths_m, const std::vector<double> & speeds_mps,
   const std::vector<double> & times_s, double query_s_m);
 
-/// @brief 自车道类冲突：走廊内、ego 前方最近的目标。
+/// @brief 自车道类冲突：**阻挡所有横向候选**、ego 前方最近的目标。
 ///
 /// 判定只看**感知框**（不看预测、不看速度、不看分类）——
 /// 「STATIC 前车必须触发跟停」由此结构性满足，不是一条特判。
+/// 「阻挡」而不是「在走廊里」：可绕的贴边障碍物归 lattice 管（P3 的能力
+/// 原样保留），绕不过去的才是前车（blocking_half_m 的推导见其注释）。
 ///
 /// @param line     参考线（ego 的路径）。
 /// @param ego_s_m  ego 后轴当前在参考线上的弧长。

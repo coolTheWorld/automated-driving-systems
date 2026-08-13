@@ -98,12 +98,76 @@ std::vector<TrajectoryPoint> emergency_stop_at(const CartesianState & pose)
   return {point};
 }
 
+/// @brief 逐弦长累加（annotate_with_speed 的前半段单独拿出来，注入约束要先用）。
+std::vector<double> chord_arc_lengths(const std::vector<CartesianState> & geometry)
+{
+  std::vector<double> arc_lengths_m(geometry.size(), 0.0);
+  for (std::size_t i = 1; i < geometry.size(); ++i) {
+    arc_lengths_m[i] =
+      arc_lengths_m[i - 1] +
+      std::hypot(geometry[i].x_m - geometry[i - 1].x_m, geometry[i].y_m - geometry[i - 1].y_m);
+  }
+  return arc_lengths_m;
+}
+
+/// @brief 把行为层的停车点（参考线弧长系）注入几何：截断在停车点处。
+///
+/// @return true = 截断发生（调用方必须把 terminal 设成 0）。
+///
+/// @note 停车点在起点之前/截断后不足 2 点 ⟹ 几何缩成**单点零速**
+///       （emergency_stop_at 的语义）—— ego 已经越过了行为停车点，
+///       这本不该发生（上一周期就该停住），但真发生时给明确的停车指示。
+bool truncate_at_behavior_stop(std::vector<CartesianState> * geometry, double stop_rel_m)
+{
+  const std::vector<double> arc_lengths_m = chord_arc_lengths(*geometry);
+  if (stop_rel_m <= 0.0) {
+    geometry->resize(1);
+    return true;
+  }
+  std::size_t stop_index = 0;
+  for (std::size_t i = 0; i < geometry->size(); ++i) {
+    if (arc_lengths_m[i] <= stop_rel_m) {
+      stop_index = i;
+    }
+  }
+  if (stop_index + 1 >= geometry->size()) {
+    return false;  // 停车点在窗口之外：本窗口不用截，末点照常按前视处理。
+  }
+  geometry->resize(stop_index + 1);
+  return true;
+}
+
+/// @brief 把行为层的逐段限速映射到几何点位上（参考线弧长系 → 候选弧长系）。
+///
+/// @return 与几何逐点对应的上限数组；没有任何段覆盖时为空（= 不注入）。
+std::vector<double> map_caps_to_geometry(
+  const std::vector<CartesianState> & geometry, double s_offset_m,
+  const std::vector<SpeedCap> & caps, double cruise_speed_mps)
+{
+  if (caps.empty()) {
+    return {};
+  }
+  const std::vector<double> arc_lengths_m = chord_arc_lengths(geometry);
+  std::vector<double> per_point(geometry.size(), cruise_speed_mps);
+  bool any = false;
+  for (std::size_t i = 0; i < geometry.size(); ++i) {
+    const double s_ref_m = s_offset_m + arc_lengths_m[i];
+    for (const SpeedCap & cap : caps) {
+      if (s_ref_m >= cap.s_from_m && s_ref_m <= cap.s_to_m) {
+        per_point[i] = std::min(per_point[i], cap.v_cap_mps);
+        any = true;
+      }
+    }
+  }
+  return any ? per_point : std::vector<double>{};
+}
+
 }  // namespace
 
 PlanResult plan(
   const ads_common::ReferenceLine & line, const FrenetState & start,
   const std::vector<Rectangle> & obstacles, const PlanParams & params,
-  std::optional<double> previous_target_offset_m)
+  std::optional<double> previous_target_offset_m, const LongitudinalConstraint * constraint)
 {
   ads_common::RequireFiniteNonNegative(params.stop_margin_m, kPlan, "stop_margin_m");
 
@@ -136,8 +200,29 @@ PlanResult plan(
     const double remaining_m = line.length_m() - start.s_m;
     const bool limited_by_horizon =
       params.lattice.max_horizon_m < remaining_m - params.lattice.resample_step_m;
-    result.points = annotate_with_speed(
-      lattice.best.points, params.speed, limited_by_horizon ? params.speed.cruise_speed_mps : 0.0);
+
+    // ---- 行为约束注入（P7-S3）----------------------------------------------
+    // stop_at 走**同一条**「几何截断 + terminal=0」路径（见下面 kStopping 分支
+    // 的说明），caps 走 SpeedProfileParams 的逐点上限。两者都只收紧不放宽。
+    std::vector<CartesianState> geometry = lattice.best.points;
+    SpeedProfileParams speed_params = params.speed;
+    bool stopped_by_behavior = false;
+    if (constraint != nullptr) {
+      if (constraint->stop_at_s_m.has_value()) {
+        stopped_by_behavior =
+          truncate_at_behavior_stop(&geometry, *constraint->stop_at_s_m - start.s_m);
+      }
+      speed_params.speed_caps_mps =
+        map_caps_to_geometry(geometry, start.s_m, constraint->caps, params.speed.cruise_speed_mps);
+    }
+    if (geometry.size() < 2) {
+      // ego 已越过行为停车点（stop_rel ≤ 0）：单点零速，语义同 emergency_stop_at。
+      result.points = emergency_stop_at(geometry.front());
+      return result;
+    }
+    const double terminal_mps =
+      (limited_by_horizon && !stopped_by_behavior) ? params.speed.cruise_speed_mps : 0.0;
+    result.points = annotate_with_speed(geometry, speed_params, terminal_mps);
     return result;
   }
 
@@ -217,6 +302,15 @@ PlanResult plan(
   // 它本来就在末点强制 v = 0 并向后扫描，于是减速自动按 max_decel 展开 ——
   // 不需要另写一套减速逻辑，也就不会有两套对"怎么减速"的理解。
   geometry.resize(stop_index + 1);
+  // 行为停车点比静态停车点更早时取更早者（min，与 merge 同一条保守原则）。
+  if (constraint != nullptr && constraint->stop_at_s_m.has_value()) {
+    truncate_at_behavior_stop(&geometry, *constraint->stop_at_s_m - start.s_m);
+    if (geometry.size() < 2) {
+      result.points = emergency_stop_at(geometry.front());
+      result.stop_clearance_m = 0.0;
+      return result;
+    }
+  }
   // 停车轨迹的末点就是停车点 ⟹ 终点速度必须是 0。
   result.points = annotate_with_speed(geometry, params.speed, 0.0);
 

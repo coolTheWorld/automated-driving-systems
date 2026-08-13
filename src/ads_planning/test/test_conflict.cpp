@@ -63,6 +63,7 @@ BehaviorParams MakeParams()
 {
   BehaviorParams params;
   params.corridor_half_m = 1.75;
+  params.blocking_half_m = 0.55;  // = 0.9 + 0.5 − 0.85（推导量，见 conflict.hpp）
   params.stand_off_m = 4.0;
   params.yield_margin_m = 2.0;
   params.time_margin_s = 1.0;
@@ -144,16 +145,24 @@ TEST(FollowConflict, NearestInCorridorWinsAndEdgesAreUsed)
   EXPECT_NEAR(conflict->near_edge_s_m, 25.0 - 2.2, 1e-9);
 }
 
-TEST(FollowConflict, LateralUsesNearEdgeNotCenter)
+TEST(FollowConflict, BlockingNotCorridorDecidesWhoIsALead)
 {
+  // FOLLOW 的判据是**阻挡**（挡死所有横向候选），不是「在车道里」——
+  // S3 集成时实测改的：P3 的贴边锥桶（近缘 −0.95）在 1.75 的走廊里，
+  // 按走廊判会把「可绕」当成跟停对象，test_closed_loop_obstacle 当场红。
   const auto line = MakeStraightLine(60.0, 0.5);
   const auto params = MakeParams();
-  // 中心在走廊外 (|d|=2.5 > 1.75) 但半宽 1.8/2=0.9 ⟹ 近边 1.6 < 1.75：半个身子在道里。
-  const std::vector<TargetBox> in{{1u, 30.0, 2.5, 4.4, 1.8}};
-  EXPECT_TRUE(find_follow_conflict(line, 0.0, in, params).has_value());
-  // 近边恰好压线之外（2.66 − 0.9 = 1.76 > 1.75）：不算。
-  const std::vector<TargetBox> out{{2u, 30.0, 2.66, 4.4, 1.8}};
-  EXPECT_FALSE(find_follow_conflict(line, 0.0, out, params).has_value());
+  // CP-P3-B avoid 场景的真实锥桶：d=−1.2、宽 0.5 ⟹ [−1.45, −0.95]，
+  // t_hi = −0.95 < −0.55 ⟹ 不阻挡 —— 归 lattice 绕行，不触发跟停。
+  const std::vector<TargetBox> avoidable{{1u, 30.0, -1.2, 0.5, 0.5}};
+  EXPECT_FALSE(find_follow_conflict(line, 0.0, avoidable, params).has_value());
+  // 同一个锥桶往中心挪到 d=−0.75 ⟹ [−1.0, −0.5]，t_hi = −0.5 ≥ −0.55
+  // ⟹ 它伸进了「无论怎么偏都必须占用」的带 —— 阻挡，是前车。
+  const std::vector<TargetBox> blocking{{2u, 30.0, -0.75, 0.5, 0.5}};
+  EXPECT_TRUE(find_follow_conflict(line, 0.0, blocking, params).has_value());
+  // 隔壁车道的车（d=3.5）：远在带外，不是前车。
+  const std::vector<TargetBox> next_lane{{3u, 30.0, 3.5, 4.4, 1.8}};
+  EXPECT_FALSE(find_follow_conflict(line, 0.0, next_lane, params).has_value());
 }
 
 TEST(FollowConflict, BehindEgoIsIgnored)

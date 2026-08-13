@@ -46,6 +46,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
 # 仿真数据源注册表：sim 参数值 → (包名, launch 文件名)。
@@ -162,6 +163,13 @@ def planning_node_params() -> dict:
         'speed.max_accel_mps2': lim['max_accel_mps2'],
         # ⚠️ 用的是 max_decel（3.0，舒适约束）而**不是** emergency_decel（5.0）。
         'speed.max_decel_mps2': lim['max_decel_mps2'],
+        # 行为决策（P7-S3）。front_offset 是推导量，planning_node 自己从车辆几何算。
+        'behavior.corridor_half_m': planning['behavior']['corridor_half_m'],
+        'behavior.stand_off_m': planning['behavior']['stand_off_m'],
+        'behavior.yield_margin_m': planning['behavior']['yield_margin_m'],
+        'behavior.time_margin_s': planning['behavior']['time_margin_s'],
+        'behavior.release_cycles': planning['behavior']['release_cycles'],
+        'behavior.prediction_timeout_s': planning['behavior']['prediction_timeout_s'],
     }
 
 
@@ -433,9 +441,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'prediction', default_value='false',
             description=('P6：true 时起 prediction_node（订阅 /perception/obstacles，'
-                         '发布 /prediction/trajectories 与 RViz markers）。纯旁路，'
-                         '不改动任何既有话题。\n'
-                         '默认 false —— 所有既有检查点的回归基线里都没有预测')),
+                         '发布 /prediction/trajectories 与 RViz markers）。\n'
+                         '⚠️ P7-S3 起**不再是纯旁路**：planning_node 消费预测做横穿'
+                         '让行（行为层），且 expect_prediction 会随本开关置位 ——'
+                         '开了它而预测链路没接上时规划器指名报错并不发轨迹。\n'
+                         '默认 false —— 所有既有检查点的回归基线里都没有预测；'
+                         '关掉时行为层只剩跟车（感知近边），降级方向正确')),
         DeclareLaunchArgument(
             'localization', default_value='false',
             description=('P4：true 时起 localization_node，由它发动态 map→odom，'
@@ -485,7 +496,17 @@ def generate_launch_description():
             package='ads_planning',
             executable='planning_node',
             name='planning_node',
-            parameters=[planning_node_params(), {'use_sim_time': True}],
+            parameters=[planning_node_params(), {
+                'use_sim_time': True,
+                # 启动告知（P7-S3 收口）：launch 知道这一跑开了哪些链路，
+                # 告诉规划器，让「链路该在而从未到达」从静默变成指名报错。
+                # ⚠️ ParameterValue(…, bool)：裸 LaunchConfiguration 解析成
+                #    **字符串** "true"，与节点声明的 bool 类型不符会直接抛。
+                'expect_perception': ParameterValue(
+                    LaunchConfiguration('perception'), value_type=bool),
+                'expect_prediction': ParameterValue(
+                    LaunchConfiguration('prediction'), value_type=bool),
+            }],
             output='screen',
         ),
 

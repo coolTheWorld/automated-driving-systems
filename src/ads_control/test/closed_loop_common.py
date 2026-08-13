@@ -121,6 +121,12 @@ def planning_params() -> dict:
         'speed.max_lateral_accel_mps2': planning['speed']['max_lateral_accel_mps2'],
         'speed.max_accel_mps2': lim['max_accel_mps2'],
         'speed.max_decel_mps2': lim['max_decel_mps2'],
+        'behavior.corridor_half_m': planning['behavior']['corridor_half_m'],
+        'behavior.stand_off_m': planning['behavior']['stand_off_m'],
+        'behavior.yield_margin_m': planning['behavior']['yield_margin_m'],
+        'behavior.time_margin_s': planning['behavior']['time_margin_s'],
+        'behavior.release_cycles': planning['behavior']['release_cycles'],
+        'behavior.prediction_timeout_s': planning['behavior']['prediction_timeout_s'],
         'use_sim_time': True,
     }
 

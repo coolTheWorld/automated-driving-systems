@@ -36,7 +36,10 @@
 #include <vector>
 
 #include "ads_msgs/msg/obstacle_array.hpp"
+#include "ads_msgs/msg/predicted_trajectory_array.hpp"
 #include "ads_msgs/msg/trajectory.hpp"
+#include "ads_planning/longitudinal.hpp"
+#include "ads_planning/speed_profile.hpp"
 #include "ads_planning/trajectory.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
@@ -102,6 +105,32 @@ public:
     params_.speed.max_accel_mps2 = declare_parameter<double>("speed.max_accel_mps2");
     params_.speed.max_decel_mps2 = declare_parameter<double>("speed.max_decel_mps2");
 
+    // ---- 行为决策（P7-S3）。参数依据见 behavior.md §5 与 planning_params.yaml。
+    BehaviorParams behavior_params;
+    behavior_params.corridor_half_m = declare_parameter<double>("behavior.corridor_half_m");
+    behavior_params.stand_off_m = declare_parameter<double>("behavior.stand_off_m");
+    behavior_params.yield_margin_m = declare_parameter<double>("behavior.yield_margin_m");
+    behavior_params.time_margin_s = declare_parameter<double>("behavior.time_margin_s");
+    // front_offset 是**推导量**（后轴到车头面），从车辆几何算，不单独配 ——
+    // 配两遍的症状是「改了车长之后跟停间距还按旧车头算」，没有一层会报错。
+    behavior_params.front_offset_m =
+      params_.lattice.vehicle_length_m - params_.lattice.rear_overhang_m;
+    // 阻挡阈值同为推导量（= 车半宽 + 安全间距 − 最大横向偏移，本配置 0.55）。
+    // 它与 lattice 的可行性判断共用同一组参数 —— 改了任何一个，两处一起变。
+    behavior_params.blocking_half_m = params_.lattice.vehicle_width_m / 2.0 +
+                                      params_.lattice.safety_margin_m -
+                                      params_.lattice.max_lateral_offset_m;
+    const int release_cycles = static_cast<int>(declare_parameter<int>("behavior.release_cycles"));
+    arbiter_ = std::make_unique<BehaviorArbiter>(behavior_params, release_cycles);
+    prediction_timeout_s_ = declare_parameter<double>("behavior.prediction_timeout_s", 1.0);
+
+    // ---- 启动告知（P7 事实 12 的收口：这两个参数被注释承诺过两次而不存在）。
+    // launch 层告诉规划器「这一跑**应当**有感知/预测」：为 true 时对应输入
+    // 从未到达也按链路故障处理（不发轨迹 → 下游刹停），堵住
+    // 「感知从启动起就没发过一条，看起来与基线跑一模一样」的洞。
+    expect_perception_ = declare_parameter<bool>("expect_perception", false);
+    expect_prediction_ = declare_parameter<bool>("expect_prediction", false);
+
     // -------------------------------------------------------------------------
     //  接口
     // -------------------------------------------------------------------------
@@ -120,6 +149,15 @@ public:
     obstacle_sub_ = create_subscription<ads_msgs::msg::ObstacleArray>(
       "/perception/obstacles", rclcpp::QoS(10),
       [this](ads_msgs::msg::ObstacleArray::SharedPtr msg) { obstacles_ = std::move(msg); });
+
+    // P7-S3 起本节点消费预测（决策六）：stack.launch 的 prediction 开关
+    // 从「纯旁路」变成了规划的输入源之一。没有预测时横穿判定为空、
+    // 只剩跟车（感知近边）—— 降级方向正确，不是故障。
+    prediction_sub_ = create_subscription<ads_msgs::msg::PredictedTrajectoryArray>(
+      "/prediction/trajectories", rclcpp::QoS(10),
+      [this](ads_msgs::msg::PredictedTrajectoryArray::SharedPtr msg) {
+        predictions_ = std::move(msg);
+      });
 
     // 轨迹是**周期性**的，深度 1 的 volatile 就够：晚到的订阅者等 100 ms
     // 就有新的一条，不需要 transient_local（那会让新订阅者先收到一条过期轨迹）。
@@ -198,6 +236,47 @@ private:
     return rectangles;
   }
 
+  /// @brief 组装行为层输入并仲裁一次。
+  ///
+  /// 输入翻译（ROS 消息 → lib 类型）都在这里，与 current_obstacles() 同一层职责。
+  BehaviorArbiter::Decision run_behavior(const FrenetState & start)
+  {
+    // 感知快照 → TargetBox（走廊判定用近边，所以要长宽）。
+    std::vector<TargetBox> targets;
+    if (obstacles_) {
+      targets.reserve(obstacles_->obstacles.size());
+      for (const auto & obstacle : obstacles_->obstacles) {
+        targets.push_back(
+          {obstacle.id, obstacle.pose.position.x, obstacle.pose.position.y, obstacle.size_m.x,
+           obstacle.size_m.y});
+      }
+    }
+    // 预测 → 假设（**全部**给进去，多假设按任一冲突合成 —— 事实 11；
+    // 概率与 existence 都不进安全判定，所以这里根本不搬运它们）。
+    std::vector<PredictionHypothesis> hypotheses;
+    if (predictions_) {
+      hypotheses.reserve(predictions_->trajectories.size());
+      for (const auto & trajectory : predictions_->trajectories) {
+        PredictionHypothesis hypothesis;
+        hypothesis.obstacle_id = trajectory.obstacle_id;
+        hypothesis.points.reserve(trajectory.points.size());
+        for (const auto & point : trajectory.points) {
+          hypothesis.points.push_back({point.t_s, point.x_m, point.y_m, point.sigma_cross_m});
+        }
+        hypotheses.push_back(std::move(hypothesis));
+      }
+    }
+    // 无约束剖面（时间标注的输入）：参考线全线的曲率限速 + 终点归零。
+    std::vector<double> arc_lengths_m;
+    arc_lengths_m.reserve(reference_line_->points().size());
+    for (const auto & point : reference_line_->points()) {
+      arc_lengths_m.push_back(point.s_m);
+    }
+    const SpeedProfile profile(*reference_line_, params_.speed);
+    return arbiter_->decide(
+      *reference_line_, start.s_m, targets, hypotheses, arc_lengths_m, profile.speeds_mps());
+  }
+
   void tick()
   {
     // 周期耗时用**墙钟**量：这是「规划算得够不够快」（CP-P3-B 判据 #7，
@@ -249,6 +328,34 @@ private:
           {});
         return;
       }
+    } else if (expect_perception_) {
+      // launch 声明了「这一跑该有感知」而一条都没来过（P7-S3 收口的洞）。
+      publish_diagnostics(
+        diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+        "expect_perception=true 但 /perception/obstacles 从未到达 —— 链路没接上？"
+        "本周期不发轨迹（下游会刹停）",
+        {});
+      return;
+    }
+
+    // ---- 预测的过期/缺席检查（与障碍物同一套逻辑，P7-S3）--------------------
+    if (predictions_) {
+      const double age_s = (now() - rclcpp::Time(predictions_->header.stamp)).seconds();
+      if (age_s > prediction_timeout_s_) {
+        publish_diagnostics(
+          diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+          "预测列表已 " + std::to_string(age_s) +
+            " s 没有更新 —— 预测链路死了？本周期不发轨迹（下游会刹停）",
+          {});
+        return;
+      }
+    } else if (expect_prediction_) {
+      publish_diagnostics(
+        diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+        "expect_prediction=true 但 /prediction/trajectories 从未到达 —— 链路没接上？"
+        "本周期不发轨迹（下游会刹停）",
+        {});
+      return;
     }
 
     const ads_common::Pose2D ego_pose{
@@ -276,7 +383,14 @@ private:
         reference_line_->project(ego_pose, projection_hint_, projection_search_window_);
       projection_hint_ = projection.index;
       const FrenetState start = to_frenet(*reference_line_, ego_pose, projection_hint_);
-      result = plan(*reference_line_, start, current_obstacles(), params_, previous_offset_m_);
+
+      // ---- 行为仲裁（P7-S3）------------------------------------------------
+      // 时间标注吃**参考线全线**的无约束剖面：只依赖几何，每周期重算一遍
+      // ~0.1 ms（600 点）。不必缓存 —— 缓存要多管一个「参考线换了没」的状态。
+      decision_ = run_behavior(start);
+      result = plan(
+        *reference_line_, start, current_obstacles(), params_, previous_offset_m_,
+        &decision_->constraint);
     } catch (const std::exception & e) {
       // 规划抛异常时**不发轨迹**，让下游走"没有轨迹"的降级分支（刹停）。
       // 发一条上一周期的旧轨迹看着更"连续"，但那是拿过期数据继续开。
@@ -355,6 +469,18 @@ private:
     if (result.status == PlanStatus::kStopping) {
       add("stop_clearance_m", std::to_string(result.stop_clearance_m));
     }
+    // ---- 行为状态（P7-S3）。S4 的判据 ⑨（状态不振荡）直接数这个字段。 ----
+    if (decision_.has_value()) {
+      add("behavior_state", BehaviorStateName(decision_->state));
+      add(
+        "behavior_follow_id",
+        decision_->follow.has_value() ? std::to_string(decision_->follow->id) : "-");
+      add("behavior_crossing_count", std::to_string(decision_->crossings.size()));
+      add(
+        "behavior_stop_at_s_m", decision_->constraint.stop_at_s_m.has_value()
+                                  ? std::to_string(*decision_->constraint.stop_at_s_m)
+                                  : "-");
+    }
 
     array.status.push_back(status);
     diag_pub_->publish(array);
@@ -374,6 +500,15 @@ private:
 
   std::unique_ptr<ads_common::ReferenceLine> reference_line_;
   ads_msgs::msg::ObstacleArray::SharedPtr obstacles_;
+  ads_msgs::msg::PredictedTrajectoryArray::SharedPtr predictions_;
+  rclcpp::Subscription<ads_msgs::msg::PredictedTrajectoryArray>::SharedPtr prediction_sub_;
+  std::unique_ptr<BehaviorArbiter> arbiter_;
+  /// 最近一次仲裁结果（诊断用）。tick 早退分支里它保持上一周期的值 ——
+  /// 那些分支不发轨迹，行为字段只是旁证，不做安全判断。
+  std::optional<BehaviorArbiter::Decision> decision_;
+  bool expect_perception_{false};
+  bool expect_prediction_{false};
+  double prediction_timeout_s_{1.0};
   double obstacle_timeout_s_{1.0};
   std::optional<std::chrono::steady_clock::time_point> tick_started_;
   double last_cycle_ms_{0.0};

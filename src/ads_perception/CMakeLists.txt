@@ -141,7 +141,7 @@ if(BUILD_TESTING)
       # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，默认 domain 0 下
       #    本测试会与 ads_control / ads_localization 的闭环共享话题与 TF。
       #    ads_localization 加进来那次就是这么同时变红的（见 CLAUDE.md）。
-      #    分配表：ads_control 41/42/46/48，ads_localization 43，
+      #    分配表：ads_control 41/42/46/48/49，ads_localization 43，
       #    ads_perception 44，gazebo_bridge 45，ads_prediction 47。
       ROS_DOMAIN_ID=44)
 
