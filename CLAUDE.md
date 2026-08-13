@@ -179,6 +179,9 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **参数声明得再讲究，也证明不了消费它的对象存在** | 开机 bootstrap 与失锁恢复整条死代码 **10 个月没人发现**：L1 全绿（用例自己构造粗网格）、闭环全绿（没断言它执行过） | `ndt_coarse_map_` 的参数推导、声明、消费代码全在，唯独**构造那一行缺失**——空指针短路，恢复"实测 0 次触发"被归因成「粗网格同样退化」。修法之外的守卫：L3-G 机械断言 `ndt_recovery_attempts ≥ 1`。**凡是"参数 → 对象 → 消费"三段式，断言要打在最末端的可观测行为上** |
 | **先喂狗后校验** | 上游持续发 NaN 时看门狗**永不触发**，车以闩存旧指令一直开——恰是看门狗要防的后果 | `last_cmd_time_ = now()` 曾是 on_cmd 第一行，被丢弃的坏指令照样喂狗。**持续 NaN 流在语义上等价于失联**（没有任何有效指令到达），喂狗必须在校验之后。check_vehicle_cmd.py 抓不到它（只断言输出无 NaN，闩存值恒有限）——判据要断言语义不是值域，现由 `test_vehicle_cmd_bridge_watchdog.py` 守着 |
 | **判据只有外界没有内界** | 扩窗实测：自车过弯贴行人 2.2–2.8 m 经过，连续 11 帧"漏检"——按判据算 FAIL，而那是 `range_min=2.2` 的**近场盲区**（74d12ad 修复时文档写明的代价） | 与「>30 m 物理上不可检」同理：判据范围两头都要由物理定。现内界 3 m。同批教训：符号判据要过跟踪器自己的 `heading_min_speed` 门限（刚建的航迹速度是噪声）；ID 连续性只在中断 ≤ 删除+滑行设计窗口（3.5 s）内判——**系统设计上保不住的中断换 ID 是正确行为不是缺陷** |
+| **改了 `ads_msgs` 只重建了直接相关的包** | planning_node **段错误**（exit −11），现场是「自车不动」——目标点、路由、感知全正常，人会去查规划 | 消息布局变了，没重建的下游带着**旧类型支持**反序列化新消息 → 内存错位。改 msg 后一律 `colcon build --packages-above ads_msgs`（P6-S4 实测，Obstacle.msg 加一个 bool 就炸） |
+| **QoS 只设 durability 不设 reliability** | 发布端 `get_subscription_count()=1`（配上了！）却**静默不投递**，连发 45 次都收不到 | reliability 落默认值与订阅端 RELIABLE 不兼容——DDS 配对成功≠投递兼容。发布 `/goal_pose` 这类单次指令必须显式 `RELIABLE + TRANSIENT_LOCAL`（照抄 record_control_run） |
+| **评测的段归属按瞬间判，不按评测窗判** | 直行段判据的尾巴全是「窗口里其实在过弯」的帧（FDE 5–13 m），人会去查直线外推 | 凡是「t 时刻的预测对 t+h 的真值」类评测，样本属于哪个工况要看 **[t, t+h] 整个窗**（三点采样）。同族：U 转排除窗要用 1 s 滑窗，整窗 45° 会把合法过弯（22°/s×3s=67°）也排除掉 |
 
 **「频率低 = 算力不够」是最容易犯的想当然。先分层测量再动参数** ——
 S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病根是 QoS 不是 GPU。
@@ -191,11 +194,21 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有十一个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
-`ads_planning`、`ads_localization`、**`ads_perception`**、`ads_bringup`、
-`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
-SPEC §5 列出的其余包（`ads_prediction` 等）**尚未创建**，
-涉及它们的命令是规划中的形态，不要假设能跑。
+`src/` 下**目前有十二个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`ads_planning`、`ads_localization`、`ads_perception`、**`ads_prediction`**、
+`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+
+`ads_prediction`（**P6，CP-P6-B 已达成** 2026-08-12）有三个 lib：`motion_model`
+（恒速 + 静态 + 不确定椭圆，全解析）、`lane_follow`（nearest_lane 归属 →
+successors 枚举链 → ReferenceLine 弧长参数化，路口分叉多假设、末端如实截断）、
+`model_selector`（速度/ODD 上限/**位移一致性**/尺寸档位 —— **不用 classification**，
+TargetSnapshot 结构上没有那个字段）。推导、参数与 S4 仪器五课见
+[docs/modules/prediction.md](docs/modules/prediction.md)，**改这个模块前先读它**。
+三条硬规则：运动方向**永远取速度矢量不取 yaw**（180° 二义）；声称的速度必须有
+**净位移背书**（结构物假速度占 24.5% 的实测病理）；**决策二仅此一例** ——
+prediction 链接 libads_map 读静态先验（SPEC §3.3 注解），不要据此推广。
+CP-P6-B 是**双层协议**：`--layer truth` 全过再跑 `--layer perception` 两轮
+（层 2 红层 1 绿 = 感知输入的传播，去查感知不改预测）。
 
 `ads_perception`（**P5，CP-P5-B 已达成**）有六个 lib：`ground_segmentation`（RANSAC +
 坡度校验）、`euclidean_cluster`（体素哈希 + BFS）、`lshape_fit`（closeness 准则，
@@ -391,6 +404,14 @@ python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/ctrl.csv
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false perception:=true dynamic:=both
 python3 scripts/record_perception_run.py --duration-s 72 --out /tmp/p5.csv   # 早起！
 python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/p5_ctrl.csv
+# CP-P6-B：预测验收，**双层协议**（决策七）。层 1（真值输入）全过再跑层 2 两轮。
+#   记录器等仿真钟 ≥10 起；目标点要在 sim≈37–41 生效 —— ⚠️ record_control_run
+#   的启动链在高负载下会把目标点拖后 ~20 s（rclpy 冷启动 + 内部延迟），
+#   自动编排要用**预热的 goal 发布器**（RELIABLE+TRANSIENT_LOCAL，见陷阱表）。
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false prediction:=true dynamic:=curve
+python3 scripts/record_prediction_run.py --duration-s 72 --layer truth --out /tmp/p6.csv
+ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false perception:=true prediction:=true dynamic:=curve
+python3 scripts/record_prediction_run.py --duration-s 72 --layer perception --out /tmp/p6p.csv
 
 # 被控对象辨识（开环，控制器不参与）—— 车必须停在**路面上**再跑
 python3 scripts/probe_steering_response.py --step 0.30 --speed 4.0
