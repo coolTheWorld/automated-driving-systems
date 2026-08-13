@@ -58,8 +58,11 @@ cleanup() {
   sleep 1
   # 收尾没收干净要**说出来**。留下的 map_node 会让下一次运行直接被开头的
   # 残留检查拦下，届时只会看到「已经有 2 个在跑」，追不到是哪一次漏的。
+  # ⚠️ 要滤掉僵尸（P6-S2 实测）：pgrep 连 <defunct> 一起数，容器 PID 1 不 reap，
+  #    编排跑多了僵尸成百上千 —— 「残留 66 个」全是尸体。CLAUDE.md 陷阱表
+  #    「pgrep -x gz 查残留」那条的同族，按 stat 首字母滤 Z。
   local left
-  left="$(pgrep -x 'map_node|static_transform_publisher' 2>/dev/null | wc -l)"
+  left="$(ps -eo stat=,comm= | awk '$1 !~ /^Z/ && ($2 == "map_node" || $2 == "static_transform_publisher")' | wc -l)"
   [[ "${left}" -gt 0 ]] && echo "  ! 收尾后仍有 ${left} 个进程残留，请手动清理" >&2
   return 0
 }
@@ -127,10 +130,11 @@ echo "[2/3] 还没有 TF 时必须说清楚，而不是静默"
 # （比如 `clang-format -i src/ads_map/node/map_node.cpp && verify_map.sh`）——
 # 于是脚本报「已经有 1 个在跑」然后拒绝启动，而实际上一个都没有。
 # 这和 CLAUDE.md 陷阱表里 `pkill -f "gz sim"` 杀掉自己是同一个形状的坑。
-STALE="$(pgrep -x map_node 2>/dev/null | wc -l)"
+# ⚠️ 滤僵尸（P6-S2 实测）：pgrep 连 <defunct> 一起数，见 cleanup 里的同款注释。
+STALE="$(ps -eo stat=,comm= | awk '$1 !~ /^Z/ && $2 == "map_node"' | wc -l)"
 if [[ "${STALE}" -gt 0 ]]; then
   echo "  ✗ 已经有 ${STALE} 个 map_node 在跑，两个节点抢同一个话题，测出来的数不可信" >&2
-  ps -eo pid,pgid,args | grep map_node | grep -v grep >&2
+  ps -eo pid,pgid,stat,args | grep map_node | grep -v grep >&2
   exit 1
 fi
 

@@ -49,6 +49,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "ads_map/lane_graph.hpp"
+#include "ads_map/lane_sampling.hpp"
 #include "ads_map/opendrive_parser.hpp"
 #include "ads_map/routing.hpp"
 
@@ -88,10 +89,6 @@ constexpr double kArrowHeadLengthM = 0.80;
 /// 路径要压在车道图之上，所以抬得更高一点。
 constexpr double kLaneGraphElevationM = 0.05;
 constexpr double kRoutePathElevationM = 0.10;
-
-/// 区间短于这个值就只出一个采样点，单位 m。
-/// 1 µm 远小于任何有意义的路径段，但足以避免「起点终点重合时输出两个同样的点」。
-constexpr double kDegenerateSpanM = 1e-6;
 
 }  // namespace
 
@@ -180,49 +177,13 @@ private:
   // ---------------------------------------------------------------------------
   //  采样：把 (车道, s 区间) 变成一串**行驶方向**上的位姿
   // ---------------------------------------------------------------------------
-  /// @brief 沿车道中心线采样。
-  /// @param lane 车道。
-  /// @param from_s_m 起点的参考线弧长。
-  /// @param to_s_m 终点的参考线弧长。**可以小于 from_s_m** —— 正编号车道逆 s 行驶。
-  /// @param step_m 采样步长（参考线 s 上的）。
-  /// @return 位姿序列，按**行驶顺序**排列，朝向已翻转为行驶朝向。
+  /// @brief 沿车道中心线采样。P6-S2 起转调 lib（ads_map/lane_sampling.hpp）——
+  ///        P6 预测的车道跟随是第二个消费者，正编号翻转/等分采样这两个坑
+  ///        的逻辑从此只有一份。推导与坑的说明都在那边的头文件里。
   std::vector<Pose2D> sample_lane(
     const LaneId & lane, double from_s_m, double to_s_m, double step_m) const
   {
-    const Road & road = graph_->road_map().road(lane.road_id);
-    const double span_m = std::fabs(to_s_m - from_s_m);
-    const double direction = (to_s_m >= from_s_m) ? 1.0 : -1.0;
-
-    const auto pose_at = [&road, &lane, from_s_m, direction](double offset_m) {
-      Pose2D pose = road.lane_center_pose_at(lane.lane_id, from_s_m + direction * offset_m);
-      if (lane.lane_id > 0) {
-        pose.heading_rad += M_PI;  // 正编号车道逆 s 行驶，行驶朝向要翻 180°
-      }
-      return pose;
-    };
-
-    std::vector<Pose2D> poses;
-    if (span_m <= kDegenerateSpanM) {
-      poses.push_back(pose_at(0.0));  // 退化区间：一个点，不是两个重合的点
-      return poses;
-    }
-
-    // 把区间**等分**成 count 段，而不是「按步长累加、最后一步夹到端点」。
-    //
-    // 累加+夹取的写法有一个只在特定输入下才现形的 bug：span/step 恰好是整数时，
-    // 浮点上它可能是 80.00000000000001，ceil 多算一步，于是最后**两个**采样点
-    // 都被夹到 span —— 一对重合点。RViz 里完全看不出来，下游按弧长参数化时
-    // 却会除以零。本项目实测踩到过：nearest_lane 的三分法把终点细化成
-    // s = 40.000000000000007，正好触发。
-    //
-    // 等分写法天然没有这个问题：i=0 精确是起点，i=count 精确是终点，
-    // 段长恒为 span/count ≤ step，也不需要任何夹取。
-    const int count = static_cast<int>(std::ceil(span_m / step_m));
-    poses.reserve(static_cast<std::size_t>(count) + 1);
-    for (int i = 0; i <= count; ++i) {
-      poses.push_back(pose_at(span_m * static_cast<double>(i) / static_cast<double>(count)));
-    }
-    return poses;
+    return sample_lane_centerline(graph_->road_map(), lane, from_s_m, to_s_m, step_m);
   }
 
   static geometry_msgs::msg::Point to_point(const Pose2D & pose, double z_m)

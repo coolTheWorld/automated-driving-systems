@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ads_prediction</name>
+  <version>0.1.0</version>
+  <description>
+    轨迹预测（P6）：地图约束下的车道跟随 + 恒速模型；行人恒速 + 不确定椭圆。
+
+    ⚠️ 本包依赖 ads_map 的 **lib**（P6-1 决策二，2026-08-12 用户拍板）：
+    地图是**静态先验**，两个模块读同一份 campus.xodr 与两个模块读同一份
+    YAML 配置性质相同 —— SPEC §3.3 禁的是**运行时数据**绕过话题在模块间
+    横穿。这是全仓库第一个模块间 lib 依赖，依据写在 SPEC §3.3 的注解里；
+    不要据此推广成「模块可以随意互相链接」。
+  </description>
+  <maintainer email="suns1377154414@gmail.com">孙帅</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Eigen：头文件库，与 ads_perception 同一个理由，不是新依赖。 -->
+  <build_depend>eigen3_cmake_module</build_depend>
+  <buildtool_export_depend>eigen3_cmake_module</buildtool_export_depend>
+  <depend>eigen</depend>
+
+  <!-- ReferenceLine（弧长参数化 + 带符号投影）与 RequireFinite。纯 C++、无 ROS。 -->
+  <depend>ads_common</depend>
+  <!-- 车道图 + 中心线采样（决策二，见上面的 description）。零 ROS 依赖，
+       由它自己的 verify_map.sh ldd 检查与本包的 no_ros_dependencies 共同保证。 -->
+  <depend>ads_map</depend>
+
+  <!-- 节点层（node/prediction_node.cpp，S3）。
+       ⚠️ 这些依赖属于 prediction_node 这个 target，
+          libads_prediction.so 依然**一个 ROS 库都不许链接** ——
+          由 target_link_libraries 的作用域 + no_ros_dependencies 那道 CTest 保证。 -->
+  <depend>rclcpp</depend>
+  <depend>ads_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>visualization_msgs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_clang_format</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

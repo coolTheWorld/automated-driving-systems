@@ -1,0 +1,31 @@
+# =============================================================================
+#  P6 预测（prediction_node）的参数 —— 推导见 docs/modules/prediction.md
+#
+#  ⚠️ 每个值都与 lib 头文件里的默认值一致（那边有完整的调大/调小后果）。
+#     这里只放会按场景调的；改了哪边都要两边同步 —— 参数的唯一事实来源
+#     是**这份 YAML**（SPEC §7：参数改动走 YAML），头文件默认值是兜底。
+# =============================================================================
+
+# 视界与椭圆（MotionModelParams）
+horizon_s: 3.0            # SPEC §10 P6 行的「未来 3 s」
+step_s: 0.2               # 3 s × 10 Hz 感知帧率下 15 步足够画出弯
+sigma_pos0_m: 0.2         # 感知横向位置误差 p95 0.29 / 1.65 ≈ 0.17，留噪取 0.2
+sigma_speed_mps: 0.15     # 感知速度误差 p95 稳态 ≈ 0.15（CP-P5-B）
+pedestrian_lateral_accel_mps2: 0.5    # 1.2 m/s 步速 0.5 m/s² 2.4 s = 90° 变向
+vehicle_lateral_accel_mps2: 0.8       # 园区弯道侧向加速度 1.56 的一半（无车道信息时）
+lane_follow_lateral_accel_mps2: 0.3   # 车道约束后剩余的车道内摆动
+static_start_accel_mps2: 1.5          # 园区车最大纵向加速度：随时可能起步
+
+# 车道跟随（LaneFollowParams）
+match_max_lateral_m: 2.0        # < 半车道 1.75 + 感知横向 p95 0.29
+match_max_heading_rad: 0.5236   # 30°：车道内摆动 ≪ 30°，横穿 90°、逆行 180°
+sample_step_m: 0.5              # 最急车道弧 r=10.25 上弦高 step²/8r = 0.003
+lateral_decay_s: 2.0            # 车道保持闭环的时间常数量级
+max_hypotheses: 4               # 园区路口最多三岔，上限防病态图
+
+# 模型选择（SelectorParams）
+min_dynamic_speed_mps: 0.5      # 与 tracker.heading_min_speed 论证对齐（独立声明）
+odd_max_speed_mps: 8.33         # ODD 30 km/h（SPEC §2）：坏状态不许外推
+min_displacement_ratio: 0.5     # 声称速度须有净位移背书（S1：结构物假速度 24.5%）
+displacement_window_s: 1.0      # node 逐 id 历史窗，与净位移换算共用
+min_vehicle_length_m: 2.5       # 车辆尺度门限：尺寸是直接测量，分类是猜的

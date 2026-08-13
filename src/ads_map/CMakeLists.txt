@@ -41,6 +41,7 @@ add_library(${PROJECT_NAME} SHARED
   src/road_map.cpp
   src/opendrive_parser.cpp
   src/lane_graph.cpp
+  src/lane_sampling.cpp
   src/routing.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
