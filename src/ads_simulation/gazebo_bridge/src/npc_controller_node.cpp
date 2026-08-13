@@ -119,6 +119,24 @@ public:
     // 后半程的判据会因为「没有目标」而**恒真** —— 又是一个绿灯不代表对。
     loop_ = declare_parameter<bool>("loop", true);
 
+    // 每个航点上的停留时长，s（**仿真时间**），与 waypoints 逐一对应；
+    // 空 = 全不停。P7-S1 加的，两个用途都来自行为场景：
+    //   ① dwell_s[0]（出生点停留）就是**相位**：actor 在 spawn 处按兵不动，
+    //      到点才出发 —— 场景时序全靠它对齐扩窗协议（goal 在仿真 37 s 发）。
+    //   ② 中途航点停留造「停住再驶离」：S03 前车在 x≈70 停 12 s 再走
+    //      （判据「前车驶离后 3 s 内恢复」没有驶离就没法判）；
+    //      S05 行人在车道中央停 6 s —— 把「必须完全停车」从贴边相位
+    //      变成宽容 ±4 s 抖动的必然事件（curve_car 相位调过三次的教训）。
+    // ⚠️ 用**仿真钟**计时（now()，本节点 use_sim_time=true）：相位是对
+    //    仿真时间轴设计的，墙钟计时在 RTF≠1 时整个错位。
+    const auto dwell = declare_parameter<std::vector<double>>("dwell_s", {});
+    if (!dwell.empty() && dwell.size() != waypoints_.size()) {
+      throw std::invalid_argument(
+        "npc_controller: dwell_s 要么为空要么与 waypoints 等长，收到 " +
+        std::to_string(dwell.size()) + " / " + std::to_string(waypoints_.size()));
+    }
+    dwell_s_ = dwell;
+
     // 到达判定半径。取 1.0 m：比一个控制周期的位移（4 m/s × 0.1 s = 0.4 m）大，
     // 否则会在航点附近反复错过、原地打转。
     // 调大 → 转弯提前，路径被"切角"；调小 → 可能永远判不到达。
@@ -203,6 +221,29 @@ private:
     const double distance_m = std::hypot(dx, dy);
 
     if (distance_m < arrival_radius_m_) {
+      // ---- 航点停留（P7-S1）----
+      // 到达当前航点后先停够 dwell_s_[index_] 再推进。
+      // 出生点也走这条路：模型 spawn 在 waypoints[0] 上，第一拍就「到达」，
+      // 于是 dwell_s[0] 天然就是出发相位。停留期间持续发零速 ——
+      // VelocityControl 不发就保持旧速度，「停」必须显式说。
+      if (index_ < dwell_s_.size() && dwell_s_[index_] > 0.0) {
+        const rclcpp::Time now_t = now();
+        if (!dwelling_) {
+          dwelling_ = true;
+          dwell_until_ = now_t + rclcpp::Duration::from_seconds(dwell_s_[index_]);
+          RCLCPP_INFO(
+            get_logger(), "%s 在航点 #%zu 停留 %.1f s", model_name_.c_str(), index_,
+            dwell_s_[index_]);
+        }
+        if (now_t < dwell_until_) {
+          cmd_pub_->publish(cmd);  // 零速
+          return;
+        }
+        dwelling_ = false;
+        RCLCPP_INFO(
+          get_logger(), "%s 停留结束，继续（航点 #%zu → #%zu）", model_name_.c_str(), index_,
+          index_ + 1);
+      }
       ++index_;
       if (index_ >= waypoints_.size()) {
         if (loop_) {
@@ -266,8 +307,12 @@ private:
   double lookahead_m_{4.0};
   bool slow_down_when_turning_{true};
 
+  std::vector<double> dwell_s_;
+
   size_t index_{0};
   bool finished_{false};
+  bool dwelling_{false};
+  rclcpp::Time dwell_until_{0, 0, RCL_ROS_TIME};
   bool have_pose_{false};
   double x_m_{0.0};
   double y_m_{0.0};

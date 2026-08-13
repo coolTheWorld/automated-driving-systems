@@ -2955,6 +2955,28 @@ S0 control 轨迹超时（决策五）─┘
   发（形态学上是 test_odom_robustness 而非 test_closed_loop）。DOMAIN 分配表
   四份注释全部同步（localization/perception/gazebo_bridge/prediction）。
 - **S1**：三 actor + 三场景 + `may_enter_ego_lane` 豁免 + launch 传 `loop` + `route: cross_road_southbound` 推导类型 + 体检脚本（相位/带内/感知跟踪质量/瞬停时刻）+ `--check` 逐字节回归。
+  ✅ **已完成（2026-08-13）**。交付：五个新 actor（lead_car、crossing_pedestrian、
+  cross_car_a/b/c）+ 三场景（follow/crossing/junction）；npc_controller 新增
+  **per-waypoint `dwell_s`**（出发相位与「停住再驶离」共用一个机制，仿真钟计时）；
+  校验②豁免 + 路线对账 + dwell 长度三条**注入全红**；三个既有模型与四个既有
+  场景逐字节冻结（--check + git diff 双证）。
+  **两处设计落定**：① 决策三行文「到末点停」与判据 ③「驶离后恢复」互斥 ——
+  用 dwell 两全（x=70 瞬停 12 s 再驶离）；② junction 场景的可行几何：车流沿
+  北路东行经 j_north **右转**入横穿路南下（xodr 连接道路 19 实证存在），ego 的
+  goal 设在横穿路南行车道 (−1.75,−20) ⟹ 路由唯一解经 j_north **左转**横穿
+  东行车道 —— 「让行」由地图几何保证（南行车道只有这一个入口）。
+  **体检实测（四场 + 一场复验）**：
+  A follow：瞬停 12.0 s 分毫不差、3.09 m/s、带内感知匹配 100%、ID 换手 0；
+  B crossing：中途停 6.0 s、1.2 m/s、匹配 100%；复验停点 y=−51.76（差 1 cm）；
+  C junction：三车 6 s 时距分秒不差（58.1/64.1/70.1 出发），完整走通两路口
+  推导航线，终点与解析预计分秒不差（111.5），无卡滞无相撞；
+  D ego 路口基线（dynamic:=none）：goal 37.0 精确生效，GOAL_REACHED@98.5、
+  末速 0、离目标 0.26 m，max|lat|=0.452（R=8 连接弯的暂态，物理预期内）。
+  **实测改掉的两个错**：① dwell 基准是 **spawn≈仿真 0.1 s** 不是协议的
+  t≈13（首轮相位整体错 13 s，三场景 depart_delay 全部 +13 修正）；
+  ② 行人中点航点填车道中心时实测停在 y=−50.80 —— `arrival_radius_m=1.0`
+  提前触发 dwell，「站在车道中央」退化成「站在走廊边缘」，航点南移一个
+  到达半径后复验命中。两条都进了 YAML 注释。
 - **S2**：`docs/modules/behavior.md` 推导初稿（先写推导再写代码）；`conflict.hpp`（ego 路径逐点标 t + 预测轨迹时空重叠 → 冲突区间；横穿类含 2σ 膨胀、自车道类用近边）；`behavior_tree.hpp`（四种节点 + 显式树）；`longitudinal.hpp`（指令类型 + 保守合成）；`speed_profile` 加 caps 数组；L1 对闭式解 + 注入验红（含红线用例：STATIC 前车必须触发跟停；去掉保守合成 → 红）。
 - **S3**：planning_node 订阅预测 + 行为集成 + `expect_perception`/`expect_prediction` + 诊断行为状态字段 + L3-G（域 48 复用 S0 的测试文件或新开）。
 - **S4**：`record_behavior_run.py`（S03/S05/junction 三场景判据 + 双层协议 + 真值量距）+ 编排（复用 CP-P6-B 的绝对钟锚 + 预热 goal 发布器）。

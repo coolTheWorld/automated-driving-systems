@@ -418,7 +418,9 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'dynamic', default_value='none',
-            description=('P5 感知场景的动态目标：none / oncoming / cross / both。'
+            description=('动态目标场景（清单以 config/dynamic_actors.yaml 的 scenarios 为准）：'
+                         'none；P5 感知 oncoming / cross / both；P6 预测 curve；'
+                         'P7 行为 follow / crossing / junction。'
                          '默认 none —— 三个检查点的回归基线要求世界里没有会动的东西。'
                          '与 obstacles 互相独立，可自由组合'),
         ),

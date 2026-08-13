@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!-- 由 scripts/gen_dynamic_actors.py 从 config/dynamic_actors.yaml 与
+     config/vehicle_params.yaml 生成 —— **不要手改**。改了下次 --check 就红。
+
+     cross_car_c：无信号路口让行的车流之一 —— 北路东行经 j_north 右转沿横穿路南下。几何与自车**同源**（同一份 vehicle_params），
+     区别只有三处，每一处都有理由：
+       ① **没有任何传感器**   —— 多一个 32 线雷达在渲染，RTF 腰斩
+       ② **没有转向/驱动关节** —— VelocityControl 直接推模型，不需要
+       ③ **原点仍在后轴中心地面** —— 与自车同一个约定，真值换算才对得上
+     ⚠️ 原点不是包围盒中心：包围盒中心在它前方 1.350 m。
+        真值发布器负责这个换算（Obstacle.msg 要的是**包围盒中心**）。
+        不换算的症状是一个恒定的纵向偏差被算成检测误差。 -->
+<sdf version="1.9">
+  <model name="cross_car_c">
+    <link name="cross_car_c_base">
+      <!-- ⚠️ **关掉重力。** 这一条是实测逼出来的（2026-08-11 探针）：
+           VelocityControl 只设置线速度，物理引擎仍在算重力与接触力，于是
+             · NPC 车以 −0.0098 m/s **恒速下沉**（穿透地面，5 s 沉 5 cm）；
+             · 行人**直接翻倒卡死** —— 0.4×0.4 的底面配 1.7 m 高，
+               高宽比 4.25，碰上任何接触扰动都站不住。实测它走了 1.44 m
+               就躺下不动了，z 从 0 变成 0.20（躺倒后的半宽）。
+           两个症状看起来毫不相干，根因是同一个。
+           关掉重力之后模型不压在地面上，接触力消失，纯由 cmd_vel 驱动 ——
+           这正是「道具」该有的行为：它是感知的**目标**，不是物理交互对象。
+
+      ⚠️ **同时删掉了 <collision>，两件事必须一起做。**（2026-08-12 实测逼出来的）
+         只关重力、留着 collision 的后果是一颗地雷：关掉重力**也关掉了受扰后
+         回到地面的唯一机制**，于是任何一次接触给的角速度都**永不衰减** ——
+         而 VelocityControl 是沿模型**自己的车体 x 轴**推它的，俯仰角一旦不为零，
+         道具就斜着往上飞，速度恰好是 v·sin(pitch)。
+         实测：两个 NPC 在 t=46 s 相撞，此后俯仰角以 1.48°/s 匀速增长、
+         高度按 t² 上升，20 s 后飞到 20 m 高。而 CP-P5-B 的现场症状是
+         **「检测率低、分类错、位置误差大」** —— 三条判据同时红，指向感知，
+         而错在道具。查了两轮才找到（见 docs/modules/perception.md §8）。
+         `dynamic:=oncoming`（只有一个道具、不可能相撞）下 50 s 全程 z=0.000，
+         这是那次的对照组。
+
+      ⚠️ 雷达仍然打得到它：gpu_lidar 走的是**渲染**（visual），不是 collision。
+         这一条不是推理，是删 collision 之后**重新实测过**的（点云里目标仍在）。
+      ⚠️ 代价：自车会从道具身上**穿过去**。可以接受 —— CP-P5-B 量的是感知质量，
+         「撞没撞上」由记录脚本按真值算最小间距来判，本来就不依赖物理引擎。 -->
+      <gravity>false</gravity>
+      <inertial>
+        <pose>1.35 0 0.55 0 0 0</pose>
+        <mass>1500</mass>
+        <inertia><ixx>686.25</ixx><iyy>2701.25</iyy><izz>2825</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+
+      <!-- 车身。用**整车外廓宽度** width_m 而不是 chassis_width：
+           自车模型那边取「轮距 − 轮宽」是为了调试时能看见前轮转向，
+           而这里没有转向可看，用外廓宽度让点云的宽度与真值尺寸一致 ——
+           感知的「尺寸误差」判据量的正是这个。 -->
+      <visual name="body">
+        <pose>1.35 0 0.83 0 0 0</pose>
+        <geometry><box>
+          <size>4.4 1.8 1.34</size>
+        </box></geometry>
+        <material><ambient>0.2 0.3 0.7 1</ambient><diffuse>0.2 0.3 0.7 1</diffuse></material>
+      </visual>
+      <!-- ⚠️ **没有 <collision>，这是有意的。** 见上面那段关于重力的注释的第二半。 -->
+
+      <visual name="wheel_rl">
+        <pose>0 0.775 0.31 1.57079633 0 0</pose>
+        <geometry><cylinder>
+          <radius>0.31</radius><length>0.2</length>
+        </cylinder></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+      <visual name="wheel_rr">
+        <pose>0 -0.775 0.31 1.57079633 0 0</pose>
+        <geometry><cylinder>
+          <radius>0.31</radius><length>0.2</length>
+        </cylinder></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+      <visual name="wheel_fl">
+        <pose>2.7 0.775 0.31 1.57079633 0 0</pose>
+        <geometry><cylinder>
+          <radius>0.31</radius><length>0.2</length>
+        </cylinder></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+      <visual name="wheel_fr">
+        <pose>2.7 -0.775 0.31 1.57079633 0 0</pose>
+        <geometry><cylinder>
+          <radius>0.31</radius><length>0.2</length>
+        </cylinder></geometry>
+        <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+    </link>
+
+    <!-- 驱动：订阅 gz.msgs.Twist，直接设置模型速度。
+         ⚠️ 它是**运动学**的 —— 绕过力与轮胎，指令速度立刻生效。
+            这对道具正合适：NPC 是感知的**目标**，不是被测对象。
+            真车的动力学延迟属于 ads_control 的问题，P2 已经量过了
+            （转向执行机构 τ=0.294 s），不该在这里重复一遍。
+         ⚠️ 轮子不会转（模型里根本没有转动关节）。对点云无影响 ——
+            轮子在原地也是那个形状，而感知看的是形状不是运动模糊。 -->
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/model/cross_car_c/cmd_vel</topic>
+    </plugin>
+
+    <!-- 真值：与自车的 /ego_pose_gt 走**完全相同**的插件与约定。
+         一套真值机制而不是两套，是把 actor 换成 model 的主要收益之一
+         （见 dynamic_actors.yaml 顶部）。
+         ⚠️ <tf_topic> 指向一个没人订阅的话题：这个插件默认会发
+            odom_frame → robot_base_frame 的 TF，而那会让 TF 树上多出
+            一个 map 的子节点，与自车的 base_link 重名冲突。真值只走话题。 -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>map</odom_frame>
+      <robot_base_frame>cross_car_c_base</robot_base_frame>
+      <odom_topic>/model/cross_car_c/pose_gt</odom_topic>
+      <tf_topic>/model/cross_car_c/pose_gt_tf_unused</tf_topic>
+      <dimensions>3</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+  </model>
+</sdf>

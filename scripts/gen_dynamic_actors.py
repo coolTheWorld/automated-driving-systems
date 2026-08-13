@@ -113,6 +113,53 @@ def derive_inner_loop_clockwise(loop: dict) -> list[tuple[float, float]]:
     return waypoints
 
 
+def derive_cross_road_southbound(cross: dict) -> list[tuple[float, float]]:
+    """Derive the junction-crossing route for the P7 cross-traffic convoy.
+
+    北路东行 → j_north 右转 → 横穿路南下 → j_south 左转 → 南路东行离场。
+    与 dynamic_actors.yaml 的 `cross_route` 注释同一套推导：两段转弯弧
+    分别与进出车道中心线**相切**、半径 = campus_map 的 junction.turn_radius_m。
+
+    切点闭式（与 YAML 注释一一对应）：
+      右转（东行→南行，顺时针）：圆心 (sx − r, ny − r)，
+        入切点 (sx − r, ny)，出切点 (sx, ny − r)；
+      左转（南行→东行，逆时针）：圆心 (sx + r, sy + r)，
+        入切点 (sx, sy + r)，出切点 (sx + r, sy)。
+    r=8 时四个切点都落在路口区域内（|x|≤11、到路口中心 ≤11），
+    这就是 campus_map.yaml 里 cutback ≥ turn_radius + 半车道的那条约束
+    从道具视角再现了一遍。
+
+    :param cross: dynamic_actors.yaml 的 cross_route 段
+    :return: [(x, y), ...] 世界坐标航点
+    """
+    ny = float(cross['north_lane_y_m'])
+    sx = float(cross['southbound_x_m'])
+    sy = float(cross['south_lane_y_m'])
+    r = float(cross['turn_radius_m'])
+    step_deg = int(cross['arc_step_deg'])
+    x0 = float(cross['start_x_m'])
+    x1 = float(cross['end_x_m'])
+
+    def arc(center_x: float, center_y: float, a0_deg: int, a1_deg: int):
+        step = -step_deg if a1_deg < a0_deg else step_deg
+        pts = []
+        a = a0_deg + step
+        while (step < 0 and a > a1_deg) or (step > 0 and a < a1_deg):
+            pts.append((center_x + r * math.cos(math.radians(a)),
+                        center_y + r * math.sin(math.radians(a))))
+            a += step
+        return pts
+
+    waypoints = [(x0, ny)]
+    # 右转弧：从 90°（正上方 = 入切点）顺时针扫到 0°（正右方 = 出切点）。
+    waypoints += [(sx - r, ny)] + arc(sx - r, ny - r, 90, 0) + [(sx, ny - r)]
+    # 横穿路南行直线段（两端就是两段弧的切点，不需要额外航点）。
+    # 左转弧：从 180°（正左方 = 入切点）逆时针扫到 270°（正下方 = 出切点）。
+    waypoints += [(sx, sy + r)] + arc(sx + r, sy + r, 180, 270) + [(sx + r, sy)]
+    waypoints += [(x1, sy)]
+    return waypoints
+
+
 def validate(cfg: dict, vehicle: dict) -> None:
     """Reject configurations that would silently ruin the acceptance runs.
 
@@ -130,19 +177,37 @@ def validate(cfg: dict, vehicle: dict) -> None:
     x_lo, x_hi = float(lane['valid_from_x_m']), float(lane['valid_to_x_m'])
 
     for name, actor in cfg['actors'].items():
-        if actor.get('route') == 'inner_loop_clockwise':
-            # ④ 环线航点是**推导量**：按 loop_lane 重推一遍逐点对账。
-            #    手改任何一个数（或改了 loop_lane 忘了重贴航点）都在这里被拒。
-            #    「锚定车道中心线」由此机械保证 —— 内圈车道与自车车道全程
-            #    平行、间隔 = 2×lane_offset = 3.5 m，天然不侵入，
-            #    所以直道区间/侵入两条检查对它不适用（也检查不了弯段）。
-            derived_wps = derive_inner_loop_clockwise(cfg['loop_lane'])
+        # ⑤ dwell / 相位字段的结构校验（P7-S1）。
+        #    dwell_s 与 waypoints 错位不会报错，只会让停留发生在错误的航点上，
+        #    而相位错位的症状是「判据窗口里没有激励」—— 又是绿灯不代表对。
+        dwell = actor.get('dwell_s')
+        if dwell is not None and len(dwell) != len(actor.get('waypoints', [])):
+            if actor.get('route') is None:
+                sys.exit(
+                    f'✗ {name} 的 dwell_s 长度 {len(dwell)} ≠ 航点数 '
+                    f'{len(actor.get("waypoints", []))}。两者必须逐一对应。')
+        if float(actor.get('depart_delay_s', 0.0)) < 0.0:
+            sys.exit(f'✗ {name} 的 depart_delay_s 必须 ≥ 0')
+
+        route = actor.get('route')
+        if route in ('inner_loop_clockwise', 'cross_road_southbound'):
+            # ④ 路线航点是**推导量**：按各自的参数段重推一遍逐点对账。
+            #    手改任何一个数（或改了参数段忘了重贴航点）都在这里被拒。
+            #    「锚定车道中心线」由此机械保证。
+            #    inner_loop：内圈车道与自车车道全程平行、间隔 3.5 m，天然不侵入；
+            #    cross_road_southbound：j_south 左转后**并入自车车道**（P7 的考题，
+            #    见下面 may_enter_ego_lane 的说明），直道区间/侵入两条检查
+            #    对弯段与跨路段本来也无意义，所以整条走对账不走 ①②。
+            if route == 'inner_loop_clockwise':
+                derived_wps = derive_inner_loop_clockwise(cfg['loop_lane'])
+            else:
+                derived_wps = derive_cross_road_southbound(cfg['cross_route'])
             given = [(float(x), float(y)) for x, y in actor['waypoints']]
             if len(given) != len(derived_wps):
                 sys.exit(
                     f'✗ {name} 的航点数 {len(given)} ≠ 推导值 {len(derived_wps)}。\n'
-                    f'  route: inner_loop_clockwise 的航点是推导量，'
-                    f'用 derive_inner_loop_clockwise() 重新生成后整段替换。')
+                    f'  route: {route} 的航点是推导量，'
+                    f'用对应的 derive_*() 重新生成后整段替换。')
             for i, ((gx, gy), (dx, dy)) in enumerate(zip(given, derived_wps)):
                 if abs(gx - dx) > 1e-3 or abs(gy - dy) > 1e-3:
                     sys.exit(
@@ -151,7 +216,7 @@ def validate(cfg: dict, vehicle: dict) -> None:
                         f'  这些航点锚定车道中心线，是推导量不是配置项。')
             continue
 
-        if name == 'npc_car':
+        if actor.get('classification') == 'vehicle':
             half_width = float(vehicle['geometry']['width_m']) / 2.0
         else:
             half_width = float(actor['width_m']) / 2.0
@@ -170,13 +235,23 @@ def validate(cfg: dict, vehicle: dict) -> None:
             #    侵入车道的目标会让车减速或绕行，而 P5 **不做**避让（那是 P7）。
             #    现场表现是「车莫名其妙停了」→ 所有人去查规划器，而错在场景设定。
             #    与 P3「障碍物放在车道中间几何无解」是同一类问题。
+            #
+            #    ⚠️ P7-S1 起可按 actor 用 may_enter_ego_lane: true **显式豁免**：
+            #    P7 的行为决策恰恰要消费动态语义，「侵入自车道的目标」从事故
+            #    变成考题（S03 前车、S05 横穿行人）。豁免是安全边界的显式移动，
+            #    不是删检查 —— 四个 P5/P6 场景的目标一个都没豁免，改它们的
+            #    航点仍会在这里被拒。豁免的 actor 也仍要过检查 ①（自车遇得到）。
+            if actor.get('may_enter_ego_lane', False):
+                continue
             gap_m = abs(float(wy) - ego_y) - half - half_width
             if gap_m < 0.0:
                 sys.exit(
                     f'✗ {name} 的航点 y={wy} 侵入自车车道 '
                     f'(中心 {ego_y}，半宽 {half})，外廓重叠 {-gap_m:.3f} m。\n'
                     f'  规划器会把它当障碍物 → 车会减速/绕行，而 P5 不做避让。\n'
-                    f'  症状是「车莫名其妙停了」，人会去查规划器 —— 错却在这里。')
+                    f'  症状是「车莫名其妙停了」，人会去查规划器 —— 错却在这里。\n'
+                    f'  若这是 P7 行为场景的有意设计，给该 actor 加 '
+                    f'may_enter_ego_lane: true 并写明理由。')
 
     # ③ 场景引用的目标必须存在。写错名字的话那个目标就是**静默地不出场**。
     for scen, spec in cfg['scenarios'].items():
@@ -345,13 +420,19 @@ def render_npc_car(vehicle: dict, derived: dict, name: str = 'npc_car',
 """
 
 
-def render_pedestrian(actor: dict) -> str:
-    """Render the pedestrian model — a box, deliberately.
+def render_pedestrian(actor: dict, name: str = 'pedestrian', title: str = '行人') -> str:
+    """Render a pedestrian model — a box, deliberately.
 
     为什么是盒子而不是 Gazebo 的 `<actor>`，见 dynamic_actors.yaml 顶部
     那三条实测理由（不带 skin 的 actor 会让 Gazebo segfault）。
 
-    :param actor: dynamic_actors.yaml 里 pedestrian 的定义
+    ⚠️ P7-S1 起同一个模板渲染两个行人（pedestrian / crossing_pedestrian）：
+    只有模型名与标题参数化，其余逐字节相同 —— pedestrian 的产物必须与
+    P5 基线**逐字节一致**（--check 守着），与 render_npc_car 同一条约定。
+
+    :param actor: dynamic_actors.yaml 里该行人的定义
+    :param name: 模型名（模型/link/插件话题都用它）
+    :param title: SDF 头部注释的第一个词
     :return: model.sdf 的内容
     """
     lx = float(actor['length_m'])
@@ -363,7 +444,7 @@ def render_pedestrian(actor: dict) -> str:
     return f"""<?xml version="1.0" ?>
 <!-- 由 scripts/gen_dynamic_actors.py 从 config/dynamic_actors.yaml 生成 —— **不要手改**。
 
-     行人。它是**一个盒子**，不是 Gazebo 的 <actor> —— 三条实测理由写在
+     {title}。它是**一个盒子**，不是 Gazebo 的 <actor> —— 三条实测理由写在
      config/dynamic_actors.yaml 顶部，最硬的一条是：不带 skin 的 actor 会让
      SceneBroadcaster 在发布位姿时 segfault（2026-08-11 对照实验）。
 
@@ -374,8 +455,8 @@ def render_pedestrian(actor: dict) -> str:
      ⚠️ 原点在**底面中心**（z=0），不是几何中心。与 NPC 车「原点在后轴中心
         地面」同一个精神：所有目标的原点都贴地，真值换算只有一条竖直偏移。 -->
 <sdf version="1.9">
-  <model name="pedestrian">
-    <link name="pedestrian_base">
+  <model name="{name}">
+    <link name="{name}_base">
       <!-- ⚠️ **关掉重力。** 这一条是实测逼出来的（2026-08-11 探针）：
            VelocityControl 只设置线速度，物理引擎仍在算重力与接触力，于是
              · NPC 车以 −0.0098 m/s **恒速下沉**（穿透地面，5 s 沉 5 cm）；
@@ -416,7 +497,7 @@ def render_pedestrian(actor: dict) -> str:
       </visual>
       <!-- ⚠️ **没有 <collision>，这是有意的。** 见上面那段关于重力的注释的第二半。 -->
     </link>
-{_plugins('pedestrian')}
+{_plugins(name)}
   </model>
 </sdf>
 """
@@ -469,7 +550,24 @@ def main() -> int:
             title='curve_car：P6 预测的过弯激励 —— 沿内圈车道顺时针绕整圈，永不掉头'),
         REPO / 'models' / 'curve_car' / 'model.config': render_config(
             'curve_car', 'P6 预测的动态目标：沿内圈车道绕圈的车（过弯激励，理由见 dynamic_actors.yaml）'),
+        # ---- P7 行为场景的五个道具（S1）--------------------------------------
+        REPO / 'models' / 'lead_car' / 'model.sdf': render_npc_car(
+            vehicle, derived, name='lead_car',
+            title='lead_car：S03 跟车的前车 —— 自车道内同向 3 m/s，x=70 停 12 s 再驶离'),
+        REPO / 'models' / 'lead_car' / 'model.config': render_config(
+            'lead_car', 'P7 行为场景：S03 跟车的前车（相位与瞬停语义见 dynamic_actors.yaml）'),
+        REPO / 'models' / 'crossing_pedestrian' / 'model.sdf': render_pedestrian(
+            cfg['actors']['crossing_pedestrian'], name='crossing_pedestrian',
+            title='crossing_pedestrian：S05 的横穿行人 —— 穿过自车道并在车道中央停 6 s'),
+        REPO / 'models' / 'crossing_pedestrian' / 'model.config': render_config(
+            'crossing_pedestrian', 'P7 行为场景：S05 的横穿行人（相位见 dynamic_actors.yaml）'),
     }
+    for convoy in ('cross_car_a', 'cross_car_b', 'cross_car_c'):
+        outputs[REPO / 'models' / convoy / 'model.sdf'] = render_npc_car(
+            vehicle, derived, name=convoy,
+            title=f'{convoy}：无信号路口让行的车流之一 —— 北路东行经 j_north 右转沿横穿路南下')
+        outputs[REPO / 'models' / convoy / 'model.config'] = render_config(
+            convoy, 'P7 行为场景：无信号路口的冲突车流（三辆 6 s 车头时距，见 dynamic_actors.yaml）')
 
     failed = False
     for path, content in outputs.items():

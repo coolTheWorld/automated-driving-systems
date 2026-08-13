@@ -277,10 +277,21 @@ def _dynamic_actor_specs(context) -> list[dict]:
         heading_rad = math.atan2(waypoints[1][1] - waypoints[0][1],
                                  waypoints[1][0] - waypoints[0][0])
 
+        # 停留表：dwell_s（与航点逐一对应的中途停留）+ depart_delay_s（出发相位，
+        # 加在出生点上）。合成一个数组交给 npc_controller —— 它只认一种机制。
+        # P7-S1 加；旧 actor 两个字段都没有 → 全零 → 不传（与 P5/P6 行为逐字节相同）。
+        dwell = [float(v) for v in actor.get('dwell_s', [0.0] * len(waypoints))]
+        dwell[0] += float(actor.get('depart_delay_s', 0.0))
+
         specs.append({
             'name': name,
             'waypoints': waypoints,
             'speed_mps': float(actor['speed_mps']),
+            # 走完航点是停住还是循环。P5/P6 的 actor 都没写这个键 → 默认循环
+            # （目标提前退场会让后半程判据恒真）；P7 的行为 actor 显式 false
+            # （折返会迎头撞上正在恢复的自车，或把「车流」变成永动迎面流）。
+            'loop': bool(actor.get('loop', True)),
+            'dwell_s': dwell,
             'length_m': length,
             'width_m': width,
             'height_m': height,
@@ -380,18 +391,25 @@ def _obstacle_actions(context, *args, **kwargs):
             ],
             parameters=[{'use_sim_time': True}], output='screen',
         ))
+        npc_params = {
+            'model_name': actor['name'],
+            'waypoints_x_m': [w[0] for w in actor['waypoints']],
+            'waypoints_y_m': [w[1] for w in actor['waypoints']],
+            'speed_mps': actor['speed_mps'],
+            'loop': actor['loop'],
+            # ⚠️ 用**墙钟**定时器（节点里是 create_wall_timer）——
+            #    它是仿真道具，不是算法时序，不受 SPEC §5 那条约束。
+            #    但 dwell 计时用 now()（仿真钟）：相位是对仿真时间轴设计的。
+            'use_sim_time': True,
+        }
+        # 全零就不传：空/全零数组对 npc_controller 是同一件事，而**不传**让
+        # P5/P6 场景的节点参数与基线逐字节相同（launch 层面的回归不变量）。
+        if any(v > 0.0 for v in actor['dwell_s']):
+            npc_params['dwell_s'] = actor['dwell_s']
         actions.append(Node(
             package='gazebo_bridge', executable='npc_controller',
             name=f'npc_controller_{actor["name"]}',
-            parameters=[{
-                'model_name': actor['name'],
-                'waypoints_x_m': [w[0] for w in actor['waypoints']],
-                'waypoints_y_m': [w[1] for w in actor['waypoints']],
-                'speed_mps': actor['speed_mps'],
-                # ⚠️ 用**墙钟**定时器（节点里是 create_wall_timer）——
-                #    它是仿真道具，不是算法时序，不受 SPEC §5 那条约束。
-                'use_sim_time': True,
-            }],
+            parameters=[npc_params],
             output='screen',
         ))
 
@@ -506,7 +524,9 @@ def generate_launch_description():
                          '真值始终走 /perception/obstacles_gt')),
         DeclareLaunchArgument(
             'dynamic', default_value='none',
-            description=('P5 感知场景的**动态**目标：none / oncoming / cross / both。'
+            description=('**动态**目标场景（清单以 config/dynamic_actors.yaml 的 scenarios'
+                         ' 为准）：none；P5 感知 oncoming / cross / both；P6 预测 curve；'
+                         'P7 行为 follow / crossing / junction。'
                          '**默认 none** —— 与 obstacles 同一条规矩：'
                          'CP-P2-B / CP-P3-B / CP-P4-B 三个检查点的回归基线'
                          '要求世界里没有会动的东西。两个开关**互相独立**，'

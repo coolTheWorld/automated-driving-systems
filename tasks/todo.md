@@ -20,9 +20,14 @@ P7-S0 已完成**：control 轨迹超时降级上线（`safety.trajectory_timeou
 检查在 goal_reached 之后、喂时间戳在校验之后），L3-G 注入用例
 `test_trajectory_timeout.py`（域 48）红→修→绿：注入后车把 60 m 旧轨迹跟到头
 （TRACKING→GOAL_REACHED），修复后静默 0.520 s 进 TRAJECTORY_STALE、1.54 s 刹停。
-ads_control 133 tests 全绿。**下一步 P7-S1**：三 actor 场景
-（lead_car/crossing_pedestrian/cross_traffic）+ `may_enter_ego_lane` 豁免 +
-launch 传 loop + 体检脚本；详拆见 plan.md P7-4。
+ads_control 133 tests 全绿。**P7-S1 也已完成**：五 actor 三场景
+（follow/crossing/junction）+ 豁免/对账/dwell 三注入全红 + npc_controller
+per-waypoint dwell + 四场体检全过（junction 车流走通双路口推导航线；ego 路口
+基线 GOAL_REACHED、max|lat|=0.452）。实测改掉两个错：dwell 基准是 spawn≈0.1
+不是 13（相位全体 +13）；行人中点航点要南移一个到达半径（否则停在走廊边缘
+y=−50.80）。**下一步 P7-S2**：lib/behavior（conflict/behavior_tree/longitudinal）
++ speed_profile caps 数组 + docs/modules/behavior.md 推导先行；详拆见 plan.md P7-4，
+草稿要点在会话 scratchpad behavior_md_draft.md（临时，落库为准）。
 决策记录：决策一 S06 挂 P8/L3-C；决策二 冲突窗→停车点/限速注入；
 决策三 三场景+豁免+接受瞬停；决策四 行为树自研微型；决策五 S0 顺手补（已做）。
 
