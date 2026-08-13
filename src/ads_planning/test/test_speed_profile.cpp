@@ -570,3 +570,108 @@ TEST(Lookup, TheProjectionOverloadAgreesWithTheIndexOverload)
   EXPECT_NEAR(
     profile.speed_at(projection), profile.speed_at(projection.index, projection.ratio), 1e-15);
 }
+
+// =============================================================================
+//  逐点限速 speed_caps_mps（P7-S2，CP-P7-A ④）
+//
+//  行为层的注入通道。判据两半：
+//    回归半边 —— 不起作用的 caps 下剖面与现剖面**逐点严格相等**；
+//    展开半边 —— 突降的 cap 被前后向扫描展开成闭式可解的减速/加速斜坡。
+// =============================================================================
+
+TEST(SpeedCaps, InactiveCapsLeaveTheProfileBitIdentical)
+{
+  const ReferenceLine path(MakeMixedPath(0.5));
+  const SpeedProfile baseline(path, DefaultParams());
+
+  // 空数组：连 caps 代码块都不进。
+  SpeedProfileParams with_empty = DefaultParams();
+  with_empty.speed_caps_mps = {};
+  const SpeedProfile empty_caps(path, with_empty);
+
+  // 全部高于巡航的 caps：进代码块但 min 恒取原值 —— 比"空"更强的回归声明。
+  SpeedProfileParams with_loose = DefaultParams();
+  with_loose.speed_caps_mps.assign(path.points().size(), kCruiseSpeedMps + 1.0);
+  const SpeedProfile loose_caps(path, with_loose);
+
+  for (std::size_t i = 0; i < baseline.speeds_mps().size(); ++i) {
+    // EXPECT_EQ 不是 EXPECT_NEAR：回归判据是**严格相等**（CP-P7-A ④），
+    // 差一个 ULP 都说明 caps 改变了本不该动的计算路径。
+    EXPECT_EQ(baseline.speeds_mps()[i], empty_caps.speeds_mps()[i]) << "第 " << i << " 点（空）";
+    EXPECT_EQ(baseline.speeds_mps()[i], loose_caps.speeds_mps()[i]) << "第 " << i << " 点（松）";
+  }
+}
+
+TEST(SpeedCaps, ACapExpandsIntoClosedFormRamps)
+{
+  // 100 m 直路，s ∈ [40,60] 压到 2.0。终点速度设成巡航，隔离掉末端刹车，
+  // 于是全剖面只有 cap 一个激励，三段全部闭式：
+  //   进入斜坡  v(s) = √(2² + 2·a_dec·(40 − s))   （盖不过巡航的部分）
+  //   cap 段    v = 2.0
+  //   离开斜坡  v(s) = √(2² + 2·a_acc·(s − 60))
+  std::vector<double> arc_lengths_m;
+  std::vector<double> curvatures_inv_m;
+  for (double s = 0.0; s <= 100.0 + 1e-9; s += 0.5) {
+    arc_lengths_m.push_back(s);
+    curvatures_inv_m.push_back(0.0);
+  }
+  SpeedProfileParams params = DefaultParams();
+  params.terminal_speed_mps = kCruiseSpeedMps;
+  params.speed_caps_mps.assign(arc_lengths_m.size(), kCruiseSpeedMps);
+  for (std::size_t i = 0; i < arc_lengths_m.size(); ++i) {
+    if (arc_lengths_m[i] >= 40.0 && arc_lengths_m[i] <= 60.0) {
+      params.speed_caps_mps[i] = 2.0;
+    }
+  }
+  const SpeedProfile profile(arc_lengths_m, curvatures_inv_m, params);
+
+  for (std::size_t i = 0; i < arc_lengths_m.size(); ++i) {
+    const double s = arc_lengths_m[i];
+    double expected;
+    if (s < 40.0) {
+      expected = std::min(kCruiseSpeedMps, std::sqrt(4.0 + 2.0 * kMaxDecelMps2 * (40.0 - s)));
+    } else if (s <= 60.0) {
+      expected = 2.0;
+    } else {
+      expected = std::min(kCruiseSpeedMps, std::sqrt(4.0 + 2.0 * kMaxAccelMps2 * (s - 60.0)));
+    }
+    EXPECT_NEAR(profile.speeds_mps()[i], expected, 1e-9) << "s = " << s;
+  }
+}
+
+TEST(SpeedCaps, AZeroCapIsAStopAndGoPoint)
+{
+  // 单点 cap = 0：语义是「在该点停住（可再起步）」。
+  // 前面铺减速斜坡、该点恰为 0、后面按加速斜坡爬回 ——
+  // 与 conflict 的时间标注约定一致（单点零速可有限时间穿过，见 test_conflict）。
+  std::vector<double> arc_lengths_m;
+  std::vector<double> curvatures_inv_m;
+  for (double s = 0.0; s <= 100.0 + 1e-9; s += 0.5) {
+    arc_lengths_m.push_back(s);
+    curvatures_inv_m.push_back(0.0);
+  }
+  SpeedProfileParams params = DefaultParams();
+  params.terminal_speed_mps = kCruiseSpeedMps;
+  params.speed_caps_mps.assign(arc_lengths_m.size(), kCruiseSpeedMps);
+  params.speed_caps_mps[100] = 0.0;  // s = 50
+
+  const SpeedProfile profile(arc_lengths_m, curvatures_inv_m, params);
+  EXPECT_EQ(profile.speeds_mps()[100], 0.0);
+  EXPECT_NEAR(profile.speeds_mps()[90], std::sqrt(2.0 * kMaxDecelMps2 * 5.0), 1e-9)
+    << "停点前 5 m：√(2·a_dec·5)";
+  EXPECT_NEAR(profile.speeds_mps()[110], std::sqrt(2.0 * kMaxAccelMps2 * 5.0), 1e-9)
+    << "停点后 5 m：√(2·a_acc·5)";
+}
+
+TEST(SpeedCaps, WrongLengthOrNegativeIsRejected)
+{
+  const ReferenceLine path(MakeMixedPath(0.5));
+  SpeedProfileParams short_caps = DefaultParams();
+  short_caps.speed_caps_mps = {1.0, 2.0};
+  EXPECT_THROW(SpeedProfile(path, short_caps), std::invalid_argument);
+
+  SpeedProfileParams negative = DefaultParams();
+  negative.speed_caps_mps.assign(path.points().size(), kCruiseSpeedMps);
+  negative.speed_caps_mps[3] = -0.5;
+  EXPECT_THROW(SpeedProfile(path, negative), std::invalid_argument);
+}

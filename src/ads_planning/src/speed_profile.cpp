@@ -94,6 +94,24 @@ SpeedProfile::SpeedProfile(
   }
 
   // ---------------------------------------------------------------------------
+  //  ①b 逐点上限（行为层的注入通道，P7-S2）
+  // ---------------------------------------------------------------------------
+  // 位置有讲究：在曲率限速之后（两个上限取交集）、扫描之前（突降要被展开
+  // 成可行斜坡）。空数组 = 不加，此时本段一次循环都不进，剖面与 P3 逐点相同。
+  if (!params.speed_caps_mps.empty()) {
+    if (params.speed_caps_mps.size() != count) {
+      throw std::invalid_argument(
+        "SpeedProfile: speed_caps_mps 要么为空要么与弧长数组等长，收到 " +
+        std::to_string(params.speed_caps_mps.size()) + " / " + std::to_string(count));
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      // 0 合法（= 在该点停住），负数与非有限值不合法。
+      RequireFiniteNonNegative(params.speed_caps_mps[i], kSpeedProfileParams, "speed_caps_mps[i]");
+      speeds_mps_[i] = std::min(speeds_mps_[i], params.speed_caps_mps[i]);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   //  ② 终点归零 + 后向扫描（保证「减得下来」）
   // ---------------------------------------------------------------------------
   // 依据是匀加速公式 v₂² = v₁² + 2·a·Δs。

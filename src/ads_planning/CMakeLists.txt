@@ -32,7 +32,10 @@ add_library(${PROJECT_NAME} SHARED
   src/lattice.cpp
   # P3-S4 从 ads_control 搬来：算目标速度是**规划**，跟目标速度才是控制。
   src/speed_profile.cpp
-  src/trajectory.cpp)
+  src/trajectory.cpp
+  # P7-S2 行为决策：冲突计算 + 约束合成/仲裁（行为树在 behavior_tree.hpp，header-only）。
+  src/conflict.cpp
+  src/longitudinal.cpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -127,6 +130,19 @@ if(BUILD_TESTING)
   # 不是异常分支。
   ament_add_gtest(test_trajectory test/test_trajectory.cpp)
   target_link_libraries(test_trajectory ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：时空冲突计算（P7-S2）。CP-P7-A ①⑥⑦ —— 冲突窗对匀速横穿的闭式解、
+  # STATIC 前车红线、椭圆只作用横穿类。
+  ament_add_gtest(test_conflict test/test_conflict.cpp)
+  target_link_libraries(test_conflict ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：微型行为树的 tick 语义（P7-S2）。CP-P7-A ② 的一半（短路语义）。
+  ament_add_gtest(test_behavior_tree test/test_behavior_tree.cpp)
+  target_link_libraries(test_behavior_tree ${PROJECT_NAME})
+
+  # L1：约束合成 + 行为仲裁（P7-S2）。CP-P7-A ②（滞回半边）③⑤。
+  ament_add_gtest(test_longitudinal test/test_longitudinal.cpp)
+  target_link_libraries(test_longitudinal ${PROJECT_NAME} ads_common::ads_common)
 
   # 机械校验：libads_planning.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。
