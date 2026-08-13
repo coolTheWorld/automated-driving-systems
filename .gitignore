@@ -38,3 +38,6 @@ __pycache__/
 
 # P7-S4 验收编排的临时工作目录（容器侧要用，不入库）
 .p7s4/
+
+# L3 全场景一键跑的过程产物（metrics/history.csv 入库，过程 CSV/日志不入）
+.scenario_runs/

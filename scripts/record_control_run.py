@@ -250,6 +250,9 @@ def main() -> int:
                         help='仿真起来多久之后再发目标点')
     parser.add_argument('--timeout-s', type=float, default=180.0)
     parser.add_argument('--out', default='/tmp/control_run.csv')
+    # metrics 台账（SPEC §8 L4 的指标曲线数据落点；不给就不写，行为不变）。
+    parser.add_argument('--metrics-out', default=None)
+    parser.add_argument('--metrics-scenario', default='S01_S02_S07')
     args = parser.parse_args()
 
     rclpy.init()
@@ -278,6 +281,9 @@ def main() -> int:
           f'末态 {summary["final_state"]}，稳态样本 {summary["steady_samples"]} 拍')
     print(f'{"项":<26}{"实测":>12}{"判据":>10}  结果')
     failures = 0
+    # 同目录直跑时 sys.path[0] 就是 scripts/，普通 import 即可。
+    from metrics_lib import MetricsWriter
+    metrics = MetricsWriter(args.metrics_out, scenario=args.metrics_scenario)
     for key, (limit, unit, note) in CRITERIA.items():
         value = summary.get(key, math.nan)
         # 相对 1e-6 的容差：CSV 存的是 %.9g，时间戳还有量化误差，
@@ -287,7 +293,9 @@ def main() -> int:
         ok = value <= limit * (1.0 + 1e-6)
         failures += 0 if ok else 1
         mark = 'PASS' if ok else 'FAIL'
+        metrics.add(key, f'{value:.6g}', limit, mark)
         print(f'{key:<26}{value:>12.4f}{limit:>10.3f}  {mark}  {unit} {note}')
+    metrics.flush()
     print(f'\n{"全部通过" if failures == 0 else f"{failures} 项未通过"}')
     return 0 if failures == 0 else 2
 

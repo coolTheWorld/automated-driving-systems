@@ -457,6 +457,8 @@ def main() -> int:
     parser.add_argument('--goal-delay-s', type=float, default=8.0)
     parser.add_argument('--timeout-s', type=float, default=120.0)
     parser.add_argument('--out', default='/tmp/obstacle_run.csv')
+    # metrics 台账（SPEC §8 L4；不给就不写，行为不变）。
+    parser.add_argument('--metrics-out', default=None)
     args = parser.parse_args()
 
     rclpy.init()
@@ -491,8 +493,12 @@ def main() -> int:
     print('\n===== CP-P3-B 场景「%s」（%d 拍）=====' % (args.scenario, len(recorder.rows)))
     print('CSV: %s' % args.out)
     print('%-30s %10s %12s  %s' % ('项', '实测', '判据', '结果'))
+    from metrics_lib import MetricsWriter
+    metrics = MetricsWriter(args.metrics_out, scenario='S04_' + args.scenario)
     for name, value, limit, verdict, note in lines:
+        metrics.add(name, value, limit, verdict)
         print('%-30s %10s %12s  %s  %s' % (name, value, limit, verdict, note))
+    metrics.flush()
     print('\n%s' % ('全部通过' if passed else '**有判据未通过**'))
     return 0 if passed else 1
 

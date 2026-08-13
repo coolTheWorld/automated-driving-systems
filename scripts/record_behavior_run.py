@@ -298,14 +298,18 @@ def behavior_transitions(rows):
     return switches, seq
 
 
-def check_table(checks):
-    """打印判据表，返回是否全过。"""
+def check_table(checks, metrics=None):
+    """打印判据表（并顺带落 metrics 台账），返回是否全过。"""
     print('\n===== CP-P7-B 判据 =====')
     all_ok = True
     for name, value, ok, limit, note in checks:
         flag = '✅' if ok else '❌'
         all_ok = all_ok and ok
+        if metrics is not None:
+            metrics.add(name, value, limit, ok)
         print(f'  {flag} {name:<28} {value:<24} 判据 {limit}  {note}')
+    if metrics is not None:
+        metrics.flush()
     return all_ok
 
 
@@ -474,7 +478,10 @@ def score(recorder, args):
         checks.append(('⑨ 行为状态切换次数', f'{switches}（{ "→".join(seq[:10]) }）',
                        switches <= 4, '≤ 4 次', ''))
 
-    return 0 if check_table(checks) else 1
+    from metrics_lib import MetricsWriter
+    metrics = MetricsWriter(
+        getattr(args, 'metrics_out', None), scenario=args.scenario, layer=args.layer)
+    return 0 if check_table(checks, metrics) else 1
 
 
 def main():
@@ -484,6 +491,8 @@ def main():
     parser.add_argument('--layer', required=True, choices=['truth', 'perception'])
     parser.add_argument('--duration-s', type=float, default=100.0)
     parser.add_argument('--out', required=True)
+    # metrics 台账（SPEC §8 L4；不给就不写，行为不变）。
+    parser.add_argument('--metrics-out', default=None)
     args = parser.parse_args()
 
     rclpy.init()

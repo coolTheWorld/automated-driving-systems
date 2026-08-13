@@ -221,7 +221,7 @@ class PredictionScorer(Node):
     # -----------------------------------------------------------------------
     #  离线打分（记录结束后一次算完 —— 要用"未来"的真值，只能事后）
     # -----------------------------------------------------------------------
-    def score(self, out_path, layer='truth'):
+    def score(self, out_path, layer='truth', metrics_out=None):
         """打 CP-P6-B 的表；返回全过与否.
 
         layer='perception' 时 ①② 判 **FDE 的横向分量**（阈值不变：0.6/1.5
@@ -351,10 +351,14 @@ class PredictionScorer(Node):
         print(f'\n===== CP-P6-B 预测实测（{len(samples)} 组 min-FDE 样本，'
               f'判据带 [{CRITERION_MIN_RANGE_M:.0f},{CRITERION_MAX_RANGE_M:.0f}] m）=====')
 
+        from metrics_lib import MetricsWriter
+        metrics = MetricsWriter(metrics_out, scenario='regression_p6', layer=layer)
+
         def check(label, value, limit, extra=''):
             nonlocal ok
             good = value < limit
             ok = ok and good
+            metrics.add(label, f'{value:.6g}', limit, good)
             print(f'{label:<38}{value:>9.3f}   < {limit:<6} '
                   f'{"PASS" if good else "FAIL"}  {extra}')
 
@@ -452,6 +456,7 @@ class PredictionScorer(Node):
             print(f'（参考）弯窗内退恒速样本 FDE@3s p95 = {pct(cv_corner, 0.95):.3f}，'
                   f'n={len(cv_corner)} —— 输入方向滞后所致，照印不判')
 
+        metrics.flush()
         print('\n全部通过' if ok else '\n有判据未通过')
         return ok
 
@@ -461,6 +466,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--duration-s', type=float, default=72.0)
     parser.add_argument('--out', default='/tmp/p6_prediction.csv')
+    # metrics 台账（SPEC §8 L4；不给就不写，行为不变）。
+    parser.add_argument('--metrics-out', default=None)
     parser.add_argument('--layer', choices=('truth', 'perception'), default='truth',
                         help='双层协议的层：perception 时 ①② 判横向分量（见 score）')
     args = parser.parse_args()
@@ -470,7 +477,7 @@ def main() -> int:
     deadline = time.monotonic() + args.duration_s
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.05)
-    ok = node.score(args.out, layer=args.layer)
+    ok = node.score(args.out, layer=args.layer, metrics_out=args.metrics_out)
     node.destroy_node()
     rclpy.shutdown()
     return 0 if ok else 1
