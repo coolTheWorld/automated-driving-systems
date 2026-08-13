@@ -98,8 +98,8 @@ public:
 
     // 航点由 launch 从 config/dynamic_actors.yaml 搬运。这里一个坐标都不写死 ——
     // 与 control_node / obstacle_truth 同一条规矩。
-    const auto xs = declare_parameter<std::vector<double>>("waypoints_x_m", {});
-    const auto ys = declare_parameter<std::vector<double>>("waypoints_y_m", {});
+    const auto xs = declare_parameter<std::vector<double>>("waypoints_x_m", std::vector<double>{});
+    const auto ys = declare_parameter<std::vector<double>>("waypoints_y_m", std::vector<double>{});
     if (xs.size() != ys.size() || xs.size() < 2) {
       throw std::invalid_argument(
         "npc_controller: waypoints_x_m / waypoints_y_m 长度必须相等且 ≥ 2，收到 " +
@@ -129,7 +129,13 @@ public:
     //      变成宽容 ±4 s 抖动的必然事件（curve_car 相位调过三次的教训）。
     // ⚠️ 用**仿真钟**计时（now()，本节点 use_sim_time=true）：相位是对
     //    仿真时间轴设计的，墙钟计时在 RTF≠1 时整个错位。
-    const auto dwell = declare_parameter<std::vector<double>>("dwell_s", {});
+    // ⚠️ 默认值必须写 std::vector<double>{}，**不能写 {}**（S4 回归抽轮抓住的）：
+    //    {} 被 rclcpp 解释成 ParameterValue{}（NOT_SET）而不是空数组，launch
+    //    不传本参数时节点直接 FATAL「must be initialized」—— P5/P6 场景恰恰
+    //    不传（全零不传的"优化"），于是它们的道具从 P7-S1 起全部瘫痪，而
+    //    P7 场景都传了参数、从没暴露。上面 waypoints 的同款写法从没炸过，
+    //    只因 launch 总是传它 —— 「从没吃过默认值的默认值」等于没测过。
+    const auto dwell = declare_parameter<std::vector<double>>("dwell_s", std::vector<double>{});
     if (!dwell.empty() && dwell.size() != waypoints_.size()) {
       throw std::invalid_argument(
         "npc_controller: dwell_s 要么为空要么与 waypoints 等长，收到 " +

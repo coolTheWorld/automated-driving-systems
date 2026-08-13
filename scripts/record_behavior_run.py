@@ -190,6 +190,7 @@ class BehaviorRecorder(Node):
         values = {kv.key: kv.value for kv in msg.status[0].values}
         self.behavior_state = values.get('behavior_state', self.behavior_state)
         self.crossing_ids = values.get('behavior_crossing_ids', getattr(self, 'crossing_ids', '-'))
+        self.follow_id = values.get('behavior_follow_id', getattr(self, 'follow_id', '-'))
 
     def _on_control(self, msg):
         values = {kv.key: kv.value for kv in msg.status[0].values}
@@ -226,6 +227,7 @@ class BehaviorRecorder(Node):
                'ctrl_v': self.control_v,
                'perc_near_x': self._nearest_perception_edge_x(),
                'crossing_ids': getattr(self, 'crossing_ids', '-'),
+               'follow_id': getattr(self, 'follow_id', '-'),
                'perc_count': len(self.perception_obstacles),
                'perc_full': ';'.join(
                    f'{i}:{v[0]:.1f}:{v[1]:.1f}:{v[2]:.1f}:{v[3]:.1f}:{v[4]:.2f}:{v[5]}'
