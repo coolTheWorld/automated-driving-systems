@@ -105,9 +105,19 @@ std::optional<FollowConflict> find_follow_conflict(
   const ReferenceLine & line, double ego_s_m, const std::vector<TargetBox> & targets,
   const BehaviorParams & params)
 {
+  const std::size_t last_segment = line.points().size() - 2;
   std::optional<FollowConflict> nearest;
   for (const TargetBox & target : targets) {
     const auto projection = line.project(Pose2D{target.center_x_m, target.center_y_m, 0.0});
+    // **驶出路线末端的目标不是前车**（S4 junction 实测咬到的，正是
+    // reference_line 文件头交代过的投影 clamp 陷阱在行为层的落点）：
+    // 车流离开 ego 路线后投影被夹到末端，横向误差随夹取失义，近边 s 冻结在
+    // 末端 —— 行为层把它当成「路线尽头的静止前车」，实测 ego 在离终点
+    // 9.75 m（= front_offset + stand_off + 半车长的 clamp 折算）处趴住不走。
+    // 末端 clamp 的判据照抄该文件头：ratio == 1 且落在最后一段。
+    if (projection.index >= last_segment && projection.ratio >= 1.0 - 1e-9) {
+      continue;
+    }
     // **阻挡判据**（不是「在走廊里」）：目标的横向区间必须与每一个横向
     // 候选都冲突（t_lo ≤ B 且 t_hi ≥ −B），可绕的贴边障碍物归 lattice 管。
     // 判据结构见 blocking_half_m 的注释与 behavior.md §2.1。
@@ -139,8 +149,14 @@ std::vector<CrossingConflict> find_crossing_conflicts(
     // 逐点投影，聚成时空包络。假设的点本来就按 t 递增，包络取 min/max 即可。
     bool any = false;
     CrossingConflict window{hypothesis.obstacle_id, kInf, -kInf, kInf, -kInf};
+    const std::size_t last_segment = line.points().size() - 2;
     for (const PredictedPoint & point : hypothesis.points) {
       const auto projection = line.project(Pose2D{point.x_m, point.y_m, 0.0});
+      // 与 find_follow_conflict 同一条：夹到路线末端的预测点不构成冲突
+      // （横向误差在 clamp 后失义，会在末端捏出一个假冲突窗）。
+      if (projection.index >= last_segment && projection.ratio >= 1.0 - 1e-9) {
+        continue;
+      }
       const double inflated_half_m = params.corridor_half_m + 2.0 * point.sigma_cross_m;
       if (std::abs(projection.lateral_error_m) > inflated_half_m) {
         continue;

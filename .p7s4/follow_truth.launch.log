@@ -1,0 +1,134 @@
+[INFO] [launch]: All log files can be found below /home/dev/.ros/log/2026-08-13-07-56-29-866614-suns-92923
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [gz-1]: process started with pid [92927]
+[INFO] [parameter_bridge-2]: process started with pid [92928]
+[INFO] [lidar_preprocessor-3]: process started with pid [92929]
+[INFO] [vehicle_cmd_bridge-4]: process started with pid [92930]
+[INFO] [robot_state_publisher-5]: process started with pid [92931]
+[INFO] [static_transform_publisher-6]: process started with pid [92932]
+[INFO] [create-7]: process started with pid [92933]
+[INFO] [parameter_bridge-8]: process started with pid [92934]
+[INFO] [npc_controller-9]: process started with pid [92935]
+[INFO] [obstacle_truth-10]: process started with pid [92936]
+[INFO] [prediction_node-11]: process started with pid [92937]
+[INFO] [map_node-12]: process started with pid [92938]
+[INFO] [planning_node-13]: process started with pid [92939]
+[INFO] [control_node-14]: process started with pid [92942]
+[vehicle_cmd_bridge-4] [INFO] [1786607790.198645140] [vehicle_cmd_bridge]: 指令桥接已启动：/vehicle_cmd → /gazebo/cmd_vel  轴距 2.700 m  最大转角 0.600 rad  限速 8.33 m/s
+[obstacle_truth-10] [INFO] [1786607790.211702258] [obstacle_truth]: 障碍物真值发布器已启动：0 个静态障碍物 + 1 个动态目标，10.0 Hz，frame_id = map，同时发 /perception/obstacles
+[create-7] [INFO] [1786607790.242212103] [spawn_lead_car]: Requesting list of world names.
+[lidar_preprocessor-3] [INFO] [1786607790.251303351] [lidar_preprocessor]: 点云预处理已启动：/gazebo/lidar/points_raw → /lidar/points（目标系 base_link）
+[lidar_preprocessor-3] [INFO] [1786607790.251429966] [lidar_preprocessor]: 自车包围盒 x[-0.85, 3.55] y[-0.90, 0.90] z[0.00, 1.50]  余量 0.050 m
+[static_transform_publisher-6] [INFO] [1786607790.268147140] [map_to_odom_static]: Spinning until stopped - publishing transform
+[static_transform_publisher-6] translation: ('30.000000', '-51.750000', '0.000000')
+[static_transform_publisher-6] rotation: ('0.000000', '0.000000', '0.000000', '1.000000')
+[static_transform_publisher-6] from 'map' to 'odom'
+[robot_state_publisher-5] [WARN] [1786607790.292378537] [kdl_parser]: The root link base_link has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[robot_state_publisher-5] [INFO] [1786607790.293174127] [robot_state_publisher]: Robot initialized
+[control_node-14] [INFO] [1786607790.304800521] [control_node]: control_node 就绪：50.0 Hz，轴距 2.700 m，k_e=1.00，k_soft=0.50，K_p=1.00，K_i=0.00
+[npc_controller-9] [INFO] [1786607790.305734378] [npc_controller_lead_car]: NPC 控制器就绪：模型 lead_car，3 个航点，3.00 m/s
+[planning_node-13] [INFO] [1786607790.313091582] [planning_node]: planning_node 已启动：10.0 Hz，前视 10.0–30.0 m，横向 ±0.85 m
+[map_node-12] [INFO] [1786607790.320785329] [map_node]: 地图已加载：/workspace/install/ads_map/share/ads_map/maps/campus.xodr（18 条��道，24 条连接）
+[parameter_bridge-8] [INFO] [1786607790.335418307] [bridge_lead_car]: Creating GZ->ROS Bridge: [/model/lead_car/pose_gt (gz.msgs.Odometry) -> /model/lead_car/pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1786607790.342559259] [bridge_lead_car]: Creating ROS->GZ Bridge: [/model/lead_car/cmd_vel (geometry_msgs/msg/Twist) -> /model/lead_car/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[map_node-12] [INFO] [1786607790.342601306] [map_node]: 车道图已发布到 /map/lane_graph，等待 /goal_pose
+[prediction_node-11] [INFO] [1786607790.342879043] [prediction_node]: 预测节点就绪：视界 3.0 s、步长 0.2 s、地图 /workspace/install/ads_map/share/ads_map/maps/campus.xodr
+[parameter_bridge-8] [INFO] [1786607790.493761104] [bridge_lead_car]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="lidar"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L59]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="imu"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L104]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="navsat"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L178]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[create-7] [INFO] [1786607791.229198492] [spawn_lead_car]: Entity creation successful.
+[parameter_bridge-2] [INFO] [1786607791.323623382] [gazebo_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.326992985] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/lidar/points (gz.msgs.PointCloudPacked) -> /gazebo/lidar/points_raw (sensor_msgs/msg/PointCloud2)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.331550091] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/imu (gz.msgs.IMU) -> /imu (sensor_msgs/msg/Imu)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.333636853] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/navsat (gz.msgs.NavSat) -> /gnss (sensor_msgs/msg/NavSatFix)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.335455576] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/odometry (gz.msgs.Odometry) -> /odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.339167894] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/pose_gt (gz.msgs.Odometry) -> /ego_pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.340805440] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/tf (gz.msgs.Pose_V) -> /tf (tf2_msgs/msg/TFMessage)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.345120366] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/joint_state (gz.msgs.Model) -> /joint_states (sensor_msgs/msg/JointState)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786607791.347341807] [gazebo_bridge]: Creating ROS->GZ Bridge: [/gazebo/cmd_vel (geometry_msgs/msg/Twist) -> /model/ego_vehicle/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[INFO] [create-7]: process has finished cleanly [pid 92933]
+[gz-1] Dropped Escape call with ulEscapeCode : 0x03007703
+[gz-1] Dropped Escape call with ulEscapeCode : 0x03007703
+[parameter_bridge-2] [INFO] [1786607793.947662091] [gazebo_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[npc_controller-9] [INFO] [1786607793.955821818] [npc_controller_lead_car]: lead_car 在航点 #0 停留 39.0 s
+[control_node-14] [WARN] [1786607795.950407044] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607798.000619561] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607800.045279045] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607802.108353584] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607804.161073798] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786607804.194242181] [lidar_preprocessor]: 点云 57600 → 41462（自车 0，无效 16138），耗时 1.8 ms
+[control_node-14] [WARN] [1786607806.240036125] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607808.289449572] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607810.340915699] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607812.422205971] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607814.501821071] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786607814.632254868] [lidar_preprocessor]: 点云 57600 → 41462（自车 0，无效 16138），耗时 1.0 ms
+[control_node-14] [WARN] [1786607816.580104232] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607818.620634726] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607820.663508628] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607822.756481234] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607824.791240836] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786607825.031497218] [lidar_preprocessor]: 点云 57600 → 41462（自车 0，无效 16138），耗时 1.1 ms
+[control_node-14] [WARN] [1786607826.839380469] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607828.975620869] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-14] [WARN] [1786607831.027276596] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[map_node-12] [INFO] [1786607832.051114325] [map_node]: 路径已发布：1 段车道、251 个点、127.60 m，耗时 0.89 ms
+[planning_node-13] [INFO] [1786607832.051469886] [planning_node]: 收到参考线：251 个点，127.6 m
+[control_node-14] [INFO] [1786607832.155943994] [control_node]: 轨迹起点跳变 inf m（阈值 2.00），重置最近点提示与速度环积分
+[control_node-14] [WARN] [1786607832.155988868] [control_node]: 规划器报告前方绕不过去，按停车轨迹执行
+[map_node-12] [INFO] [1786607833.103811015] [map_node]: 路径已发布：1 段车道、250 个点、127.07 m，耗时 0.58 ms
+[planning_node-13] [INFO] [1786607833.103936018] [planning_node]: 收到参考线：250 个点，127.1 m
+[map_node-12] [INFO] [1786607834.146941604] [map_node]: 路径已发布：1 段车道、246 个点、125.19 m，耗时 0.54 ms
+[planning_node-13] [INFO] [1786607834.147925515] [planning_node]: 收到参考线：246 个点，125.2 m
+[npc_controller-9] [INFO] [1786607834.205817295] [npc_controller_lead_car]: lead_car 停留结束，继续（航点 #0 → #1）
+[map_node-12] [INFO] [1786607835.180643322] [map_node]: 路径已发布：1 段车道、243 个点、123.28 m，耗时 0.59 ms
+[planning_node-13] [INFO] [1786607835.180705318] [planning_node]: 收到参考线：243 个点，123.3 m
+[lidar_preprocessor-3] [INFO] [1786607835.549004394] [lidar_preprocessor]: 点云 57600 → 41482（自车 0，无效 16118），耗时 1.2 ms
+[map_node-12] [INFO] [1786607836.244211966] [map_node]: 路径已发布：1 段车道、238 个点、121.16 m，耗时 0.74 ms
+[planning_node-13] [INFO] [1786607836.244311426] [planning_node]: 收到参考线：238 个点，121.2 m
+[map_node-12] [INFO] [1786607837.271627599] [map_node]: 路径已发布：1 段车道、232 个点、118.11 m，耗时 0.53 ms
+[planning_node-13] [INFO] [1786607837.271882853] [planning_node]: 收到参考线：232 个点，118.1 m
+[map_node-12] [INFO] [1786607838.309393555] [map_node]: 路径已发布：1 段车道、225 个点、114.67 m，耗时 0.66 ms
+[planning_node-13] [INFO] [1786607838.309757305] [planning_node]: 收到参考线：225 个点，114.7 m
+[map_node-12] [INFO] [1786607839.376999581] [map_node]: 路径已发布：1 段车道、220 个点、111.91 m，耗时 0.82 ms
+[planning_node-13] [INFO] [1786607839.377088096] [planning_node]: 收到参考线：220 个点，111.9 m
+[map_node-12] [INFO] [1786607840.480918360] [map_node]: 路径已发布：1 段车道、214 个点、108.99 m，耗时 0.85 ms
+[planning_node-13] [INFO] [1786607840.480995684] [planning_node]: 收到参考线：214 个点，109.0 m
+[map_node-12] [INFO] [1786607841.557590918] [map_node]: 路径已发布：1 段车道、208 个点、105.79 m，耗时 0.85 ms
+[planning_node-13] [INFO] [1786607841.557700231] [planning_node]: 收到参考线：208 个点，105.8 m
+[map_node-12] [INFO] [1786607842.657241568] [map_node]: 路径已发布：1 段车道、202 个点、103.03 m，耗时 0.57 ms
+[planning_node-13] [INFO] [1786607842.657332257] [planning_node]: 收到参考线：202 个点，103.0 m
+[npc_controller-9] [INFO] [1786607842.755840589] [npc_controller_lead_car]: lead_car 在航点 #1 停留 12.0 s
+[control_node-14] [INFO] [1786607845.470989432] [control_node]: 已到达终点附近（剩余 0.493 m ≤ 0.500 m），目标速度归零
+[lidar_preprocessor-3] [INFO] [1786607846.250332954] [lidar_preprocessor]: 点云 57600 → 41139（自车 0，无效 16461），耗时 1.0 ms
+[npc_controller-9] [INFO] [1786607855.455848508] [npc_controller_lead_car]: lead_car 停留结束，继续（航点 #1 → #2）
+[lidar_preprocessor-3] [INFO] [1786607856.790404044] [lidar_preprocessor]: 点云 57600 → 41060（自车 0，无效 16540），耗时 1.0 ms
+[lidar_preprocessor-3] [INFO] [1786607867.182326661] [lidar_preprocessor]: 点云 57600 → 41332（自车 0，无效 16268），耗时 1.1 ms
+[npc_controller-9] [INFO] [1786607867.455832450] [npc_controller_lead_car]: lead_car 已走完全部航点，停住
+[lidar_preprocessor-3] [INFO] [1786607877.461490386] [lidar_preprocessor]: 点云 57600 → 44886（自车 0，无效 12714），耗时 1.2 ms
+[lidar_preprocessor-3] [INFO] [1786607887.818405131] [lidar_preprocessor]: 点云 57600 → 43842（自车 0，无效 13758），耗时 1.6 ms
+[control_node-14] [INFO] [1786607896.650545542] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planning_node-13] [INFO] [1786607896.650553620] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[map_node-12] [INFO] [1786607896.651012350] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[prediction_node-11] [INFO] [1786607896.652585239] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[obstacle_truth-10] [INFO] [1786607896.652618682] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[npc_controller-9] [INFO] [1786607896.652655887] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[static_transform_publisher-6] [INFO] [1786607896.652757980] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[robot_state_publisher-5] [INFO] [1786607896.652768109] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[vehicle_cmd_bridge-4] [INFO] [1786607896.653001603] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[lidar_preprocessor-3] [INFO] [1786607896.653079074] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-2] [INFO] [1786607896.653215381] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-8] [INFO] [1786607896.653637703] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[INFO] [vehicle_cmd_bridge-4]: process has finished cleanly [pid 92930]
+[INFO] [parameter_bridge-2]: process has finished cleanly [pid 92928]
+[INFO] [parameter_bridge-8]: process has finished cleanly [pid 92934]
+[INFO] [robot_state_publisher-5]: process has finished cleanly [pid 92931]
+[INFO] [control_node-14]: process has finished cleanly [pid 92942]
+[INFO] [npc_controller-9]: process has finished cleanly [pid 92935]
+[INFO] [obstacle_truth-10]: process has finished cleanly [pid 92936]
+[INFO] [lidar_preprocessor-3]: process has finished cleanly [pid 92929]
+[INFO] [static_transform_publisher-6]: process has finished cleanly [pid 92932]
+[INFO] [prediction_node-11]: process has finished cleanly [pid 92937]
+[INFO] [map_node-12]: process has finished cleanly [pid 92938]
+[INFO] [planning_node-13]: process has finished cleanly [pid 92939]

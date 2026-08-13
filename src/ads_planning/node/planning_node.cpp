@@ -251,12 +251,22 @@ private:
            obstacle.size_m.y});
       }
     }
-    // 预测 → 假设（**全部**给进去，多假设按任一冲突合成 —— 事实 11；
+    // 预测 → 假设（多假设按任一冲突合成 —— 事实 11；
     // 概率与 existence 都不进安全判定，所以这里根本不搬运它们）。
+    //
+    // ⚠️ **STATIC 模型的假设不进横穿判定**（S4 实测改的）：STATIC 没有运动
+    //    方向，它的威胁是**位置性的** —— 归阻挡判定（FOLLOW）与 lattice 的
+    //    静态准入管，两条路都已存在。放进横穿判定的后果是起步律椭圆
+    //    （2σ(3s)=13.9 m）把**路侧静物**变成永久让行：层 2 里每一根杆件、
+    //    每一面墙都会让车停下，且 S05 实测行人穿完站在路肩时还拖着一个
+    //    尾巴 YIELD（⑨ 数到 5 次的元凶之一）。
     std::vector<PredictionHypothesis> hypotheses;
     if (predictions_) {
       hypotheses.reserve(predictions_->trajectories.size());
       for (const auto & trajectory : predictions_->trajectories) {
+        if (trajectory.model == ads_msgs::msg::PredictedTrajectory::MODEL_STATIC) {
+          continue;
+        }
         PredictionHypothesis hypothesis;
         hypothesis.obstacle_id = trajectory.obstacle_id;
         hypothesis.points.reserve(trajectory.points.size());

@@ -65,7 +65,7 @@ BehaviorParams MakeParams()
   params.corridor_half_m = 1.75;
   params.blocking_half_m = 0.55;  // = 0.9 + 0.5 − 0.85（推导量，见 conflict.hpp）
   params.stand_off_m = 4.0;
-  params.yield_margin_m = 2.0;
+  params.yield_margin_m = 4.0;  // S4 实测从 2.0 上调：让行点也要停在盲区外
   params.time_margin_s = 1.0;
   params.front_offset_m = 3.55;
   return params;
@@ -235,8 +235,13 @@ TEST(CrossingConflict, WindowMatchesClosedFormExactly)
 
 TEST(CrossingConflict, StaticHypothesisInCorridorAlwaysConflicts)
 {
-  // STATIC 假设的点在所有 t 上是同一个位置：站在走廊里 ⟹ t 窗 = [0, 视界]，
-  // 与任何能到达那里的 ego 都重叠。「横穿行人首秒只有 STATIC」由此天然覆盖。
+  // lib 层的机制事实：点不动的假设站在走廊里 ⟹ t 窗 = [0, 视界]，恒重叠。
+  //
+  // ⚠️ **系统层面 STATIC 模型不走这条路**（S4 实测改的，见 planning_node 的
+  //    过滤与 behavior.md §2.2）：STATIC 的威胁是位置性的，归阻挡/准入管；
+  //    起步律椭圆进横穿判定会把路侧静物变成永久让行。本用例保留是因为
+  //    lib 不认识「模型」—— 它钉住的是**机制**（恒定假设的窗口语义），
+  //    过滤是 node 的职责，两层各测各的。
   const auto line = MakeStraightLine(60.0, 0.5);
   std::vector<double> s, v;
   for (double x = 0.0; x <= 60.0 + 1e-9; x += 0.5) {
@@ -291,4 +296,32 @@ int main(int argc, char ** argv)
 {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+TEST(FollowConflict, TargetBeyondTheRouteEndIsNotALead)
+{
+  // S4 junction 实测咬到的：车流驶出 ego 路线后投影被夹到末端，
+  // 行为层把它当成「路线尽头的静止前车」，ego 在离终点 9.75 m 处趴住。
+  // 陷阱表「投影越过路径末点后被夹到端点」的行为层落点 —— 用例钉死排除。
+  const auto line = MakeStraightLine(60.0, 0.5);
+  // 路线只到 x=60；目标在 (80, 0.3) —— 路线之外的世界里，不是前车。
+  const std::vector<TargetBox> beyond{{31u, 80.0, 0.3, 4.4, 1.8}};
+  EXPECT_FALSE(find_follow_conflict(line, 30.0, beyond, MakeParams()).has_value());
+  // 对照：同样的目标放在路线内（x=50）就是前车。
+  const std::vector<TargetBox> inside{{32u, 50.0, 0.3, 4.4, 1.8}};
+  EXPECT_TRUE(find_follow_conflict(line, 30.0, inside, MakeParams()).has_value());
+}
+
+TEST(CrossingConflict, PredictionBeyondTheRouteEndIsNotAConflict)
+{
+  // 同上，横穿半边：驶出路线末端的预测点不许在末端捏出假冲突窗。
+  const auto line = MakeStraightLine(60.0, 0.5);
+  std::vector<double> s, v;
+  for (double x = 0.0; x <= 60.0 + 1e-9; x += 0.5) {
+    s.push_back(x);
+    v.push_back(5.0);
+  }
+  const auto t = annotate_times(s, v);
+  const std::vector<PredictionHypothesis> hyp{MakeCrossing(33u, 80.0, 0.0, 0.0, 0.25, 3.0, 0.0)};
+  EXPECT_TRUE(find_crossing_conflicts(line, 30.0, s, v, t, hyp, MakeParams()).empty());
 }

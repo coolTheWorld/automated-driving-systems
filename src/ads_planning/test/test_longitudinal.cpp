@@ -64,7 +64,7 @@ BehaviorParams MakeParams()
   params.corridor_half_m = 1.75;
   params.blocking_half_m = 0.55;  // = 0.9 + 0.5 − 0.85（推导量，见 conflict.hpp）
   params.stand_off_m = 4.0;
-  params.yield_margin_m = 2.0;
+  params.yield_margin_m = 4.0;  // S4 实测从 2.0 上调：让行点也要停在盲区外
   params.time_margin_s = 1.0;
   params.front_offset_m = 3.55;
   return params;
@@ -273,7 +273,7 @@ TEST(BehaviorArbiter, YieldLabelForCrossingOnly)
   EXPECT_FALSE(decision.follow.has_value());
   ASSERT_EQ(decision.crossings.size(), 1u);
   ASSERT_TRUE(decision.constraint.stop_at_s_m.has_value());
-  EXPECT_NEAR(*decision.constraint.stop_at_s_m, 60.0 - 3.55 - 2.0, 1e-9)
+  EXPECT_NEAR(*decision.constraint.stop_at_s_m, 60.0 - 3.55 - 4.0, 1e-9)
     << "让行停车点 = 冲突区入口 − front_offset − yield_margin";
 }
 
