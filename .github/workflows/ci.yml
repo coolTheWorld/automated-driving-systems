@@ -12,7 +12,9 @@
 #  生成物同步检查。这四项覆盖了绝大多数回归，且全程分钟级。
 #
 #  CLAUDE.md 说的「本地 Gazebo 能进 CI 是双环境方案最被低估的收益」已经兑现：
-#  六个 launch 测试（四个 L3-G 闭环 + 两个行为测试）都在这里跑。
+#  九个 launch 测试（六个 L3-G 闭环 + 三个行为/看门狗测试）都在这里跑
+#  （P8-S1 补全 P6/P7 的三个，守卫清单同步）。真 Gazebo 的 L3 场景在
+#  scripts/run_all_scenarios.sh（本地一键，需要 GPU —— P8 决策二）。
 #  CARLA 永远进不了 CI（要 GPU、20 GB 镜像、跑不确定）。
 #
 #  ## 为什么用项目自己的 Dockerfile 而不是 action-ros-ci 之类的社区 action
@@ -114,8 +116,16 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
             ads-dev:jazzy \
             python3 scripts/gen_obstacles.py --check
-            # 第四个生成器（P5 动态目标模型）。自称"CI 用"却漏接，直到
-            # 2026-08-12 复检 —— npc/行人模型漂移会静默改变 P5 判据的被测场景。
+
+      # 第四个生成器（P5/P7 动态目标模型）。两次踩坑史：自称"CI 用"却漏接
+      # （2026-08-12 复检补上）；补上时 YAML 缩进错位，命令实际跑在 **runner
+      # 宿主**而不是容器里 —— 恰是本项目的头号风险「环境不一致」，在守环境
+      # 一致性的 CI 里自己犯了（P8-S1 修正）。现在与其它生成器同构：独立
+      # step、显式 docker run。
+      - name: 校验动态目标生成物与 dynamic_actors.yaml 同步（含航线对账与豁免校验）
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace \
+            ads-dev:jazzy \
             python3 scripts/gen_dynamic_actors.py --check
 
       - name: 构建工作空间
@@ -184,12 +194,19 @@ jobs:
               # 无守卫暴露面上（launch 测试最省事的失败方式是没生成结果文件）。
               # gazebo_bridge 看门狗与 ads_control 坏输入健壮性是复检后新增的
               # 行为测试，一并守上。
+              # ⚠️ P8-S1 补全：P6/P7 的三个新 launch 测试（域 47/48/49）此前
+              # 没进本清单 —— 与 2026-08-12 复检发现的暴露面同一个：launch
+              # 测试最省事的失败方式是"没生成结果文件"，守卫清单必须随新增
+              # 测试同步。**加 launch 测试时改这里**（域分配表在各 CMakeLists）。
               for PAIR in \
                   ads_control/test_closed_loop \
                   ads_control/test_closed_loop_obstacle \
                   ads_control/test_odom_robustness \
+                  ads_control/test_trajectory_timeout \
+                  ads_control/test_closed_loop_behavior \
                   ads_localization/test_closed_loop_localization \
                   ads_perception/test_closed_loop_perception \
+                  ads_prediction/test_closed_loop_prediction \
                   gazebo_bridge/test_vehicle_cmd_bridge_watchdog; do
                 PKG="${PAIR%%/*}"
                 NAME="${PAIR##*/}"
@@ -221,7 +238,7 @@ jobs:
               # ⚠️ 2026-08-12 复检补全：四个含 lib/ 的包都注册了该 CTest，
               # 此前只查两个 —— CLAUDE.md 声称"由 CTest 机械保证"，
               # 而没人保证那个 CTest 还在。
-              for pkg in ads_control ads_planning ads_localization ads_perception; do
+              for pkg in ads_control ads_planning ads_localization ads_perception ads_prediction; do
                 TAG=$(head -1 "build/${pkg}/Testing/TAG")
                 if ! grep -q "no_ros_dependencies" "build/${pkg}/Testing/${TAG}/Test.xml"; then
                   echo "✗ ${pkg} 的 no_ros_dependencies 校验没有出现在测试结果里 ——"
