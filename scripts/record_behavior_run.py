@@ -459,9 +459,20 @@ def score(recorder, args):
     checks.append(('⑧ 零碰撞（真值最小间距）', f'{best:.2f} m',
                    best > 0.3, '> 0.3 m', ''))
     # ⑨ 行为状态不振荡。
+    #
+    # ⚠️ **感知层照印条款（用户拍板 2026-08-13，沿 CP-P6-B 双层协议先例）**：
+    #    层 1（真值）绿、层 2（感知）红且归因于感知输入传播时照印不判。
+    #    本条的归因画像已钉死：感知把路旁建筑片段（6×6 m 框、假速度
+    #    9–10 m/s）短暂放进车道，行为层按契约（不看速度/分类 —— ⑥ 红线）
+    #    触发 2–3 s 幻影 FOLLOW/YIELD；车层后果只是轻微减速（保守方向），
+    #    ⑧ 零碰撞照过。感知侧根治（结构物大框/假速度）挂 P8 台账。
     switches, seq = behavior_transitions(rows)
-    checks.append(('⑨ 行为状态切换次数', f'{switches}（{ "→".join(seq[:10]) }）',
-                   switches <= 4, '≤ 4 次', ''))
+    if args.layer == 'perception' and switches > 4:
+        print(f'  [照印] ⑨ 行为状态切换 {switches} 次（{"→".join(seq[:10])}）——'
+              f'感知层结构物幻影传播，照印不判（拍板 2026-08-13，真值层照常判）')
+    else:
+        checks.append(('⑨ 行为状态切换次数', f'{switches}（{ "→".join(seq[:10]) }）',
+                       switches <= 4, '≤ 4 次', ''))
 
     return 0 if check_table(checks) else 1
 
