@@ -111,6 +111,8 @@ public:
     behavior_params.stand_off_m = declare_parameter<double>("behavior.stand_off_m");
     behavior_params.yield_margin_m = declare_parameter<double>("behavior.yield_margin_m");
     behavior_params.time_margin_s = declare_parameter<double>("behavior.time_margin_s");
+    behavior_params.sigma_inflation_cap_m =
+      declare_parameter<double>("behavior.sigma_inflation_cap_m");
     // front_offset 是**推导量**（后轴到车头面），从车辆几何算，不单独配 ——
     // 配两遍的症状是「改了车长之后跟停间距还按旧车头算」，没有一层会报错。
     behavior_params.front_offset_m =
@@ -486,6 +488,14 @@ private:
         "behavior_follow_id",
         decision_->follow.has_value() ? std::to_string(decision_->follow->id) : "-");
       add("behavior_crossing_count", std::to_string(decision_->crossings.size()));
+      // 横穿冲突的目标 id 列表（S4 排查振荡用；平时也留着 —— 「YIELD 对着谁」
+      // 是现场第一问，没有它只能靠猜）。
+      std::string crossing_ids;
+      for (const auto & crossing : decision_->crossings) {
+        crossing_ids += (crossing_ids.empty() ? "" : ",") + std::to_string(crossing.id) + "@" +
+                        std::to_string(crossing.s_lo_m);
+      }
+      add("behavior_crossing_ids", crossing_ids.empty() ? "-" : crossing_ids);
       add(
         "behavior_stop_at_s_m", decision_->constraint.stop_at_s_m.has_value()
                                   ? std::to_string(*decision_->constraint.stop_at_s_m)

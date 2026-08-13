@@ -1,0 +1,286 @@
+[INFO] [launch]: All log files can be found below /home/dev/.ros/log/2026-08-13-09-09-13-589070-suns-102225
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [gz-1]: process started with pid [102229]
+[INFO] [parameter_bridge-2]: process started with pid [102230]
+[INFO] [lidar_preprocessor-3]: process started with pid [102231]
+[INFO] [vehicle_cmd_bridge-4]: process started with pid [102232]
+[INFO] [robot_state_publisher-5]: process started with pid [102233]
+[INFO] [static_transform_publisher-6]: process started with pid [102234]
+[INFO] [create-7]: process started with pid [102235]
+[INFO] [parameter_bridge-8]: process started with pid [102236]
+[INFO] [npc_controller-9]: process started with pid [102237]
+[INFO] [create-10]: process started with pid [102238]
+[INFO] [parameter_bridge-11]: process started with pid [102239]
+[INFO] [npc_controller-12]: process started with pid [102242]
+[INFO] [create-13]: process started with pid [102248]
+[INFO] [parameter_bridge-14]: process started with pid [102266]
+[INFO] [npc_controller-15]: process started with pid [102271]
+[INFO] [obstacle_truth-16]: process started with pid [102278]
+[INFO] [perception_node-17]: process started with pid [102279]
+[INFO] [prediction_node-18]: process started with pid [102280]
+[INFO] [map_node-19]: process started with pid [102285]
+[INFO] [planning_node-20]: process started with pid [102286]
+[INFO] [control_node-21]: process started with pid [102287]
+[robot_state_publisher-5] [WARN] [1786612153.807701277] [kdl_parser]: The root link base_link has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[robot_state_publisher-5] [INFO] [1786612153.813904645] [robot_state_publisher]: Robot initialized
+[lidar_preprocessor-3] [INFO] [1786612153.828980441] [lidar_preprocessor]: 点云预处理已启动：/gazebo/lidar/points_raw → /lidar/points（目���系 base_link）
+[lidar_preprocessor-3] [INFO] [1786612153.831223102] [lidar_preprocessor]: 自车包围盒 x[-0.85, 3.55] y[-0.90, 0.90] z[0.00, 1.50]  余量 0.050 m
+[static_transform_publisher-6] [INFO] [1786612153.856368344] [map_to_odom_static]: Spinning until stopped - publishing transform
+[static_transform_publisher-6] translation: ('30.000000', '-51.750000', '0.000000')
+[static_transform_publisher-6] rotation: ('0.000000', '0.000000', '0.000000', '1.000000')
+[static_transform_publisher-6] from 'map' to 'odom'
+[create-10] [INFO] [1786612153.874407986] [spawn_cross_car_b]: Requesting list of world names.
+[vehicle_cmd_bridge-4] [INFO] [1786612153.880151419] [vehicle_cmd_bridge]: 指令桥接已启动：/vehicle_cmd → /gazebo/cmd_vel  轴距 2.700 m  最大转角 0.600 rad  限速 8.33 m/s
+[create-7] [INFO] [1786612153.921274513] [spawn_cross_car_a]: Requesting list of world names.
+[parameter_bridge-11] [INFO] [1786612153.957426545] [bridge_cross_car_b]: Creating GZ->ROS Bridge: [/model/cross_car_b/pose_gt (gz.msgs.Odometry) -> /model/cross_car_b/pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[npc_controller-15] [INFO] [1786612153.964440145] [npc_controller_cross_car_c]: NPC 控制器就绪：模型 cross_car_c，22 个航点，4.00 m/s
+[parameter_bridge-11] [INFO] [1786612153.966908473] [bridge_cross_car_b]: Creating ROS->GZ Bridge: [/model/cross_car_b/cmd_vel (geometry_msgs/msg/Twist) -> /model/cross_car_b/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[npc_controller-12] [INFO] [1786612153.999325540] [npc_controller_cross_car_b]: NPC 控制器就绪：模型 cross_car_b，22 个航点，4.00 m/s
+[npc_controller-9] [INFO] [1786612154.001803871] [npc_controller_cross_car_a]: NPC 控制器就绪：模型 cross_car_a，22 个航点，4.00 m/s
+[create-13] [INFO] [1786612154.022596740] [spawn_cross_car_c]: Requesting list of world names.
+[parameter_bridge-14] [INFO] [1786612154.045490520] [bridge_cross_car_c]: Creating GZ->ROS Bridge: [/model/cross_car_c/pose_gt (gz.msgs.Odometry) -> /model/cross_car_c/pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-14] [INFO] [1786612154.055401977] [bridge_cross_car_c]: Creating ROS->GZ Bridge: [/model/cross_car_c/cmd_vel (geometry_msgs/msg/Twist) -> /model/cross_car_c/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[control_node-21] [INFO] [1786612154.060732766] [control_node]: control_node 就绪：50.0 Hz，轴距 2.700 m，k_e=1.00，k_soft=0.50，K_p=1.00，K_i=0.00
+[parameter_bridge-8] [INFO] [1786612154.061462183] [bridge_cross_car_a]: Creating GZ->ROS Bridge: [/model/cross_car_a/pose_gt (gz.msgs.Odometry) -> /model/cross_car_a/pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1786612154.066751692] [bridge_cross_car_a]: Creating ROS->GZ Bridge: [/model/cross_car_a/cmd_vel (geometry_msgs/msg/Twist) -> /model/cross_car_a/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[planning_node-20] [INFO] [1786612154.067218831] [planning_node]: planning_node 已启动：10.0 Hz，前视 10.0–30.0 m，横向 ±0.85 m
+[parameter_bridge-14] [INFO] [1786612154.069076096] [bridge_cross_car_c]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[perception_node-17] [INFO] [1786612154.105878490] [perception_node]: perception_node 就绪：聚类容差 0.50 m，最小簇 5 点，确认需 3 次命中
+[obstacle_truth-16] [INFO] [1786612154.144270819] [obstacle_truth]: 障碍物真值发布器已启动：0 个静态障碍物 + 3 个动态目标，10.0 Hz，frame_id = map，**不发** /perception/obstacles
+[prediction_node-18] [INFO] [1786612154.154601698] [prediction_node]: 预测节点就绪：视界 6.0 s、步长 0.2 s、地图 /workspace/install/ads_map/share/ads_map/maps/campus.xodr
+[map_node-19] [INFO] [1786612154.192113193] [map_node]: 地图已加载：/workspace/install/ads_map/share/ads_map/maps/campus.xodr（18 条车道，24 条连接）
+[parameter_bridge-8] [INFO] [1786612154.192783851] [bridge_cross_car_a]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[parameter_bridge-11] [INFO] [1786612154.249008663] [bridge_cross_car_b]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[map_node-19] [INFO] [1786612154.249927311] [map_node]: 车道图已发布到 /map/lane_graph，等待 /goal_pose
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="lidar"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L59]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="imu"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L104]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="ego_vehicle"]/link[@name="base_link"]/sensor[@name="navsat"]/gz_frame_id:/workspace/models/ego_vehicle/model.sdf:L178]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[create-10] [INFO] [1786612154.852969200] [spawn_cross_car_b]: Entity creation successful.
+[create-7] [INFO] [1786612154.853010216] [spawn_cross_car_a]: Entity creation successful.
+[create-13] [INFO] [1786612154.853671843] [spawn_cross_car_c]: Entity creation successful.
+[parameter_bridge-2] [INFO] [1786612154.903846686] [gazebo_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.906717105] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/lidar/points (gz.msgs.PointCloudPacked) -> /gazebo/lidar/points_raw (sensor_msgs/msg/PointCloud2)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.910981967] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/imu (gz.msgs.IMU) -> /imu (sensor_msgs/msg/Imu)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.914326919] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/navsat (gz.msgs.NavSat) -> /gnss (sensor_msgs/msg/NavSatFix)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.917153424] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/odometry (gz.msgs.Odometry) -> /odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.921751931] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/pose_gt (gz.msgs.Odometry) -> /ego_pose_gt (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.924716315] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/tf (gz.msgs.Pose_V) -> /tf (tf2_msgs/msg/TFMessage)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.928896149] [gazebo_bridge]: Creating GZ->ROS Bridge: [/model/ego_vehicle/joint_state (gz.msgs.Model) -> /joint_states (sensor_msgs/msg/JointState)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1786612154.931282569] [gazebo_bridge]: Creating ROS->GZ Bridge: [/gazebo/cmd_vel (geometry_msgs/msg/Twist) -> /model/ego_vehicle/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[INFO] [create-7]: process has finished cleanly [pid 102235]
+[INFO] [create-10]: process has finished cleanly [pid 102238]
+[INFO] [create-13]: process has finished cleanly [pid 102248]
+[gz-1] Dropped Escape call with ulEscapeCode : 0x03007703
+[gz-1] Dropped Escape call with ulEscapeCode : 0x03007703
+[parameter_bridge-2] [INFO] [1786612156.838294448] [gazebo_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[npc_controller-12] [INFO] [1786612156.849487106] [npc_controller_cross_car_b]: cross_car_b 在航点 #0 停留 77.0 s
+[npc_controller-9] [INFO] [1786612156.852154598] [npc_controller_cross_car_a]: cross_car_a 在航点 #0 停留 71.0 s
+[npc_controller-15] [INFO] [1786612156.864603318] [npc_controller_cross_car_c]: cross_car_c 在航点 #0 停留 83.0 s
+[control_node-21] [WARN] [1786612159.112674168] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612161.424532422] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612163.767039389] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612166.354174298] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612168.886244211] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786612168.915735292] [lidar_preprocessor]: 点云 57600 → 41422（自车 0，无效 16178），耗时 1.5 ms
+[control_node-21] [WARN] [1786612171.285772261] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612173.662625778] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612175.971652534] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612178.283436936] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612180.645110426] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786612180.680499442] [lidar_preprocessor]: 点云 57600 → 41422（自车 0，无效 16178），耗时 1.2 ms
+[control_node-21] [WARN] [1786612182.989920501] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612185.318452955] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612187.597159004] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612189.838322632] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612192.097580779] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[lidar_preprocessor-3] [INFO] [1786612192.233846291] [lidar_preprocessor]: 点云 57600 → 41422（自车 0，无效 16178），耗时 1.7 ms
+[control_node-21] [WARN] [1786612194.376487472] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612196.690317607] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612199.007208843] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[map_node-19] [INFO] [1786612200.173991376] [map_node]: 路径已发布：3 段车道、637 个点、325.26 m，耗时 1.76 ms
+[planning_node-20] [INFO] [1786612200.174492298] [planning_node]: 收到参考线：637 个点，325.3 m
+[control_node-21] [INFO] [1786612200.291156067] [control_node]: 轨迹起点跳变 inf m（阈值 2.00），重置最近点提示与速度环积分
+[map_node-19] [INFO] [1786612201.423796093] [map_node]: 路径已发布：3 段车道、636 个点、324.74 m，耗时 0.87 ms
+[planning_node-20] [INFO] [1786612201.427174328] [planning_node]: 收到参考线：636 个点，324.7 m
+[map_node-19] [INFO] [1786612202.633045150] [map_node]: 路径已发布：3 段车道、632 个点、322.67 m，耗时 1.37 ms
+[planning_node-20] [INFO] [1786612202.635834415] [planning_node]: 收到参考线：632 个点，322.7 m
+[map_node-19] [INFO] [1786612203.802393450] [map_node]: 路径已发布：3 段车道、625 个点、319.14 m，耗时 0.78 ms
+[planning_node-20] [INFO] [1786612203.815839450] [planning_node]: 收到参考线：625 个点，319.1 m
+[lidar_preprocessor-3] [INFO] [1786612204.073113001] [lidar_preprocessor]: 点云 57600 → 41460（自车 0，无效 16140），耗时 1.2 ms
+[map_node-19] [INFO] [1786612204.979210360] [map_node]: 路径已发布：3 段车道、615 个点、314.47 m，耗时 1.17 ms
+[planning_node-20] [INFO] [1786612204.992238467] [planning_node]: 收到参考线：615 个点，314.5 m
+[map_node-19] [INFO] [1786612206.190593844] [map_node]: 路径已发布：3 段车道、605 个点、309.08 m，耗时 0.81 ms
+[planning_node-20] [INFO] [1786612206.203702444] [planning_node]: 收到参考线：605 个点，309.1 m
+[map_node-19] [INFO] [1786612207.377082984] [map_node]: 路径已发布：3 段车道、594 个点、303.73 m，耗时 0.77 ms
+[planning_node-20] [INFO] [1786612207.382706469] [planning_node]: 收到参考线：594 个点，303.7 m
+[map_node-19] [INFO] [1786612208.634077984] [map_node]: 路径已发布：3 段车道、583 个点、298.21 m，耗时 0.76 ms
+[planning_node-20] [INFO] [1786612208.637952300] [planning_node]: 收到参考线：583 个点，298.2 m
+[map_node-19] [INFO] [1786612209.825638392] [map_node]: 路径已发布：3 段车道、572 个点、292.67 m，耗时 0.78 ms
+[planning_node-20] [INFO] [1786612209.832352085] [planning_node]: 收到参考线：572 个点，292.7 m
+[map_node-19] [INFO] [1786612211.012385044] [map_node]: 路径已发布：3 段车道、561 个点、287.12 m，耗时 0.75 ms
+[planning_node-20] [INFO] [1786612211.018331015] [planning_node]: 收到参考线：561 个点，287.1 m
+[map_node-19] [INFO] [1786612212.202391999] [map_node]: 路径已发布：3 段车道、549 个点、281.56 m，耗时 0.95 ms
+[planning_node-20] [INFO] [1786612212.212151467] [planning_node]: 收到参考线：549 个点，281.6 m
+[lidar_preprocessor-3] [INFO] [1786612215.974308203] [lidar_preprocessor]: 点云 57600 → 40849（自车 0，无效 16751），耗时 1.1 ms
+[lidar_preprocessor-3] [INFO] [1786612227.402179987] [lidar_preprocessor]: 点云 57600 → 47247（自车 0，无效 10353），耗时 1.3 ms
+[lidar_preprocessor-3] [INFO] [1786612238.748409899] [lidar_preprocessor]: 点云 57600 → 40906（自车 0，无效 16694），耗时 1.4 ms
+[npc_controller-9] [INFO] [1786612239.501911736] [npc_controller_cross_car_a]: cross_car_a 停留结束，继续（航点 #0 → #1）
+[npc_controller-12] [INFO] [1786612246.299437429] [npc_controller_cross_car_b]: cross_car_b 停留结束，继续（航点 #0 → #1）
+[lidar_preprocessor-3] [INFO] [1786612250.103924915] [lidar_preprocessor]: 点云 57600 → 42992（自车 0，无效 14608），耗时 1.7 ms
+[control_node-21] [INFO] [1786612251.333562359] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612251.349438867] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612251.371136784] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612251.442928816] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612251.561635223] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612251.676214679] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612251.786595536] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612251.897247638] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612251.999808796] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.105106434] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.216647963] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.330076082] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.438597359] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.559344687] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.672296611] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.781014589] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612252.888380046] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.000091849] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[npc_controller-15] [INFO] [1786612253.064578882] [npc_controller_cross_car_c]: cross_car_c 停留结束，继续（航点 #0 → #1）
+[control_node-21] [INFO] [1786612253.104909830] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.219846881] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.358029869] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.499544473] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.645666444] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612253.683979064] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612253.767310263] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.878218160] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612253.991559803] [control_node]: 轨迹起点跳变 3.00 m（阈值 2.00），重置最近点提示与速度环积分
+[control_node-21] [WARN] [1786612255.143329919] [control_node]: 规划器报告前方绕不过去，按停车轨迹执行
+[control_node-21] [INFO] [1786612256.873749430] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612256.886346357] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612256.910873897] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612256.996908263] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.136432316] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.277795436] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.407536876] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.513997902] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.636444279] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.747021702] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.854628929] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612257.965303131] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.079407472] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.199748624] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.309118945] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.419376177] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.533890816] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.648673489] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.760095553] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.876646936] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612258.987454899] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.102199010] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.216718362] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612259.248327126] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612259.323989313] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.438764486] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.556203918] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.668397169] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.779640500] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.891140565] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612259.998673906] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612260.109834907] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612260.225331277] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612260.338680478] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[lidar_preprocessor-3] [INFO] [1786612261.714113744] [lidar_preprocessor]: 点云 57600 → 43605（自车 0，无效 13995），耗时 1.3 ms
+[control_node-21] [INFO] [1786612262.928337131] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612262.940853952] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612262.964427216] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612263.039172083] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.155607676] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.266497231] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.380536376] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.492438596] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.643045799] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.807243013] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612263.969351966] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.114277733] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.266042172] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.392983657] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.533643663] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.671934033] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.791406028] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612264.908858884] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.028230103] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.150508580] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.283076648] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.401222731] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.533289926] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612265.575660899] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612265.664896925] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.784960598] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612265.900979389] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.024438402] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.147465894] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.269257552] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.388190279] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.512306606] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.647246262] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.792635554] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612266.922003523] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.051408806] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.167118476] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.300424164] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.427413966] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.564630466] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.693780595] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612267.817764697] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612270.339243579] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [WARN] [1786612270.353148707] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [WARN] [1786612270.376677689] [control_node]: [NO_PATH] 减速停车：没有可用路径（还没点目标点，或上游路由失败）
+[control_node-21] [INFO] [1786612270.452634326] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612270.577247425] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612270.698204902] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612270.810127581] [control_node]: 收到 1 个点的轨迹（上游没有目标或已走完），转入减速停车
+[control_node-21] [INFO] [1786612270.938337579] [control_node]: 已到达终点附近（剩余 0.442 m ≤ 0.500 m），目标速度归零
+[lidar_preprocessor-3] [INFO] [1786612274.112672732] [lidar_preprocessor]: 点云 57600 → 45053（自车 0，无效 12547），耗时 1.4 ms
+[lidar_preprocessor-3] [INFO] [1786612286.036766713] [lidar_preprocessor]: 点云 57600 → 45939（自车 0，无效 11661），耗时 1.5 ms
+[lidar_preprocessor-3] [INFO] [1786612297.933434757] [lidar_preprocessor]: 点云 57600 → 45394（自车 0，无效 12206），耗时 1.4 ms
+[npc_controller-9] [INFO] [1786612302.501973503] [npc_controller_cross_car_a]: cross_car_a 已走完全部航点，停住
+[npc_controller-12] [INFO] [1786612309.699523061] [npc_controller_cross_car_b]: cross_car_b 已走完全部航点，停住
+[lidar_preprocessor-3] [INFO] [1786612310.108751825] [lidar_preprocessor]: 点云 57600 → 45329（自车 0，无效 12271），耗时 1.3 ms
+[npc_controller-15] [INFO] [1786612316.564570723] [npc_controller_cross_car_c]: cross_car_c 已走完全部航点，停住
+[lidar_preprocessor-3] [INFO] [1786612321.757895833] [lidar_preprocessor]: 点云 57600 → 45307（自车 0，无效 12293），耗时 1.2 ms
+[control_node-21] [INFO] [1786612326.434019570] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[lidar_preprocessor-3] [INFO] [1786612326.434206304] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[npc_controller-15] [INFO] [1786612326.434245560] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[robot_state_publisher-5] [INFO] [1786612326.434463812] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planning_node-20] [INFO] [1786612326.436130372] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[vehicle_cmd_bridge-4] [INFO] [1786612326.436463905] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[prediction_node-18] [INFO] [1786612326.436528933] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[perception_node-17] [INFO] [1786612326.436548143] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[obstacle_truth-16] [INFO] [1786612326.436632075] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-14] [INFO] [1786612326.436653268] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-11] [INFO] [1786612326.436751039] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[npc_controller-9] [INFO] [1786612326.436824437] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-2] [INFO] [1786612326.436910626] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[static_transform_publisher-6] [INFO] [1786612326.436924759] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[map_node-19] [INFO] [1786612326.436946984] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[npc_controller-12] [INFO] [1786612326.437291074] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-8] [INFO] [1786612326.439449268] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[INFO] [parameter_bridge-14]: process has finished cleanly [pid 102266]
+[INFO] [parameter_bridge-11]: process has finished cleanly [pid 102239]
+[INFO] [parameter_bridge-8]: process has finished cleanly [pid 102236]
+[INFO] [robot_state_publisher-5]: process has finished cleanly [pid 102233]
+[INFO] [parameter_bridge-2]: process has finished cleanly [pid 102230]
+[INFO] [npc_controller-9]: process has finished cleanly [pid 102237]
+[INFO] [control_node-21]: process has finished cleanly [pid 102287]
+[INFO] [static_transform_publisher-6]: process has finished cleanly [pid 102234]
+[INFO] [npc_controller-12]: process has finished cleanly [pid 102242]
+[INFO] [npc_controller-15]: process has finished cleanly [pid 102271]
+[INFO] [map_node-19]: process has finished cleanly [pid 102285]
+[INFO] [prediction_node-18]: process has finished cleanly [pid 102280]
+[INFO] [vehicle_cmd_bridge-4]: process has finished cleanly [pid 102232]
+[INFO] [obstacle_truth-16]: process has finished cleanly [pid 102278]
+[INFO] [perception_node-17]: process has finished cleanly [pid 102279]
+[INFO] [lidar_preprocessor-3]: process has finished cleanly [pid 102231]
+[INFO] [planning_node-20]: process has finished cleanly [pid 102286]
+[ERROR] [gz-1]: process has died [pid 102229, exit code -11, cmd 'gz sim -s -r campus_loop.sdf'].

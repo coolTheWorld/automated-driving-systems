@@ -168,6 +168,7 @@ def planning_node_params() -> dict:
         'behavior.stand_off_m': planning['behavior']['stand_off_m'],
         'behavior.yield_margin_m': planning['behavior']['yield_margin_m'],
         'behavior.time_margin_s': planning['behavior']['time_margin_s'],
+        'behavior.sigma_inflation_cap_m': planning['behavior']['sigma_inflation_cap_m'],
         'behavior.release_cycles': planning['behavior']['release_cycles'],
         'behavior.prediction_timeout_s': planning['behavior']['prediction_timeout_s'],
     }

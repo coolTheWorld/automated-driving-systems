@@ -33,6 +33,11 @@ max_hypotheses: 4               # 园区路口最多三岔，上限防病态图
 # 模型选择（SelectorParams）
 min_dynamic_speed_mps: 0.5      # 与 tracker.heading_min_speed 论证对齐（独立声明）
 odd_max_speed_mps: 8.33         # ODD 30 km/h（SPEC §2）：坏状态不许外推
+# ODD 尺寸上限：长边超过它不可能是园区内的运动目标，一律按静态。
+# P7-S4 实测逼出来的：建筑片段航迹的锚点随自车视角连续滑移（真实位移，
+# 位移一致性闸原理上拦不住），假速度 0.5–5.3，行为层每根柱子让一次行。
+# 5.5 = ODD 最大车长 4.4 + 尺寸误差 p95 ~0.5 + 余量（推导见 model_selector.hpp）。
+odd_max_length_m: 5.5
 min_displacement_ratio: 0.5     # 声称速度须有净位移背书（S1：结构物假速度 24.5%）
 displacement_window_s: 1.0      # node 逐 id 历史窗，与净位移换算共用
 min_vehicle_length_m: 2.5       # 车辆尺度门限：尺寸是直接测量，分类是猜的

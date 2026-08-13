@@ -109,3 +109,19 @@ TEST(ModelSelector, DisplacementGateScalesWithClaimedSpeed)
   EXPECT_EQ(SelectModel(Vehicle(1.0, 0.6), {}), ModelKind::kLaneFollow);
   EXPECT_EQ(SelectModel(Vehicle(4.0, 0.6), {}), ModelKind::kStatic);
 }
+
+TEST(ModelSelector, RefusesImplausiblyLargeTrack)
+{
+  // ODD 尺寸闸（P7-S4 实测逼出来的）：建筑片段航迹的锚点随自车视角连续
+  // 滑移 —— 那是测量的**真实**位移，位移一致性闸原理上拦不住。实测肇事者
+  // 清一色 6.0 m 尺寸档、假速度 0.5–5.3 m/s，速度与位移背书**全都通过**。
+  // 尺寸是唯一剩下的物理不变量：园区 ODD 里没有 5.5 m 以上的运动目标。
+  TargetSnapshot building = Vehicle(3.0, 2.8);  // 速度、位移背书都"合格"
+  building.length_m = 6.0;
+  EXPECT_EQ(SelectModel(building, {}), ModelKind::kStatic)
+    << "6.0 m 的『运动目标』在园区 ODD 里物理上不存在 —— 那是建筑的滑移锚点";
+  // 边界内側：真车 4.4 + 误差余量之内照常放行。
+  TargetSnapshot van = Vehicle(3.0, 2.8);
+  van.length_m = 5.4;
+  EXPECT_EQ(SelectModel(van, {}), ModelKind::kLaneFollow);
+}

@@ -93,6 +93,7 @@ public:
     lane_params_.max_hypotheses = static_cast<int>(declare_parameter<int>("max_hypotheses", 4));
     selector_.min_dynamic_speed_mps = declare_parameter<double>("min_dynamic_speed_mps", 0.5);
     selector_.odd_max_speed_mps = declare_parameter<double>("odd_max_speed_mps", 8.33);
+    selector_.odd_max_length_m = declare_parameter<double>("odd_max_length_m", 5.5);
     selector_.min_displacement_ratio = declare_parameter<double>("min_displacement_ratio", 0.5);
     selector_.displacement_window_s = declare_parameter<double>("displacement_window_s", 1.0);
     selector_.min_vehicle_length_m = declare_parameter<double>("min_vehicle_length_m", 2.5);

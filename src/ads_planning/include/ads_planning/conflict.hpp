@@ -68,6 +68,14 @@ struct BehaviorParams
   double yield_margin_m;
   /// 时间窗余量 τ，s。吃掉预测发布延迟（新目标 ~1 s）与时间标注误差。
   double time_margin_s;
+  /// 横穿膨胀带上限，m。inflated_half = corridor + min(2σ_cross, 本值)。
+  ///
+  /// P7-S4 实测逼出来的（6 s 视界的副作用）：CV 椭圆按 ½a·t² 长，6 s 尾端
+  /// 2σ ≈ 18 m —— 行人**已经离开**走廊向南走，远期点照样「可能横回来」，
+  /// 假让行拖着尾巴（⑨ 抖动源之一）。上限取一个车道宽 3.5：超过一个车道宽
+  /// 的横向不确定不再构成让行理由 —— 连续运动的目标真要横穿时，
+  /// 其**近期低 σ 预测点必然先进走廊**（连续性论证，不靠远期包络）。
+  double sigma_inflation_cap_m;
   /// 后轴到车头面的距离，m。**推导量** length − rear_overhang = 3.55，
   /// 轨迹点语义是后轴（TrajectoryPoint.msg），停车点必须把车头长度让出来。
   double front_offset_m;

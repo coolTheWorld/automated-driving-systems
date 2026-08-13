@@ -157,7 +157,8 @@ std::vector<CrossingConflict> find_crossing_conflicts(
       if (projection.index >= last_segment && projection.ratio >= 1.0 - 1e-9) {
         continue;
       }
-      const double inflated_half_m = params.corridor_half_m + 2.0 * point.sigma_cross_m;
+      const double inflated_half_m =
+        params.corridor_half_m + std::min(2.0 * point.sigma_cross_m, params.sigma_inflation_cap_m);
       if (std::abs(projection.lateral_error_m) > inflated_half_m) {
         continue;
       }

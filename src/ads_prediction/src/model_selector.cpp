@@ -35,6 +35,12 @@ ModelKind SelectModel(const TargetSnapshot & target, const SelectorParams & para
   if (speed > params.odd_max_speed_mps) {
     return ModelKind::kStatic;
   }
+  // 2b. 尺寸上同样物理不可能：园区 ODD 里没有 5.5 m 以上的运动目标。
+  //     建筑片段的滑移锚点有「真实」净位移，位移一致性闸拦不住 ——
+  //     P7-S4 实测（行为层上线当天）肇事者清一色 6.0 m 档，见 hpp 注释。
+  if (target.length_m > params.odd_max_length_m) {
+    return ModelKind::kStatic;
+  }
   // 3. 位移一致性：声称的速度必须有净位移背书（S1 体检：结构物航迹
   //    |v|>0.5 占 24.5%，全是簇形交替的原地摆）。没有历史 = 不知道 = 不编。
   if (!target.net_displacement_1s_m.has_value()) {

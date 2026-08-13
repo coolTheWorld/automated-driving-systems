@@ -67,6 +67,7 @@ BehaviorParams MakeParams()
   params.stand_off_m = 4.0;
   params.yield_margin_m = 4.0;  // S4 实测从 2.0 上调：让行点也要停在盲区外
   params.time_margin_s = 1.0;
+  params.sigma_inflation_cap_m = 3.5;
   params.front_offset_m = 3.55;
   return params;
 }

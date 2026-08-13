@@ -189,6 +189,7 @@ class BehaviorRecorder(Node):
     def _on_planning(self, msg):
         values = {kv.key: kv.value for kv in msg.status[0].values}
         self.behavior_state = values.get('behavior_state', self.behavior_state)
+        self.crossing_ids = values.get('behavior_crossing_ids', getattr(self, 'crossing_ids', '-'))
 
     def _on_control(self, msg):
         values = {kv.key: kv.value for kv in msg.status[0].values}
@@ -199,6 +200,11 @@ class BehaviorRecorder(Node):
             pass
 
     def _on_perception(self, msg):
+        # 诊断用全量表（id → 位置/尺寸/速度/分类），S4 排查横穿泄漏时开
+        self.perception_full = {
+            o.id: (o.pose.position.x, o.pose.position.y, o.size_m.x, o.size_m.y,
+                   math.hypot(o.velocity_mps.x, o.velocity_mps.y), o.classification)
+            for o in msg.obstacles}
         self.perception_obstacles = [
             (o.pose.position.x, o.pose.position.y,
              math.atan2(2.0 * (o.pose.orientation.w * o.pose.orientation.z),
@@ -218,7 +224,12 @@ class BehaviorRecorder(Node):
                'ego_yaw': self.ego[2], 'ego_v': self.ego[3],
                'behavior': self.behavior_state, 'ctrl_state': self.control_state,
                'ctrl_v': self.control_v,
-               'perc_near_x': self._nearest_perception_edge_x()}
+               'perc_near_x': self._nearest_perception_edge_x(),
+               'crossing_ids': getattr(self, 'crossing_ids', '-'),
+               'perc_count': len(self.perception_obstacles),
+               'perc_full': ';'.join(
+                   f'{i}:{v[0]:.1f}:{v[1]:.1f}:{v[2]:.1f}:{v[3]:.1f}:{v[4]:.2f}:{v[5]}'
+                   for i, v in getattr(self, 'perception_full', {}).items())}
         for name, state in self.actor_states.items():
             row[f'{name}_x'], row[f'{name}_y'] = state[0], state[1]
             row[f'{name}_yaw'], row[f'{name}_v'] = state[2], state[3]
