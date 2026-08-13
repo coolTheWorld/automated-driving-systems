@@ -133,6 +133,8 @@ public:
       // 真值，所以存在概率是 1.0。P5 的真感知会给出小于 1 的值，
       // 那时下游若要按它筛选，判据得在那时定 —— 现在不预设。
       obstacle.existence_probability = 1.0F;
+      // 真值的朝向可信（P6-S3 加的语义标志，见 Obstacle.msg）。
+      obstacle.heading_resolved = true;
       message_.obstacles.push_back(obstacle);
     }
 
@@ -257,6 +259,8 @@ private:
     obstacle.velocity_mps.z = msg->twist.twist.linear.z;
 
     obstacle.existence_probability = 1.0F;
+    // 真值的朝向可信（P6-S3 加的语义标志，见 Obstacle.msg）。
+    obstacle.heading_resolved = true;
     spec.valid = true;
   }
 

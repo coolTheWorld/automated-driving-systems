@@ -276,6 +276,44 @@ def _perception_nodes(context, *args, **kwargs):
     ]
 
 
+def _prediction_nodes(context, *args, **kwargs):
+    """
+    Build the P6 prediction node, or nothing when the switch is off.
+
+    prediction_node 是**旁路**：订阅 /perception/obstacles、发布
+    /prediction/trajectories 与 markers，不改动任何既有话题 ——
+    所以它不需要透传给 gazebo_sim.launch.py（perception 需要透传是
+    因为要关掉真值发布器的兼发，这里没有那样的互斥）。
+    /perception/obstacles 在 perception:=false 时来自 obstacle_truth、
+    true 时来自 perception_node —— 两种模式下预测都有输入，这正是
+    CP-P6-B 双层评测协议（真值层 / 感知层）的开关组合。
+
+    :param context: launch 运行时上下文
+    :return: 要执行的 launch 动作列表；prediction:=false 时为空
+    """
+    if LaunchConfiguration('prediction').perform(context).lower() not in ('true', '1'):
+        return []
+
+    params_yaml = (Path(get_package_share_directory('ads_prediction')) / 'config'
+                   / 'prediction_params.yaml')
+    config = yaml.safe_load(params_yaml.read_text(encoding='utf-8'))
+
+    # 平铺：prediction_params.yaml 本身就是平的（无分节），逐个搬 ——
+    # 理由与 perception 一样：不自动展开，多出来的键要在这里显式亮相。
+    flat = dict(config)
+    flat['use_sim_time'] = True
+
+    return [
+        Node(
+            package='ads_prediction',
+            executable='prediction_node',
+            name='prediction_node',
+            parameters=[flat],
+            output='screen',
+        ),
+    ]
+
+
 def _localization_nodes(context, *args, **kwargs):
     """
     Build the P4 localization node, or nothing when the switch is off.
@@ -390,6 +428,12 @@ def generate_launch_description():
                          '默认 false —— 那是 CP-P2-B / CP-P3-B / CP-P4-B 的回归基线，'
                          '它们建立在真值障碍物上')),
         DeclareLaunchArgument(
+            'prediction', default_value='false',
+            description=('P6：true 时起 prediction_node（订阅 /perception/obstacles，'
+                         '发布 /prediction/trajectories 与 RViz markers）。纯旁路，'
+                         '不改动任何既有话题。\n'
+                         '默认 false —— 所有既有检查点的回归基线里都没有预测')),
+        DeclareLaunchArgument(
             'localization', default_value='false',
             description=('P4：true 时起 localization_node，由它发动态 map→odom，'
                          '同时**关掉**仿真侧那条来自 spawn 位姿的静态 TF。\n'
@@ -399,6 +443,7 @@ def generate_launch_description():
         OpaqueFunction(function=_resolve_sim_source),
         OpaqueFunction(function=_localization_nodes),
         OpaqueFunction(function=_perception_nodes),
+        OpaqueFunction(function=_prediction_nodes),
 
         # ---------------------------------------------------------------------
         # 算法节点挂在这里

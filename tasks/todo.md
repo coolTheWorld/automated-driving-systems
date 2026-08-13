@@ -15,9 +15,19 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P6-S1 已完成（2026-08-12），下一片 S2（ads_prediction lib，CP-P6-A）**。
+**当前位置**：**P6-S2 已完成（CP-P6-A 八条全过），下一片 S3（消息 + prediction_node + RViz + L3-G）**。
 四个决策已拍板：决策一新增 `curve` 场景、决策二链接 `libads_map`、决策三
 `ads_msgs` 动两处、决策四幻影先修（已做，见前置台账第 1 条的机理改写）。
+
+**S2 记录**（commit a87e660）：`ads_prediction`（第 12 个包）三个 lib +
+20 条 L1 全绿；弧线 vs 解析圆 **0.0023 m**（判据 0.01）、CV/LF 3 s 分歧
+**6.762 vs 解析 6.756**、路口 2 假设概率归一；`sample_lane` 下沉进 ads_map
+（verify_map 回归 7/7）。七组注入各只红目标用例；**两处预写注入表被实测
+推翻**（椭圆注入实红 1 不是 2；翻转注入实红 4 且 ads_map 没有采样单测）；
+**30° 方向门限首轮注入六条全绿 —— 无人守着**，补 60° 斜穿用例后红 1。
+plan CP-P6-A ⑤ 判据修正 5.83→6.76（原推导用了参考线 R，车沿的是车道弧 r）。
+S3 注意：`heading_resolved` 加进 Obstacle.msg 时 perception_node 与
+obstacle_truth_node（恒 true）两个发布者都要填；DOMAIN_ID 取 47。
 
 **S1 记录**：`curve` 场景 = `curve_car`（沿内圈车道**顺时针绕整圈**，41 航点，
 永不掉头）+ 行人。航点是推导量（`route: inner_loop_clockwise`），生成器按

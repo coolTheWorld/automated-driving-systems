@@ -376,6 +376,9 @@ private:
       obstacle.pose.orientation.y = quaternion.y();
       obstacle.pose.orientation.z = quaternion.z();
       obstacle.pose.orientation.w = quaternion.w();
+      // 语义标志一起发（P6-S3）：下游从此分得清 yaw 是车头朝向还是轴向。
+      // 此前只有上面那行三目在静默二选一 —— 前置台账第 3 条的实体。
+      obstacle.heading_resolved = track.heading_resolved;
 
       obstacle.size_m.x = track.length_m;
       obstacle.size_m.y = track.width_m;

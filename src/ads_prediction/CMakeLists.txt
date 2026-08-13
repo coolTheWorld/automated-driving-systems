@@ -49,6 +49,27 @@ ament_export_dependencies(eigen3_cmake_module Eigen3 ads_common ads_map)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../config/prediction_params.yaml
   DESTINATION share/${PROJECT_NAME}/config)
 
+# ---------------------------------------------------------------------------
+#  node 层：只做消息翻译 + 逐 id 历史 + 可视化，没有自己的单元测试
+#（与 perception_node 同一条理由）。ROS 依赖属于这个 target，
+#  libads_prediction.so 一个 ROS 库都不链。
+# ---------------------------------------------------------------------------
+find_package(rclcpp REQUIRED)
+find_package(ads_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+
+add_executable(prediction_node node/prediction_node.cpp)
+target_link_libraries(prediction_node
+  ${PROJECT_NAME}
+  rclcpp::rclcpp
+  ament_index_cpp::ament_index_cpp
+  ${ads_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${visualization_msgs_TARGETS})
+install(TARGETS prediction_node DESTINATION lib/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # ⚠️ 必须在 ament_lint_auto_find_test_dependencies() **之前**设排除，
@@ -82,6 +103,14 @@ if(BUILD_TESTING)
   add_test(NAME no_ros_dependencies
     COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=$<TARGET_FILE:${PROJECT_NAME}>
       -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_no_ros_deps.cmake)
+
+  # L3-G：假障碍物流 + prediction_node 的闭环（不需要 GPU，进 CI）。
+  # DOMAIN_ID 分配表：41=ads_control 闭环、42=障碍物闭环、43=定位闭环、
+  # 44=感知闭环、45=bridge 看门狗、46=odom 鲁棒性、**47=本测试**。
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_closed_loop_prediction.py
+    TIMEOUT 120
+    ENV ROS_DOMAIN_ID=47)
 endif()
 
 ament_package()

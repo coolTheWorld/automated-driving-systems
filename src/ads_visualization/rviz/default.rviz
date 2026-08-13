@@ -176,6 +176,22 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /route/path
       Value: true
+      # P6 的交付物：他车未来 3 s 预测轨迹（线 + 2σ 椭圆）。
+      # 周期性发布（每帧感知触发一次）—— Volatile 即可，参照 RoutePath；
+      # 只发一次的才要 Transient Local（LaneGraph 那条的注释）。
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Prediction
+      Namespaces:
+        {}
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /prediction/markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
