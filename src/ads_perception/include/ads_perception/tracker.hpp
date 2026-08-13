@@ -88,6 +88,7 @@
 #include <Eigen/Core>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace ads_perception
@@ -163,6 +164,45 @@ struct TrackerParams
   ///    ⚠️ 它拦不住 5 m 量级的欠分割 —— 那一档只能靠 S2 的聚类容差，
   ///       写在这里是为了下一个人不要以为有了上限就安全了。
   double max_extent_m{6.0};
+
+  /// ODD 尺寸上限（结构物档），m。**观测框**长边连续超过它
+  /// `structure_confirm_frames` 帧的航迹判为结构物（园区 ODD 里没有
+  /// 5.5 m 以上的运动目标 —— 与 ads_prediction 的同名闸同值同理）。
+  ///
+  /// ⚠️ P8-S2b 实测逼出来的：建筑片段的框中心随自车视角**连续小步滑移**
+  ///    （每帧 0.2–1 m，低于 anchor_shift_max 的 2.2）——那是测量的真实位移，
+  ///    焊接闸拦不住，KF 把它积成 9–15 m/s 的假速度（画像 86 条可疑航迹）。
+  ///    尺寸是最后剩下的物理不变量。结构物航迹：**速度恒置零 + 不做
+  ///    补全/重锚**（尺寸记忆机制的前提「同一个目标」对建筑片段不成立），
+  ///    框照常发布 —— 规划的静态准入要用它，SPEC §11 不许过滤安全数据。
+  double odd_max_length_m{5.5};
+
+  /// 结构物判定需要**连续**多少帧观测长边超限。
+  ///
+  /// 取 5（0.5 s）：建筑片段帧帧 6.0，5 帧即标；真车与锥桶**瞬间并簇**
+  /// （欠分割，P5 实测存在）只持续 1–2 帧，不会把正主误判成结构物 ——
+  /// 用「观测连续超限」而不是「记忆超限」正是为了这条边界：
+  /// 记忆是单调 max，一次并簇就永久污染。判定一旦成立**永久生效**
+  /// （建筑不会变回车；permanent 也让下游行为稳定不抖）。
+  int structure_confirm_frames{5};
+
+  /// 车辆形状先验：补全用的最小长度，m（= ODD 车长，vehicle_params 同源）。
+  ///
+  /// ⚠️ P8-S2b 画像逼出来的（P6 台账「正对远车中心偏差 2.2 m」的根因）：
+  ///    正对驶来的车**从头到尾只露尾面**，尺寸记忆里根本没有「长」
+  ///    （实测观测框 length 中位 1.92 vs 真值 4.4）—— 补全机制无从补起，
+  ///    中心停在尾面附近，沿视线偏 1.3–2.1 m。观测与记忆都不知道的量，
+  ///    只能由先验给：满足下面两个门控的航迹按「至少是辆车」补全。
+  double vehicle_prior_length_m{4.4};
+
+  /// 车辆先验的速度门控，m/s。> 行人上限（1.5 的步行 + 余量）才认车 ——
+  /// 园区 ODD 里宽 ≥1.4 且速度 ≥2.5 的运动物只有车。
+  /// 调小 → 快走的行人被按 4.4 m 补全（中心凭空前移 2 m）；
+  /// 调大 → 慢车（刚起步）不享受先验，正对偏差回来。
+  double vehicle_prior_min_speed_mps{2.5};
+
+  /// 车辆先验的宽度门控，m。行人 0.4、锥桶 0.5、车 1.8 —— 取 1.4 隔开。
+  double vehicle_prior_min_width_m{1.4};
 
   /// 两条航迹靠得比它还近就并成一条，m。
   ///
@@ -271,6 +311,9 @@ struct Track
   double width_m{0.0};
   /// 高度：**最近一帧**的值，不做记忆（它不参与中心补全）。
   double height_m{0.0};
+  /// 最近一帧的观测尺寸（结构物的发布出口用，见 reported_* 一族的理由）。
+  double last_observed_length_m{0.0};
+  double last_observed_width_m{0.0};
 
   /// 消歧之后的**车头朝向**，`[−π, π)`。
   ///
@@ -279,6 +322,20 @@ struct Track
   double heading_rad{0.0};
   bool heading_resolved{false};
 
+  /// 结构物档（见 TrackerParams::odd_max_length_m）。永久标记。
+  bool is_structure{false};
+  /// 车辆形状先验已锚定（见 vehicle_prior_length_m）。**永久**：一旦按
+  /// 「这是辆车」重锚，之后速度掉下门控也继续按车补全 —— 否则减速停下的
+  /// 车会在门控边界来回换锚，每次 2 m 的量测跳变都是一次航迹断裂。
+  bool vehicle_prior_anchored{false};
+  /// 先验档的车头朝向 = **速度方向**（锚定条件已保证速度可靠；车停住后
+  /// 保持最近有效值）。⚠️ 不能用 heading_rad：那是**轴向的 180° 消歧**，
+  /// 正对时轴向是车宽向，消出来还是横的 —— 发布 4.4 长的框会横躺在路上
+  /// （CP-P5-B 回归实测近边 p95 1.7 的根因）。
+  double prior_heading_rad{0.0};
+  /// 观测长边连续超限的帧数（结构物判定的计数器）。
+  int big_observation_streak{0};
+
   int hits{0};  ///< 累计命中次数（**不要求连续**）
   int consecutive_misses{0};
   /// 被遮挡状态下的连续未命中（不计入 consecutive_misses，另设上限）。
@@ -286,7 +343,18 @@ struct Track
   bool confirmed{false};  ///< 累计命中达到 confirm_hits
 
   Eigen::Vector2d position() const { return state.head<2>(); }
+  /// KF 内部速度。⚠️ **发布出口不要用它**，用 reported_velocity() ——
+  /// 结构物的内部速度是可见面滑移（真实测量位移，关联要用它跟框），
+  /// 不是目标的运动。
   Eigen::Vector2d velocity() const { return state.tail<2>(); }
+  /// 对外报告的速度：结构物（永久档或当前连续大框观测中）恒为零。
+  /// 建筑不会动 —— KF 从滑移积出的 9–15 m/s 出了门就是幻影横穿
+  /// （P8-S2b 画像 86 条，CP-P7-B ⑨ 照印的根因）。
+  Eigen::Vector2d reported_velocity() const
+  {
+    return (is_structure || big_observation_streak > 0) ? Eigen::Vector2d::Zero()
+                                                        : Eigen::Vector2d(state.tail<2>());
+  }
 };
 
 /// 多目标跟踪器。**有状态**，逐帧调用 `Update`。
@@ -347,6 +415,12 @@ public:
   /// @param track           提供已知尺寸的航迹
   /// @param sensor_position 传感器位置，与 detection 同系
   /// @return 补全后的中心
+  /// 车辆形状先验的沿视线补全量（正对/背对情形）。空 = 不适用。
+  /// 推导与三层门控见 .cpp 实现的注释（P8-S2b）。
+  std::optional<Eigen::Vector2d> VehiclePriorPush(
+    const Detection & detection, const Track & track,
+    const Eigen::Vector2d & sensor_position) const;
+
   Eigen::Vector2d CompletedCenter(
     const Detection & detection, const Track & track,
     const Eigen::Vector2d & sensor_position) const;

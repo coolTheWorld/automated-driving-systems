@@ -41,3 +41,4 @@ __pycache__/
 
 # L3 全场景一键跑的过程产物（metrics/history.csv 入库，过程 CSV/日志不入）
 .scenario_runs/
+.p8s2b/

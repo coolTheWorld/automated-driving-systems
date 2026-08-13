@@ -146,9 +146,71 @@ Eigen::Vector2d Tracker::AnchorOffset(
          axis_lat * (0.5 * std::max(0.0, deficit_lat_m) * side(to_sensor.dot(axis_lat)));
 }
 
+std::optional<Eigen::Vector2d> Tracker::VehiclePriorPush(
+  const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
+{
+  // ---- 车辆形状先验（P8-S2b，只修正对/背对情形）----------------------------
+  // 正对驶来的车从头到尾只露尾面：记忆里没有「长」（实测停在 1.9，正对
+  // 中心沿视线偏 1.3–2.1 m —— P6 台账那条 2.2），而轴向记忆是**横向**
+  // （L-Shape 的长轴在正对时是车宽）—— 既有的沿轴补全在这个情形连方向
+  // 都是错的。先验沿**视线**把中心推到「按 ODD 车长该在的地方」：
+  //   push = (ODD 车长 − 观测沿视线深度)/2，方向背离传感器（看不见的
+  //   车身在远侧）。
+  //
+  // 三层门控，各挡一类误用：
+  //   未锚定时 —— 速度像车（≥2.5）×正对/背对（速度与视线 |cos|≥0.8）×
+  //   展宽像车（记忆长边 ≥1.4）×记忆还不知道全长（< 先验）：
+  //   园区 ODD 里满足前三条的只有车；
+  //   已锚定后 —— **不再看速度**（永久，见 Track::vehicle_prior_anchored），
+  //   只看观测形态；
+  //   任何时候 —— 观测深度 < 1.0 才推（正对形态的签名：尾面进深 0.3–0.5；
+  //   侧视观测 1.8，中心不缺沿视线的量，推了反而错）。
+  if (track.is_structure) {
+    return std::nullopt;
+  }
+  const Eigen::Vector2d line_of_sight = detection.position - sensor_position;
+  const double range_m = line_of_sight.norm();
+  if (range_m < 1e-6) {
+    return std::nullopt;
+  }
+  const double depth_m = std::min(detection.length_m, detection.width_m);
+  if (depth_m >= 1.0) {
+    return std::nullopt;
+  }
+  if (!track.vehicle_prior_anchored) {
+    const double speed_mps = track.velocity().norm();
+    const double memory_long_edge_m = std::max(track.length_m, track.width_m);
+    if (
+      speed_mps < params_.vehicle_prior_min_speed_mps ||
+      memory_long_edge_m < params_.vehicle_prior_min_width_m ||
+      memory_long_edge_m >= params_.vehicle_prior_length_m) {
+      return std::nullopt;
+    }
+    const double cos_angle = std::abs(track.velocity().dot(line_of_sight)) / (speed_mps * range_m);
+    if (cos_angle < 0.8) {
+      return std::nullopt;
+    }
+  }
+  const double push_m = 0.5 * (params_.vehicle_prior_length_m - depth_m);
+  if (push_m <= 0.0 || push_m > params_.anchor_shift_max_m) {
+    return std::nullopt;
+  }
+  return Eigen::Vector2d(line_of_sight / range_m * push_m);
+}
+
 Eigen::Vector2d Tracker::CompletedCenter(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
+  // 结构物：不补全。「同一个目标露出更多」的前提对建筑片段不成立 ——
+  // 它的"尺寸差"来自可见面滑移，不是遮挡（见 odd_max_length_m 的注释）。
+  if (track.is_structure) {
+    return detection.position;
+  }
+  // 车辆形状先验（P8-S2b）：正对/背对情形沿视线补全，见 VehiclePriorPush。
+  if (const auto push = VehiclePriorPush(detection, track, sensor_position)) {
+    return detection.position + *push;
+  }
+
   const Detection aligned = AlignedDetection(detection, track);
   if (!AxesConsistent(aligned.yaw_rad, track.yaw_rad)) {
     return detection.position;
@@ -170,6 +232,10 @@ Eigen::Vector2d Tracker::CompletedCenter(
 Eigen::Vector2d Tracker::TrackAnchorShift(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
+  // 结构物：不重锚（理由同 CompletedCenter 的旁路）。
+  if (track.is_structure) {
+    return Eigen::Vector2d::Zero();
+  }
   const Detection aligned = AlignedDetection(detection, track);
   if (!AxesConsistent(aligned.yaw_rad, track.yaw_rad)) {
     return Eigen::Vector2d::Zero();
@@ -225,8 +291,16 @@ void Tracker::Associate(
       //    的那几帧新息里混着一个 1 m 量级的"重新锚定"量，会判不进门 ⟹ ID 跳变。
       const Eigen::Vector2d measurement =
         CompletedCenter(detections[d], tracks_[t], sensor_position);
-      const Eigen::Vector2d anchored =
+      Eigen::Vector2d anchored =
         tracks_[t].position() + TrackAnchorShift(detections[d], tracks_[t], sensor_position);
+      // 先验首次生效的那一帧：量测已按先验补全，航迹还锚在尾面 ——
+      // 不给 anchored 加同一个 push 的话新息平白多 2 m，判不进门 ⟹ 断裂
+      // （首版实测：一条正对车断成 6 条航迹）。
+      if (!tracks_[t].vehicle_prior_anchored) {
+        if (const auto push = VehiclePriorPush(detections[d], tracks_[t], sensor_position)) {
+          anchored += *push;
+        }
+      }
       const Eigen::Vector2d innovation = measurement - anchored;
       const double mahalanobis = innovation.transpose() * information * innovation;
       // ⚠️ 门限用**卡方**。这里可以这么做，因为协方差是滤波器自己按已知的
@@ -257,6 +331,18 @@ void Tracker::ApplyUpdate(
   // 重新锚定：只挪**位置**，不动速度也不动协方差 —— 这是一次坐标改写，
   // 不是一次观测。改协方差等于宣称"我对位置更不确定了"，而事实相反。
   track->state.head<2>() += TrackAnchorShift(detection, *track, sensor_position);
+  // 车辆先验的首次锚定：同一条「坐标改写不是观测」的规矩。此后永久
+  // 按车补全（速度掉门控也不回跳 —— 回跳一次 = 一次 2 m 的假新息）。
+  if (!track->vehicle_prior_anchored) {
+    if (const auto push = VehiclePriorPush(detection, *track, sensor_position)) {
+      track->state.head<2>() += *push;
+      track->vehicle_prior_anchored = true;
+    }
+  }
+  // 先验档的车头朝向跟速度走（停住后保持最近有效值，见 hpp）。
+  if (track->vehicle_prior_anchored && track->velocity().norm() > 0.5) {
+    track->prior_heading_rad = std::atan2(track->velocity().y(), track->velocity().x());
+  }
 
   const double measurement_variance = params_.measurement_stddev_m * params_.measurement_stddev_m;
 
@@ -280,10 +366,38 @@ void Tracker::ApplyUpdate(
   track->covariance =
     factor * track->covariance * factor.transpose() + gain * measurement_noise * gain.transpose();
 
+  // ---- 结构物档（P8-S2b）----
+  // 判定用**观测**长边的连续超限（不用记忆 —— 记忆是单调 max，真车一次
+  // 瞬间并簇就永久污染；连续 5 帧把并簇滤掉）。一旦成立永久生效。
+  const double observed_long_edge_m = std::max(detection.length_m, detection.width_m);
+  track->big_observation_streak =
+    observed_long_edge_m > params_.odd_max_length_m ? track->big_observation_streak + 1 : 0;
+  if (track->big_observation_streak >= params_.structure_confirm_frames) {
+    track->is_structure = true;
+  }
+  // ⚠️ 速度的冻结在**报告层**（Track::reported_velocity），不在状态层。
+  //    两版失败史（都实测过）：确认后才清 state → 假速度全在确认窗前几帧
+  //    积累并已发布（confirm_hits=3 早于结构确认 2 帧，画像原样 89 条）；
+  //    单帧观测大框就冻 state → 滑移观测 vs 静止预测的新息累积到 ~1.3 m
+  //    判不进门，一条墙断成两条航迹。矛盾的本质：可见面滑移是**真实的
+  //    测量位移**，关联需要内部速度去跟它，但它不是目标的运动、不许出门。
+  //    KF 内部照常积（关联健康），出口处按 reported_velocity 清零。
+
   track->yaw_rad = aligned.yaw_rad;
-  if (axes_consistent) {
+  // 最近观测尺寸（结构物的发布出口用它 —— 见 node 的说明）。
+  track->last_observed_length_m = detection.length_m;
+  track->last_observed_width_m = detection.width_m;
+  if (axes_consistent && observed_long_edge_m <= params_.odd_max_length_m) {
     // 记住已观测到的最大值：**"我至少看到过这么大"是一个物理上单调的事实**，
     // 而"这一帧看到多少"随遮挡起伏。上限见 max_extent_m 的注释。
+    //
+    // ⚠️ **超 ODD 的观测帧不喂记忆**（P8-S2b 第四刀）：
+    //    「看到过这么大」对真目标成立的前提是那一帧看到的**就是它** ——
+    //    并簇/墙沿碎片的 6 m 帧不满足。放进去的后果实测过两种：
+    //    真车被一次 2 帧并簇永久污染成 6.0 记忆；碎片航迹的记忆膨胀成
+    //    6×6 **虚胖框**，几何上盖到 10 m 外的路面，行为层把它当成
+    //    挡路的前车（CP-P7-B ⑨ 照印里那个稳定复现的幻影 FOLLOW）。
+    //    记忆由此永远 ≤ odd_max —— ODD 内没有更大的**目标**。
     track->length_m = std::min(params_.max_extent_m, std::max(track->length_m, aligned.length_m));
     track->width_m = std::min(params_.max_extent_m, std::max(track->width_m, aligned.width_m));
     // ⚠️ 归一化成 length ≥ width，**必须做**：合并之后"宽"可能已经超过"长"

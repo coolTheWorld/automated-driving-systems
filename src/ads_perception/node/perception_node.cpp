@@ -371,7 +371,12 @@ private:
       //    轴向有 180° 二义性，但那是**如实**的 —— 猜一个的话有 50% 的
       //    机会让 P6 预测出一条逆行轨迹（见 lshape_fit.hpp 的文件头）。
       tf2::Quaternion quaternion;
-      quaternion.setRPY(0.0, 0.0, track.heading_resolved ? track.heading_rad : track.yaw_rad);
+      // 先验锚定的车：朝向用速度方向（heading_rad 是轴向消歧，正对时轴向
+      // 是车宽向 —— 4.4 的框会横躺，见 Track::prior_heading_rad）。
+      const double published_yaw = track.vehicle_prior_anchored
+                                     ? track.prior_heading_rad
+                                     : (track.heading_resolved ? track.heading_rad : track.yaw_rad);
+      quaternion.setRPY(0.0, 0.0, published_yaw);
       obstacle.pose.orientation.x = quaternion.x();
       obstacle.pose.orientation.y = quaternion.y();
       obstacle.pose.orientation.z = quaternion.z();
@@ -380,11 +385,29 @@ private:
       // 此前只有上面那行三目在静默二选一 —— 前置台账第 3 条的实体。
       obstacle.heading_resolved = track.heading_resolved;
 
-      obstacle.size_m.x = track.length_m;
-      obstacle.size_m.y = track.width_m;
+      // 尺寸的发布分三档（P8-S2b，与中心的锚定约定**必须同一套**）：
+      //   结构物 —— 当帧观测（记忆前提不成立，历史只会把框养虚胖；观测
+      //   才是此刻真实占据的空间，低估结构对准入危险）；
+      //   先验锚定的车 —— 长度用 ODD 车长垫底。中心已按 4.4 推到几何
+      //   中心，长度若还报记忆的 1.9，下游算出的近边比真值远 1.25 m ——
+      //   CP-P5-B 回归实测近边 p95 从 0.13 爆到 1.82、跟停间距缩到 3.55，
+      //   「只推中心不给长度」是一次撕裂；
+      //   其余 —— 记忆（P5 原语义）。
+      if (track.is_structure) {
+        obstacle.size_m.x = track.last_observed_length_m;
+        obstacle.size_m.y = track.last_observed_width_m;
+      } else if (track.vehicle_prior_anchored) {
+        obstacle.size_m.x = std::max(track.length_m, tracker_params_.vehicle_prior_length_m);
+        obstacle.size_m.y = track.width_m;
+      } else {
+        obstacle.size_m.x = track.length_m;
+        obstacle.size_m.y = track.width_m;
+      }
       obstacle.size_m.z = track.height_m;
-      obstacle.velocity_mps.x = track.velocity().x();
-      obstacle.velocity_mps.y = track.velocity().y();
+      // 出口用 reported_velocity：结构物的内部速度是可见面滑移，不许出门
+      // （P8-S2b，理由见 tracker.hpp）。
+      obstacle.velocity_mps.x = track.reported_velocity().x();
+      obstacle.velocity_mps.y = track.reported_velocity().y();
       obstacle.velocity_mps.z = 0.0;
 
       // 存在概率：按连续未命中衰减。刚命中的是 1.0，丢得越久越低。

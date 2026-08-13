@@ -866,3 +866,86 @@ TEST(Tracker, DoesNotCoastAnImplausiblyFastTrack)
     << "物理上不可能的状态被滑行外推 —— 幽灵会带着假速度横穿地图";
   EXPECT_EQ(tracker.ConfirmedTracks().size(), 1U);
 }
+
+// =============================================================================
+//  结构物档 + 车辆形状先验（P8-S2b）
+//
+//  ## 故障注入实测（2026-08-13，写完立刻做的）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 去掉结构物冻速度（is_structure 不清 tail） | **红** 1 例：StructureTrackFreezesVelocity |
+//  | 去掉车辆先验（memory_length 不取 max） | **红** 1 例：FrontalVehiclePriorCompletesTheCenter |
+// =============================================================================
+
+TEST(Tracker, StructureTrackFreezesVelocity)
+{
+  // 建筑片段：帧帧 6.0 大框，中心随自车视角连续小步滑移（每帧 0.5 m
+  // < anchor_shift_max 2.2 —— 焊接闸拦不住的**真实**测量位移）。
+  // P8-S2b 画像：这种航迹 KF 积出 9–15 m/s 假速度，86 条。
+  // 结构物档（连续 5 帧观测超 5.5）后速度必须恒为零。
+  Tracker tracker;
+  for (int frame = 0; frame < 20; ++frame) {
+    Detection wall = MakeDetection(30.0 + 0.5 * frame, 5.0);
+    wall.length_m = 6.0;
+    wall.width_m = 6.0;
+    tracker.Update({wall}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.tracks().size(), 1u)
+    << "冻结若发生在状态层，滑移观测会把一条墙断成两条（新息累积判不进门 —— 实测过）";
+  const Track & track = tracker.tracks()[0];
+  EXPECT_TRUE(track.is_structure) << "连续 20 帧 6.0 框还没进结构物档";
+  // ⚠️ 断言**报告层**不是状态层：内部速度是关联要用的（跟滑移的框），
+  //    「不许出门」的是 reported_velocity —— 发布出口以它为准（perception_node）。
+  EXPECT_LT(track.reported_velocity().norm(), 1e-9)
+    << "结构物对外的『速度』必须恒为零 —— 内部滑移速度出了门就是幻影横穿";
+  EXPECT_GT(track.velocity().norm(), 3.0)
+    << "内部速度反而应当在跟滑移（关联健康的证据）—— 它要是零，关联靠什么跟框？";
+}
+
+TEST(Tracker, MomentaryUndersegmentationDoesNotBrandAVehicle)
+{
+  // 真车 + 一次 2 帧的瞬间并簇（欠分割，P5 实测存在）：
+  // 观测长边 6.2 只持续 2 帧 < structure_confirm_frames(5) —— 不许把正主
+  // 标成结构物（标了速度就没了，跟踪等于失效）。
+  Tracker tracker;
+  for (int frame = 0; frame < 20; ++frame) {
+    Detection car = MakeDetection(10.0 + 4.0 * frame * kDt, 0.0);
+    if (frame == 8 || frame == 9) {
+      car.length_m = 6.2;  // 并簇瞬间
+    }
+    tracker.Update({car}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  const Track & track = tracker.tracks()[0];
+  EXPECT_FALSE(track.is_structure) << "2 帧并簇就永久判死一辆真车";
+  EXPECT_NEAR(track.velocity().norm(), 4.0, 0.5);
+}
+
+TEST(Tracker, FrontalVehiclePriorCompletesTheCenter)
+{
+  // 正对驶来的车：从头到尾只露尾面（观测 1.8 宽 × 0.4 深），记忆里永远
+  // 没有「长」—— P8-S2b 画像：中心停在尾面，沿视线偏 1.3–2.1 m。
+  // 速度（4 m/s）+ 宽度（1.8 ≥ 1.4）双门控 ⟹ 按 ODD 车长 4.4 先验补全：
+  // 中心应被推到离尾面 ~半车长（背离传感器一侧）。
+  //
+  // 几何：真车几何中心从 x=60 向传感器（原点）驶来，速度 −4；
+  // 可见尾面在中心 −2.2（朝传感器一侧），观测框中心 ≈ 尾面 +0.2 深。
+  Tracker tracker;
+  double center_x = 60.0;
+  const Track * track = nullptr;
+  for (int frame = 0; frame < 30; ++frame) {
+    center_x -= 4.0 * kDt;
+    Detection tail_face = MakeDetection(center_x - 2.2 + 0.2, 0.0);
+    tail_face.length_m = 1.8;  // L-Shape 在正对时给的"长"是车宽
+    tail_face.width_m = 0.4;   // 只有尾面的深度
+    tracker.Update({tail_face}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  track = &tracker.tracks()[0];
+  // 无先验时估计中心 ≈ 观测中心（x = 真中心 − 2.0）；有先验时应回到真中心
+  // 附近。判据取中点 1.0：先验修正 ≥ 一半即视为生效（KF 收敛余量）。
+  const double error_m = std::abs(track->position().x() - center_x);
+  EXPECT_LT(error_m, 1.0) << "正对中心仍偏 " << error_m
+                          << " m —— 形状先验没有生效（无先验时 ≈2.0）";
+}
