@@ -58,6 +58,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -373,6 +374,38 @@ public:
     // 转角实测最大 0.51°，10° 留 19 倍余量。它主要防的是走廊类重复几何下
     // 的 180° 翻转 —— 那种错误一旦发生就是半圈量级，不需要更紧的阈值。
     max_innovation_rad_ = declare_parameter<double>("ndt.max_innovation_rad", 0.175);  // 10°
+
+    // ---- 严格卡方门（P8-S2c，localization.md §10.6 说的「贵的那一半」）----
+    // 固定门 3.0 m 防灾难（28 m / 462 m 级），本门防 **0.5 m 级锁错** ——
+    // d² = eᵀ(P+R)⁻¹e，e = NDT 位置 − 滤波器预测，P = ESKF 位置协方差，
+    // R = NDT 自报协方差 × chi2_covariance_inflation。
+    //
+    // S = P + R·inflation + σ_floor²·I —— 混合门，不是纯卡方。
+    //
+    // 为什么要地板（2026-08-13 实测，两步教训）：
+    //   ① NDT 自报协方差的尾**路线依赖**（NEES 中位数东环 15.0 vs 横穿 3.99，
+    //      差近 4×）—— 标定脚本自己的警告应验，乘法膨胀继承这份不可靠；
+    //   ② 首版纯膨胀 15 在真世界拒了 20% 的帧（隐含门距只有 ~12 cm，而正常
+    //      新息 p90 就有 16 cm），横向误差劣化近一倍而闭环判据**照样全绿**。
+    // 地板在正常工况主导（R·15 ≈ (2–3 cm)²，远小于 (10 cm)²），门距稳定在
+    // √16.27 · √(σ_floor²+σ_S²) ≈ 0.41 m；R 项只在 NDT 真退化时把门撑开 ——
+    // 那正是该松的时候。inflation 取 15（东环 6 维 NEES p95 88.8/6）只定
+    // R 项的量级，门距不靠它。
+    //
+    // 两轮 d² 实测（121 帧代回混合公式）：max 7.1，零误杀，余量 2.3×；
+    // 0.5 m 锁错 d² ≈ 24 > 16.27（1.5× 余量）。检测下限 ≈ 0.41 m。
+    chi2_covariance_inflation_ = declare_parameter<double>("ndt.chi2_covariance_inflation", 15.0);
+    // 地板 σ（m）。调大 → 检测下限外移（0.12 时 0.5 m 锁错恰好贴门限，漏检）；
+    // 调小 → 门距逼近好帧尾（观测 max 0.28 m），误杀 → 恢复循环 → 精度劣化。
+    chi2_floor_sigma_m_ = declare_parameter<double>("ndt.chi2_floor_sigma_m", 0.10);
+    // χ²(3, 99.9%) = 16.27。可以用分布表，因为 P 是滤波器按已知 Q/R 递推的、
+    // R 已按 NEES p95 包络标定 —— 与感知 tracker 的门限同一条论证。
+    chi2_gate_ = declare_parameter<double>("ndt.chi2_gate", 16.27);
+    // 连续超门这么多帧（10 帧 = 1 s）就强制粗网格重锚仲裁。调小 → 弯道段
+    // 合法散布（实测孤立超门、连跳 1–2）也会触发重锚，重新引入恢复循环；
+    // 调大 → 持续锁错拖着走更久才仲裁。
+    chi2_streak_recovery_frames_ =
+      static_cast<int>(declare_parameter<int64_t>("ndt.chi2_streak_recovery_frames", 10));
 
     if (map_path.empty()) {
       RCLCPP_WARN(
@@ -722,9 +755,71 @@ private:
       }
     }
 
+    // ---- 严格卡方监视 + 连跳重锚（P8-S2c）。恢复帧豁免。----
+    //
+    // ⚠️ 这里**没有逐帧拦截**，是实测三次否决后的收缩（2026-08-13）：
+    //   ① 硬拒（膨胀 15）：20% 帧被拒，横向 0.19（基线 0.09–0.13）；
+    //   ② 硬拒（加 0.10 m 地板，带宽 0.41 m）：仍 0.20 —— 拒掉的 d²=16.8
+    //      帧真实新息 0.445 m，是滤波器在 NDT 退化段漂移后的**纠偏帧**；
+    //   ③ 步长封顶 0.2 m：横向 0.24，14 帧被门 —— 弯道段 NDT 本身就有
+    //      0.4–0.6 m 的帧间散布，滤波器全信地跟着散布走正是基线精度的
+    //      由来，封顶只是给合法散布加滞后。
+    // 三次同向：**0.5 m 尺度上好帧与坏帧之间没有空档**（固定门成立的
+    // 根据是 1.18 vs 28 的 9.3 倍空档，这个尺度不存在）。而逐帧拦截对
+    // 防跑飞并非必要：0.5 m 单帧偏差远小于体素 2 m 的盆地尺度，下一帧
+    // 初值仍在正确盆地、自己就散了；28 m/462 m 的正反馈由固定门斩断。
+    //
+    // 真正防不住而这里能防的是**持续性**锁错（每帧都偏同一个方向）：
+    // 连续 ≥ streak 帧 d² 超限 → 强制粗网格重锚 —— 粗网格是独立仲裁者，
+    // NDT 锁错它拉回来，滤波器真漂了它也拉回来，两种情形都对。
+    // 孤立超门帧只计数进诊断（ndt_chi2_exceed），不动数据流。
+    bool force_recovery = false;
+    if (!used_coarse) {
+      const Eigen::Vector3d error = result.pose.translation() - filter_prediction.translation();
+      const double floor_var = chi2_floor_sigma_m_ * chi2_floor_sigma_m_;
+      const Eigen::Matrix3d innovation_cov =
+        eskf_->covariance().topLeftCorner<3, 3>() +
+        result.covariance.topLeftCorner<3, 3>() * chi2_covariance_inflation_ +
+        floor_var * Eigen::Matrix3d::Identity();
+      const double chi2 = error.transpose() * innovation_cov.inverse() * error;
+      chi2_d2_ = chi2;
+      // NaN 防线与固定门同一条：非有限一律硬拒 —— 那不是「可疑」，是「坏」。
+      if (!std::isfinite(chi2)) {
+        ndt_ok_ = false;
+        ++consecutive_ndt_failures_;
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 3000, "卡方 d² 非有限，本帧硬拒；连续 %d 帧",
+          consecutive_ndt_failures_);
+        return;
+      }
+      chi2_d2_max_ = std::max(chi2_d2_max_, chi2);
+      if (chi2_gate_ > 0.0 && chi2 > chi2_gate_) {
+        ++chi2_exceed_;
+        ++chi2_soft_streak_;
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 3000,
+          "NDT 超严格卡方（d²=%.1f，门限 %.1f，新息 %.3f m），只记数不拦截；"
+          "累计 %" PRId64 " 帧，连跳 %d 帧",
+          chi2, chi2_gate_, innovation.translation_m, chi2_exceed_, chi2_soft_streak_);
+        if (chi2_soft_streak_ >= chi2_streak_recovery_frames_) {
+          force_recovery = true;
+          chi2_soft_streak_ = 0;
+          RCLCPP_WARN(
+            get_logger(), "严格卡方连跳 %d 帧 —— 疑似持续锁错或滤波器漂移，强制粗网格重锚仲裁",
+            chi2_streak_recovery_frames_);
+        }
+      } else {
+        chi2_soft_streak_ = 0;
+      }
+    }
+
     ndt_ok_ = true;
     last_ndt_success_time_ = now();
     consecutive_ndt_failures_ = 0;
+    if (force_recovery) {
+      // 下一帧走粗→精重锚。放在清零之后 —— 这不是「帧没用上」，是主动仲裁。
+      consecutive_ndt_failures_ = recovery_after_failures_;
+    }
     PublishNdtPose(result, msg->header.stamp);
     try {
       eskf_->UpdatePose(
@@ -909,6 +1004,9 @@ private:
     add("ndt_innovation_m", last_innovation_m_);
     add("ndt_innovation_deg", last_innovation_rad_ * 180.0 / M_PI);
     add("ndt_rejected_innovation", static_cast<double>(rejected_innovation_));
+    add("ndt_chi2_exceed", static_cast<double>(chi2_exceed_));
+    add("ndt_chi2_d2", chi2_d2_);
+    add("ndt_chi2_d2_max", chi2_d2_max_);
     add("ndt_innovation_max_m", max_innovation_seen_m_);
     array.status.push_back(status);
     diag_pub_->publish(array);
@@ -926,6 +1024,14 @@ private:
   int recovery_after_failures_{3};
   double max_innovation_m_{3.0};
   double max_innovation_rad_{0.175};
+  double chi2_covariance_inflation_{15.0};
+  double chi2_floor_sigma_m_{0.10};
+  double chi2_gate_{16.27};
+  int chi2_streak_recovery_frames_{10};
+  int64_t chi2_exceed_{0};
+  int chi2_soft_streak_{0};
+  double chi2_d2_{0.0};
+  double chi2_d2_max_{0.0};
   double last_innovation_m_{0.0};
   double last_innovation_rad_{0.0};
   double max_innovation_seen_m_{0.0};
