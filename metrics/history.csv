@@ -1,0 +1,99 @@
+utc,git_sha,scenario,layer,criterion,value,limit,passed
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,max_lateral_error_m,0.269588,0.3,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,rms_lateral_error_m,0.0896626,0.1,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,steady_speed_error_mps,0.0625936,0.2,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,max_lateral_accel_mps2,1.90213,2.0,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,max_steer_rate_rad_s,0.5,0.5,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,goal_position_error_m,0.294798,1.0,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,goal_residual_speed_mps,0,0.05,PASS
+2026-08-14T00:39:49Z,5c7b63f,S01_S02_S07,-,max_cycle_time_ms,1,10.0,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,碰撞次数,0,0,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,最小侧向间距 (m),0.532,> 0.50,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,规划器最大横向偏移 (m),0.600,> 0.10,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,不越车道边线：最小余量 (m),0.327,> 0,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,回中心稳态 |d| (m),0.006,<= 0.15,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,绕完规划器偏移归零 (m),0.000,< 0.10,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,绕障段最大横向加速度 (m/s²),0.492,<= 1.5,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,绕障段跟踪误差 (m),0.057,<= 0.15,PASS
+2026-08-14T00:40:42Z,5c7b63f,S04_avoid,-,规划周期耗时 (ms),2.6,<= 50,PASS
+2026-08-14T00:41:17Z,5c7b63f,S04_block,-,碰撞次数,0,0,PASS
+2026-08-14T00:41:17Z,5c7b63f,S04_block,-,规划器报告不可行的拍数,445,> 0,PASS
+2026-08-14T00:41:17Z,5c7b63f,S04_block,-,终速 (m/s),0.000,< 0.10,PASS
+2026-08-14T00:41:17Z,5c7b63f,S04_block,-,停车点到障碍物间距 (m),4.038,>= 0.50,PASS
+2026-08-14T00:43:11Z,5c7b63f,follow,truth,① TTC 最小值（v_rel≥1.5）,2.47 s @t=47.84,> 2 s,PASS
+2026-08-14T00:43:11Z,5c7b63f,follow,truth,② 跟停稳态间距,4.47 m（498 拍）,"[4, 10] m",PASS
+2026-08-14T00:43:11Z,5c7b63f,follow,truth,③ 驶离后恢复,0.70 s,≤ 3 s,PASS
+2026-08-14T00:43:11Z,5c7b63f,follow,truth,⑧ 零碰撞（真值最小间距）,4.47 m,> 0.3 m,PASS
+2026-08-14T00:43:11Z,5c7b63f,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:45:04Z,5c7b63f,follow,perception,① TTC 最小值（v_rel≥1.5）,2.39 s @t=48.160000000000004,> 2 s,PASS
+2026-08-14T00:45:04Z,5c7b63f,follow,perception,② 跟停稳态间距,4.38 m（502 拍）,"[4, 10] m",PASS
+2026-08-14T00:45:04Z,5c7b63f,follow,perception,③ 驶离后恢复,0.88 s,≤ 3 s,PASS
+2026-08-14T00:45:04Z,5c7b63f,follow,perception,⑧ 零碰撞（真值最小间距）,4.38 m,> 0.3 m,PASS
+2026-08-14T00:45:04Z,5c7b63f,follow,perception,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:46:41Z,5c7b63f,crossing,truth,④ 占道期间完全停止,停于 t=43.1，距 4.08 m,v<0.05 且距离>3 m,PASS
+2026-08-14T00:46:41Z,5c7b63f,crossing,truth,⑤ 全程真值最近距离,1.69 m @t=53.3,> 1 m,PASS
+2026-08-14T00:46:41Z,5c7b63f,crossing,truth,⑥ 离开车道后恢复,0.88 s,≤ 3 s,PASS
+2026-08-14T00:46:41Z,5c7b63f,crossing,truth,⑧ 零碰撞（真值最小间距）,1.69 m,> 0.3 m,PASS
+2026-08-14T00:46:41Z,5c7b63f,crossing,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:48:18Z,5c7b63f,crossing,perception,④ 占道期间完全停止,停于 t=43.1，距 4.14 m,v<0.05 且距离>3 m,PASS
+2026-08-14T00:48:18Z,5c7b63f,crossing,perception,⑤ 全程真值最近距离,1.65 m @t=53.6,> 1 m,PASS
+2026-08-14T00:48:18Z,5c7b63f,crossing,perception,⑥ 离开车道后恢复,0.78 s,≤ 3 s,PASS
+2026-08-14T00:48:18Z,5c7b63f,crossing,perception,⑧ 零碰撞（真值最小间距）,1.65 m,> 0.3 m,PASS
+2026-08-14T00:48:18Z,5c7b63f,crossing,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:51:01Z,5c7b63f,junction,truth,⑦ 对车流的真值最小间距,4.19 m @t=96.8 vs cross_car_c,> 1.5 m,PASS
+2026-08-14T00:51:01Z,5c7b63f,junction,truth,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-14T00:51:01Z,5c7b63f,junction,truth,⑧ 零碰撞（真值最小间距）,4.19 m,> 0.3 m,PASS
+2026-08-14T00:51:01Z,5c7b63f,junction,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:53:59Z,5c7b63f,junction,perception,⑦ 对车流的真值最小间距,3.62 m @t=96.7 vs cross_car_c,> 1.5 m,PASS
+2026-08-14T00:53:59Z,5c7b63f,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-14T00:53:59Z,5c7b63f,junction,perception,⑧ 零碰撞（真值最小间距）,3.62 m,> 0.3 m,PASS
+2026-08-14T00:53:59Z,5c7b63f,junction,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,max_lateral_error_m,0.284393,0.3,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,rms_lateral_error_m,0.0897676,0.1,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,steady_speed_error_mps,0.0625636,0.2,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,max_lateral_accel_mps2,1.92245,2.0,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,max_steer_rate_rad_s,0.5,0.5,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,goal_position_error_m,0.275139,1.0,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,goal_residual_speed_mps,0,0.05,PASS
+2026-08-14T00:55:18Z,5c7b63f,S01_S02_S07,-,max_cycle_time_ms,2,10.0,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,碰撞次数,0,0,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,最小侧向间距 (m),0.532,> 0.50,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,规划器最大横向偏移 (m),0.600,> 0.10,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,不越车道边线：最小余量 (m),0.327,> 0,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,回中心稳态 |d| (m),0.006,<= 0.15,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,绕完规划器偏移归零 (m),0.000,< 0.10,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,绕障段最大横向加速度 (m/s²),0.492,<= 1.5,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,绕障段跟踪误差 (m),0.061,<= 0.15,PASS
+2026-08-14T00:56:11Z,5c7b63f,S04_avoid,-,规划周期耗时 (ms),2.3,<= 50,PASS
+2026-08-14T00:56:46Z,5c7b63f,S04_block,-,碰撞次数,0,0,PASS
+2026-08-14T00:56:46Z,5c7b63f,S04_block,-,规划器报告不可行的拍数,444,> 0,PASS
+2026-08-14T00:56:46Z,5c7b63f,S04_block,-,终速 (m/s),0.000,< 0.10,PASS
+2026-08-14T00:56:46Z,5c7b63f,S04_block,-,停车点到障碍物间距 (m),4.040,>= 0.50,PASS
+2026-08-14T00:58:39Z,5c7b63f,follow,truth,① TTC 最小值（v_rel≥1.5）,2.45 s @t=47.86,> 2 s,PASS
+2026-08-14T00:58:39Z,5c7b63f,follow,truth,② 跟停稳态间距,4.45 m（496 拍）,"[4, 10] m",PASS
+2026-08-14T00:58:39Z,5c7b63f,follow,truth,③ 驶离后恢复,0.76 s,≤ 3 s,PASS
+2026-08-14T00:58:39Z,5c7b63f,follow,truth,⑧ 零碰撞（真值最小间距）,4.45 m,> 0.3 m,PASS
+2026-08-14T00:58:39Z,5c7b63f,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T01:00:32Z,5c7b63f,follow,perception,① TTC 最小值（v_rel≥1.5）,2.37 s @t=48.06,> 2 s,PASS
+2026-08-14T01:00:32Z,5c7b63f,follow,perception,② 跟停稳态间距,4.38 m（501 拍）,"[4, 10] m",PASS
+2026-08-14T01:00:32Z,5c7b63f,follow,perception,③ 驶离后恢复,0.86 s,≤ 3 s,PASS
+2026-08-14T01:00:32Z,5c7b63f,follow,perception,⑧ 零碰撞（真值最小间距）,4.38 m,> 0.3 m,PASS
+2026-08-14T01:00:32Z,5c7b63f,follow,perception,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T01:02:09Z,5c7b63f,crossing,truth,④ 占道期间完全停止,停于 t=43.1，距 4.04 m,v<0.05 且距离>3 m,PASS
+2026-08-14T01:02:09Z,5c7b63f,crossing,truth,⑤ 全程真值最近距离,1.67 m @t=54.3,> 1 m,PASS
+2026-08-14T01:02:09Z,5c7b63f,crossing,truth,⑥ 离开车道后恢复,0.84 s,≤ 3 s,PASS
+2026-08-14T01:02:09Z,5c7b63f,crossing,truth,⑧ 零碰撞（真值最小间距）,1.67 m,> 0.3 m,PASS
+2026-08-14T01:02:09Z,5c7b63f,crossing,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T01:03:45Z,5c7b63f,crossing,perception,④ 占道期间完全停止,停于 t=43.1，距 4.15 m,v<0.05 且距离>3 m,PASS
+2026-08-14T01:03:45Z,5c7b63f,crossing,perception,⑤ 全程真值最近距离,1.64 m @t=53.5,> 1 m,PASS
+2026-08-14T01:03:45Z,5c7b63f,crossing,perception,⑥ 离开车道后恢复,0.68 s,≤ 3 s,PASS
+2026-08-14T01:03:45Z,5c7b63f,crossing,perception,⑧ 零碰撞（真值最小间距）,1.64 m,> 0.3 m,PASS
+2026-08-14T01:03:45Z,5c7b63f,crossing,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T01:06:35Z,5c7b63f,junction,truth,⑦ 对车流的真值最小间距,4.25 m @t=96.7 vs cross_car_c,> 1.5 m,PASS
+2026-08-14T01:06:35Z,5c7b63f,junction,truth,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-14T01:06:35Z,5c7b63f,junction,truth,⑧ 零碰撞（真值最小间距）,4.25 m,> 0.3 m,PASS
+2026-08-14T01:06:35Z,5c7b63f,junction,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑦ 对车流的真值最小间距,2.80 m @t=96.9 vs cross_car_c,> 1.5 m,PASS
+2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑧ 零碰撞（真值最小间距）,2.80 m,> 0.3 m,PASS
+2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
