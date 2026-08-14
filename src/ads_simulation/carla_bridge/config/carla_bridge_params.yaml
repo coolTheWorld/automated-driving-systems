@@ -1,0 +1,37 @@
+# =============================================================================
+#  carla_bridge 的环境 B 专属参数（P8-S4）
+#
+#  ⚠️ 车辆几何/能力/传感器外参**不在这里** —— 单一来源是
+#     config/vehicle_params.yaml（SPEC §4.1）。这里只放 CARLA 会话本身的东西。
+#
+#  ⚠️ spawn 位姿必须与 worlds/campus_loop.sdf 的自车 spawn 一致：
+#     map→odom 静态 TF 就是它（CLAUDE.md §5，P0a 的单位变换教训）。
+# =============================================================================
+
+carla_sidecar:
+  ros__parameters:
+    use_sim_time: true
+
+    # 与 campus_loop.sdf 一致（gazebo_sim.launch.py 是从世界文件里读的；
+    # CARLA 没有世界文件，这里手填 + 上机 checklist 里有一条核对项）。
+    spawn:
+      x_m: 30.0
+      y_m: -51.75
+      yaw_rad: 0.0
+
+    # 轴距 2.684 vs 2.700（差 0.6%）。⚠️ 别换 tesla.model3（差 11.3%，
+    # apply_physics_control 改不了轴距，而它直接进 Stanley 前轴换算）。
+    ego:
+      blueprint: vehicle.citroen.c3
+
+    control:
+      # 与 gazebo 侧 vehicle_cmd_bridge 的看门狗同值同语义。
+      watchdog_timeout_s: 0.5
+      # ⚠️ throttle/brake 标定常数 —— **上机重标**（S5 checklist）。
+      #    初值是保守猜测：1.5 m/s² 满加速 ≈ 60% 油门、3 m/s² ≈ 全刹。
+      #    P0b 已证明 CARLA 的执行机构响应（τ=0.140 s）与 Gazebo（0.294 s）
+      #    不同，映射常数没有理由相同。
+      throttle_per_mps2: 0.4
+      brake_per_mps2: 0.33
+
+    tick_hz: 50.0

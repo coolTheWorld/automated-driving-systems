@@ -22,6 +22,17 @@ set -uo pipefail
 LAUNCH_PKG="${LAUNCH_PKG:-gazebo_bridge}"
 LAUNCH_FILE="${LAUNCH_FILE:-gazebo_sim.launch.py}"
 WORLD_NAME="${WORLD_NAME:-campus_minimal}"
+# P8-S4：CARLA 侧原样验收要换的另外两个变量（默认值 = Gazebo 行为逐字节不变）。
+#   BRIDGE_NODES —— 检查 use_sim_time 的节点清单（环境相关：CARLA 没有
+#                   parameter_bridge 和 map_to_odom_static，多了 sidecar）。
+#   RTF_SOURCE   —— gz = 读 gz stats（基线 0.970 建立在它上，不动）；
+#                   clock = 通用测法（Δ仿真钟/Δ墙钟），CARLA 用这个。
+#   CARLA 验收的调用（S5，云机）：
+#     LAUNCH_PKG=carla_bridge LAUNCH_FILE=carla_sim.launch.py RTF_SOURCE=clock \
+#     BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
+#     ./scripts/verify_ros_bridge.sh
+BRIDGE_NODES="${BRIDGE_NODES:-/lidar_preprocessor /vehicle_cmd_bridge /robot_state_publisher /gazebo_bridge /map_to_odom_static}"
+RTF_SOURCE="${RTF_SOURCE:-gz}"
 
 HZ_MIN=9.0        # 计划 3.5 的验收线（10 Hz 标称，留 10% 余量）
 RTF_MIN=0.8       # 与 S2 同一条线
@@ -169,14 +180,14 @@ fi
 echo
 echo "[3/6] 各节点 use_sim_time"
 BAD_NODES=""
-for n in /lidar_preprocessor /vehicle_cmd_bridge /robot_state_publisher /gazebo_bridge /map_to_odom_static; do
+for n in ${BRIDGE_NODES}; do
   V="$(timeout 8 ros2 param get "${n}" use_sim_time 2>/dev/null | grep -oiE 'true|false' | head -1)"
   if [[ "${V,,}" != "true" ]]; then
     BAD_NODES="${BAD_NODES} ${n}(${V:-读不到})"
   fi
 done
 if [[ -z "${BAD_NODES}" ]]; then
-  ok "五个节点的 use_sim_time 均为 true"
+  ok "$(wc -w <<< "${BRIDGE_NODES}") 个节点的 use_sim_time 均为 true"
 else
   fail "以下节点 use_sim_time 不为 true：${BAD_NODES}"
   echo "     混用真实时间会让时间戳对不上，TF 报 extrapolation，且 RTF≈1 时看不出来。"
@@ -203,9 +214,36 @@ else
 fi
 
 echo
-echo "[6/6] 实时率 RTF（带激光雷达，验收线 ${RTF_MIN}）"
-RTF="$(gz topic -e -t "/world/${WORLD_NAME}/stats" -n 12 2>/dev/null \
-        | awk '/real_time_factor:/ {s+=$2; n++} END{if(n>0) printf "%.3f", s/n}')"
+echo "[6/6] 实时率 RTF（带激光雷达，验收线 ${RTF_MIN}，来源 ${RTF_SOURCE}）"
+if [[ "${RTF_SOURCE}" = clock ]]; then
+  # 通用测法：Δ仿真钟 / Δ墙钟。不依赖仿真器 CLI，CARLA/Gazebo 都适用。
+  # ⚠️ Gazebo 基线（0.970）是 gz stats 量的，两种测法数值不保证一致 ——
+  #    所以 gz 侧默认不换，换了历史基线全部作废（CLAUDE.md「两个世界并存」同理）。
+  RTF="$(python3 - <<'PYRTF'
+import time
+import rclpy
+from rclpy.node import Node
+from rosgraph_msgs.msg import Clock
+rclpy.init()
+n = Node('rtf_probe')
+samples = []
+n.create_subscription(Clock, '/clock',
+                      lambda m: samples.append((time.monotonic(),
+                                                m.clock.sec + m.clock.nanosec * 1e-9)), 10)
+deadline = time.monotonic() + 12.0
+while time.monotonic() < deadline:
+    rclpy.spin_once(n, timeout_sec=0.2)
+if len(samples) >= 2:
+    dw = samples[-1][0] - samples[0][0]
+    ds = samples[-1][1] - samples[0][1]
+    if dw > 1.0:
+        print(f'{ds / dw:.3f}')
+PYRTF
+)"
+else
+  RTF="$(gz topic -e -t "/world/${WORLD_NAME}/stats" -n 12 2>/dev/null \
+          | awk '/real_time_factor:/ {s+=$2; n++} END{if(n>0) printf "%.3f", s/n}')"
+fi
 if [[ -z "${RTF}" ]]; then
   fail "读不到 real_time_factor"
 else

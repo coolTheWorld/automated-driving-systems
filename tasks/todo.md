@@ -4,7 +4,7 @@
 > 状态：**P0a 29/29**、**P1 28/28**、**P2 28/28**、**P3 已验收（plan 全表 9/9+4/4）**、
 > 　　**P0b 方案 B 已实测**、**P4 已验收（复检修复后六轮全过）**、**P5 已验收（Gazebo 半）**、
 > 　　**P6 预测已验收（双层全过）**、**P7 行为决策已验收（CP-P7-A 7/7 + CP-P7-B，2026-08-13）**
-> 　　**进行中：P8 场景测试体系 + CI（S1–S3 ✅ CP-P8-A 达成，下一片 S4 carla_bridge）**
+> 　　**进行中：P8 场景测试体系 + CI（S1–S4 ✅，下一步 S5 云端联调 —— 要用户租机 + 两个拍板）**
 > 更新：2026-08-13　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：**P3/P4/P5 与 2026-08-12 复检的进度都记在「🔖 下次从这里继续」里**
@@ -16,14 +16,14 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P8 进行中** —— S1–S2d ✅（CI 九守卫 / run_all + metrics /
-感知三条 / 定位两条 / 规划近端三层）、**S3 ✅ CP-P8-A 达成（2026-08-14）**：
-run_all gazebo 连续两轮 9/9 全过、⑨ 两轮无照印、metrics 98 行全 PASS。
-**下一片 S4：carla_bridge 本地开发**（双通道：原生 ROS 2 传感器 + PythonAPI
-边车做 TF/车辆状态/红绿灯/地图；verify_ros_bridge.sh 换 LAUNCH_PKG 原样
-验收；蓝图 citroen.c3；全部 dry-run 后才上云）。S5/S6 要租云机 ——
-**到时停下问用户要 Vast.ai 实例**。四决策已拍板：先 Gazebo 后租机 /
-本地一键 + GHA 无 GPU / 台账八条全部清偿（用户加码）/ S06 最小闭环。
+**当前位置**：**P8 进行中** —— S1–S3 ✅（CP-P8-A 达成：run_all 连续两轮
+9/9、⑨ 无照印、metrics 98 行全 PASS）、**S4 ✅ carla_bridge 本地开发完成
+（2026-08-14）**：dry-run 21/21 + 注入验红，verify_ros_bridge.sh 已参数化
+且 Gazebo 默认路径实跑 6/6 复验。**下一步 S5 云端联调 —— 被外部前置卡住：
+① 用户在 Vast.ai 租 RTX 4090/5070Ti 级实例（规格见 docs/p8_carla_bringup.md
+§0）并提供 SSH；② 两个待拍板：TrafficLight 消息形态（动 ads_msgs，先问
+后做）、NPC 编排方案（sidecar 复刻航点 vs Traffic Manager，手册 §5）。**
+上机流程与 checklist 全在 docs/p8_carla_bringup.md。
 
 **🚩 CP-P8-A 达成**（2026-08-14）：两轮汇总表全 PASS 见
 `.scenario_runs/20260814_003900` 与 `20260814_005429`；台账八条中六条已清

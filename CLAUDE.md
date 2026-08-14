@@ -196,9 +196,10 @@ S3 时据此砍掉一半激光雷达分辨率，结果只快了 4%，因为病�
 
 ## 常用命令
 
-`src/` 下**目前有十二个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
+`src/` 下**目前有十三个包**：`ads_msgs`、`ads_common`、`ads_map`、`ads_control`、
 `ads_planning`、`ads_localization`、`ads_perception`、**`ads_prediction`**、
-`ads_bringup`、`ads_simulation/gazebo_bridge`、`ads_teleop`、`ads_visualization`。
+`ads_bringup`、`ads_simulation/gazebo_bridge`、**`ads_simulation/carla_bridge`**
+（P8-S4，仓库第一个 ament_python 包）、`ads_teleop`、`ads_visualization`。
 
 `ads_prediction`（**P6，CP-P6-B 已达成** 2026-08-12）有三个 lib：`motion_model`
 （恒速 + 静态 + 不确定椭圆，全解析）、`lane_follow`（nearest_lane 归属 →
@@ -463,7 +464,9 @@ python3 scripts/carla_align_vehicle.py --host 127.0.0.1 --blueprint vehicle.citr
 #    后者反映的是"测试有没有跑起来"，测试失败它照样可能返回 0。
 
 # ---------- 尚不可用（还没做到那一步） ----------
-ros2 launch ads_bringup stack.launch.py sim:=carla  # P0b 才有（现在会明确报错，不会静默空转）
+ros2 launch ads_bringup stack.launch.py sim:=carla  # P8-S4 起有：起 carla_bridge 侧
+#   （sidecar + lidar_preprocessor 复用 + RSP）。⚠️ 本机没有 Vulkan 跑不了
+#   CARLA 服务端 —— sidecar 连不上 :2000 会指名报错。上机手册 docs/p8_carla_bringup.md
 ```
 
 ### 模型生成与单项检查

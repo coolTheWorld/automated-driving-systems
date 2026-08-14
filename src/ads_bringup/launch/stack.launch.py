@@ -58,6 +58,10 @@ import yaml
 # 话题名不一致的话，这一层换得再干净，上游照样收不到数据。
 SIM_SOURCES = {
     'gazebo': ('gazebo_bridge', 'gazebo_sim.launch.py'),
+    # P8-S4：CARLA 侧翻译层。本机没有 Vulkan 跑不了 CARLA 服务端（CLAUDE.md
+    # 环境陷阱表），但 launch 本身可加载 —— sidecar 起来后连不上 :2000 会
+    # 指名报错，不会静默空转。
+    'carla': ('carla_bridge', 'carla_sim.launch.py'),
 }
 
 # SPEC 里已规划、但当前阶段还没实现的数据源。
@@ -66,7 +70,6 @@ SIM_SOURCES = {
 # 「还没做」和「你拼错了」的排查方向完全不同。用户敲 sim:=carla 时应该
 # 立刻知道"这个功能在 P0b"，而不是对着"未知的 sim 值"去检查拼写。
 PLANNED_SOURCES = {
-    'carla': 'P0b 阶段实现（云端 CARLA 验收环境）',
     'bag': 'P1 之后实现（离线 rosbag 回放）',
 }
 
