@@ -52,7 +52,7 @@ done
 grep -q "传感器已 spawn+中继：gnss" ${LOG}.launch.log || { echo "VERDICT=BRINGUP_TIMEOUT"; exit 2; }
 sleep 10
 
-timeout 300 python3 /workspace/.s06_judge.py > ${LOG}.txt 2>&1
+timeout 300 python3 /workspace/scripts/s06_judge.py > ${LOG}.txt 2>&1
 while pgrep -f "s06_judge.p[y]" >/dev/null; do
   server_ok || { echo "VERDICT=SERVER_CRASHED"; exit 3; }
   sleep 10
