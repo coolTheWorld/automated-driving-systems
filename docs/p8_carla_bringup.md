@@ -15,8 +15,10 @@ RTX 4090/5070Ti 级、显存 ≥ 8 GB、**CPU ≥ 8 物理核**（CARLA 物理�
 ## 1. 环境自检（照 p0b §2.1–2.3）
 
 1. Vulkan 硬件设备可见（`vkEnumeratePhysicalDevices` 设备类型非 CPU）。
-2. CARLA 0.9.16 起服务端：`./CarlaUE4.sh -RenderOffScreen -quality-level=Low --ros2`
-   —— **`--ros2` 别忘**，双通道的原生半边全靠它。
+2. CARLA 服务端：`./CarlaUE4.sh -RenderOffScreen -quality-level=Low`
+   —— **不带 `--ros2`**（原生层已弃用，SPEC §9 D5：双斜杠话题 rclcpp
+   不可达 / /clock 世界重建后静默死 / 传感器流 segfault，三项实测钉死）。
+   全部数据走 carla_sidecar_node 中继，/clock 也由它自发。
 3. 容器内 `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`（Dockerfile 已锁；
    CARLA 内嵌 Fast DDS，CycloneDDS 的症状是本地全好、CARLA 完全收不到）。
 
