@@ -151,7 +151,16 @@ class CarlaSidecarNode(Node):
         # （npc_kinematics.py 的对照表），场景判据时间窗才对得上。
         self.declare_parameter('dynamic_actors_yaml', '')
         self.declare_parameter('scenario', '')
+        # P3/S04 静态障碍场景（avoid/block）：与 Gazebo 同一份 obstacles.yaml
+        self.declare_parameter('obstacles_yaml', '')
+        self.declare_parameter('obstacles_scenario', '')
         self._npcs = {}
+        obstacles_yaml = self.get_parameter('obstacles_yaml').value
+        obstacles_scenario = self.get_parameter('obstacles_scenario').value
+        # 'none' = 什么都不生成（与 Gazebo 的「没有 none 场景」语义一致：
+        # stack.launch 默认透传 obstacles:=none）。
+        if obstacles_yaml and obstacles_scenario not in ('', 'none'):
+            self._spawn_obstacles(obstacles_yaml, obstacles_scenario)
         actors_yaml = self.get_parameter('dynamic_actors_yaml').value
         scenario = self.get_parameter('scenario').value
         if actors_yaml and scenario:
@@ -468,6 +477,31 @@ class CarlaSidecarNode(Node):
     # ------------------------------------------------------------------
     #  NPC 道具
     # ------------------------------------------------------------------
+    def _spawn_obstacles(self, obstacles_yaml_path, scenario):
+        """S04 静态障碍（锥桶）：读与 Gazebo 同一份 obstacles.yaml（单一来源）.
+
+        可行性校验不在这里重复 —— gen_obstacles --check 守着那条不等式。
+        CARLA 蓝图用 constructioncone（几何近似 0.5×0.5 锥桶；判据量的是
+        自车与障碍**位置**的间距，道具形状差异进两环境一致性表）。
+        """
+        cfg = yaml.safe_load(open(obstacles_yaml_path, encoding='utf-8'))
+        scen = cfg.get('scenarios', {}).get(scenario)
+        if scen is None:
+            raise RuntimeError(
+                f'obstacles.yaml 里没有场景 {scenario!r} —— 拼错要炸在启动，不要静默无障碍')
+        library = self._world.get_blueprint_library()
+        bp = library.find('static.prop.constructioncone')
+        for i, obstacle in enumerate(scen['obstacles']):
+            # 坐标是**路线相对**的（along_x + lateral_offset）——车道中心取
+            # yaml 自带的 lane.center_y_m（与 gazebo_sim.launch 同一来源同一换算）。
+            x = float(obstacle['along_x_m'])
+            y = float(cfg['lane']['center_y_m']) + float(obstacle['lateral_offset_m'])
+            cx, cy, _ = position_to_carla(x, y, 0.0)
+            actor = self._world.spawn_actor(
+                bp, self._carla.Transform(self._carla.Location(x=cx, y=cy, z=0.05)))
+            actor.set_simulate_physics(False)
+            self.get_logger().info(f'障碍物已 spawn：#{i} @ ENU({x:.2f}, {y:.2f})')
+
     def _spawn_npcs(self, actors_yaml_path, scenario):
         """按场景 spawn NPC 道具并接上 npc_controller 的话题对."""
         cfg = yaml.safe_load(open(actors_yaml_path, encoding='utf-8'))

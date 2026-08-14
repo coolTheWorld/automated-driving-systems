@@ -64,8 +64,15 @@ rclpy.spin(n)
 TEOF
 TAP=$!
 
-timeout 400 python3 /workspace/scripts/record_control_run.py \
-  --goal "$GX" "$GY" --out ${LOG}.csv > ${LOG}.txt 2>&1 &
+# S04 场景（TAG 含 avoid/block）换判据仪器（家规：判据活在 record_* 里）
+if [[ "$TAG" == *avoid* || "$TAG" == *block* ]]; then
+  SCEN=${TAG##*_}
+  timeout 400 python3 /workspace/scripts/record_obstacle_run.py \
+    --scenario "$SCEN" --out ${LOG}.csv > ${LOG}.txt 2>&1 &
+else
+  timeout 400 python3 /workspace/scripts/record_control_run.py \
+    --goal "$GX" "$GY" --out ${LOG}.csv > ${LOG}.txt 2>&1 &
+fi
 REC=$!
 while kill -0 $REC 2>/dev/null; do
   server_ok || { echo "VERDICT=SERVER_CRASHED（记录中）"; echo "末段遥测 x,y,yaw°,v,steer,accel："; grep -v "^0.0,-0.0" ${LOG}.pos | tail -12; kill $TAP 2>/dev/null; exit 3; }

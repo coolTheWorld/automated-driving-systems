@@ -34,9 +34,44 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import yaml
+
+
+def _obstacle_truth_nodes(context, *args, **kwargs):
+    """S04 场景的真值发布器 —— 与 gazebo_sim.launch 同一换算同一节点.
+
+    obstacle_truth 是仿真器无关的（参数进、话题出），照抄扁平化逻辑：
+    车道坐标 → 世界坐标用 yaml 自带 lane 段（单一来源）。
+    """
+    scenario = LaunchConfiguration('obstacles').perform(context)
+    if scenario in ('', 'none'):
+        return []
+    config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                   / 'obstacles.yaml')
+    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+    if scenario not in config['scenarios']:
+        raise RuntimeError(f'obstacles:={scenario} 未定义（可选：none、'
+                           f'{"、".join(config["scenarios"])}）')
+    lane = config['lane']
+    truth_params = {'frame_id': 'map', 'use_sim_time': True,
+                    'publish_as_perception': True}
+    xs, ys, yaws, ls, ws, hs = [], [], [], [], [], []
+    for obstacle in config['scenarios'][scenario]['obstacles']:
+        xs.append(float(obstacle['along_x_m']))
+        ys.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
+        yaws.append(float(lane['heading_rad']))
+        ls.append(float(obstacle['length_m']))
+        ws.append(float(obstacle['width_m']))
+        hs.append(float(obstacle['height_m']))
+    truth_params.update({
+        'obstacles.center_x_m': xs, 'obstacles.center_y_m': ys,
+        'obstacles.yaw_rad': yaws, 'obstacles.length_m': ls,
+        'obstacles.width_m': ws, 'obstacles.height_m': hs})
+    return [Node(package='gazebo_bridge', executable='obstacle_truth',
+                 name='obstacle_truth', parameters=[truth_params], output='screen')]
 
 
 def generate_launch_description():
@@ -73,6 +108,8 @@ def generate_launch_description():
                               description='忽略（CARLA 无头由服务端定），为 verify 脚本兼容'),
         DeclareLaunchArgument('rviz', default_value='false',
                               description='同上'),
+        DeclareLaunchArgument('obstacles', default_value='',
+                              description='S04 静态障碍场景（avoid/block，空=无）'),
 
         Node(
             package='carla_bridge',
@@ -80,6 +117,10 @@ def generate_launch_description():
             name='carla_sidecar',
             parameters=[params_file, {
                 'map_xodr_path': xodr_path,
+                'obstacles_yaml': str(
+                    Path(get_package_share_directory('gazebo_bridge')) / 'config' /
+                    'obstacles.yaml'),
+                'obstacles_scenario': LaunchConfiguration('obstacles'),
                 'vehicle_params_yaml': str(
                     Path(get_package_share_directory('ads_planning')) / 'config' /
                     'vehicle_params.yaml'),
@@ -103,6 +144,8 @@ def generate_launch_description():
                 **ego_box,
             }],
             output='screen'),
+
+        OpaqueFunction(function=_obstacle_truth_nodes),
 
         Node(
             package='robot_state_publisher',
