@@ -66,16 +66,16 @@ def test_launch_description_loads_and_mirrors_gazebo_side():
     for node in nodes:
         by_package.setdefault(node.node_package, []).append(node.node_executable)
     assert by_package.get('carla_bridge') == ['carla_sidecar_node']
-    assert by_package.get('gazebo_bridge') == ['lidar_preprocessor_node']
+    assert by_package.get('gazebo_bridge') == ['lidar_preprocessor']
     assert by_package.get('robot_state_publisher') == ['robot_state_publisher']
 
 
 def test_lidar_preprocessor_input_uses_carla_prefix():
-    """中间话题必须带 /carla 前缀 —— 防两套 bridge 误同起时点云串台."""
+    """中间话题带 /carla 前缀 —— sidecar 中继的出口（原生名双斜杠不可达，S5 实测）."""
     module = _load_launch_module()
     context = LaunchContext()
     for entity in module.generate_launch_description().entities:
-        if isinstance(entity, RosNode) and entity.node_executable == 'lidar_preprocessor_node':
+        if isinstance(entity, RosNode) and entity.node_executable == 'lidar_preprocessor':
             # 私有属性 _Node__parameters：与 test_sim_source.py 同一条注释 ——
             # launch_ros 没有公开读取口，升级时宁可 AttributeError 响亮地炸。
             flat = {}
@@ -93,4 +93,4 @@ def test_lidar_preprocessor_input_uses_carla_prefix():
             assert resolved('input_topic') == '/carla/lidar/points_raw'
             assert resolved('output_topic') == '/lidar/points'
             return
-    raise AssertionError('launch 里没有 lidar_preprocessor_node')
+    raise AssertionError('launch 里没有 lidar_preprocessor')

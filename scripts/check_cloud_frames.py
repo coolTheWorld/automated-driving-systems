@@ -36,6 +36,7 @@ frame_id 一样显示 base_link，判据一样变绿，但点的数值一个都�
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from math import isfinite
@@ -53,8 +54,10 @@ PARAMS_FILE = REPO_ROOT / "config" / "vehicle_params.yaml"
 
 # 仿真器原始点云。带 gazebo 前缀 = **不是** SPEC §4.1 的规范话题，只是中间话题；
 # 权威定义在 gazebo_bridge/config/bridge_topics.yaml。
-# carla_bridge 那边对应的会是 /carla/lidar/points_raw，所以本脚本是 Gazebo 专用的。
-RAW_TOPIC = "/gazebo/lidar/points_raw"
+# carla_bridge 那边对应的是 /carla/lidar/points_raw —— 用 RAW_TOPIC 环境变量
+# 切换（P8-S5，与 verify_ros_bridge.sh 的 BRIDGE_NODES/RTF_SOURCE 同一套约定：
+# 默认值 = Gazebo 行为逐字节不变）。
+RAW_TOPIC = os.environ.get("RAW_TOPIC", "/gazebo/lidar/points_raw")
 # 这个才是规范话题（SPEC §4.1），两个仿真环境都必须发它。
 OUT_TOPIC = "/lidar/points"
 TARGET_FRAME = "base_link"

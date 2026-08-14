@@ -36,6 +36,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
+import yaml
 
 
 def generate_launch_description():
@@ -46,6 +47,21 @@ def generate_launch_description():
     # campus.xodr 从 ads_map 的安装目录拿 —— 与 map_node 用同一份（单一来源）。
     xodr_path = str(
         Path(get_package_share_directory('ads_map')) / 'maps' / 'campus.xodr')
+
+    # 自车包围盒：与 gazebo_sim.launch 同一推导（车身在 base_link 系的占据），
+    # CARLA 雷达同样打得到自家车身（S5 实测 1040 点/帧落在盒内 —— 引擎换了，
+    # 自车反射这件事不换）。
+    vehicle_yaml = (
+        Path(get_package_share_directory('ads_planning')) / 'config' / 'vehicle_params.yaml')
+    geo = yaml.safe_load(vehicle_yaml.read_text(encoding='utf-8'))['geometry']
+    ego_box = {
+        'ego_box.x_min': -geo['rear_overhang_m'],
+        'ego_box.x_max': geo['wheelbase_m'] + geo['front_overhang_m'],
+        'ego_box.y_min': -geo['width_m'] / 2.0,
+        'ego_box.y_max': geo['width_m'] / 2.0,
+        'ego_box.z_min': 0.0,
+        'ego_box.z_max': geo['height_m'],
+    }
 
     # URDF 与 gazebo 侧完全同一份（车辆单一来源，SPEC §4.1 表格那两行）。
     urdf_path = (
@@ -62,19 +78,29 @@ def generate_launch_description():
             package='carla_bridge',
             executable='carla_sidecar_node',
             name='carla_sidecar',
-            parameters=[params_file, {'map_xodr_path': xodr_path}],
+            parameters=[params_file, {
+                'map_xodr_path': xodr_path,
+                'vehicle_params_yaml': str(
+                    Path(get_package_share_directory('ads_planning')) / 'config' /
+                    'vehicle_params.yaml'),
+            }],
             output='screen'),
 
         # 点云中间话题 → 规范话题：与 gazebo 侧**同一个 C++ 节点**，
         # 只有 input_topic 不同（bridge_topics.yaml 当年就为此留了 /carla 前缀）。
         Node(
             package='gazebo_bridge',
-            executable='lidar_preprocessor_node',
+            executable='lidar_preprocessor',
             name='lidar_preprocessor',
             parameters=[{
                 'use_sim_time': True,
+                # ⚠️ 实测（2026-08-14，云机）：原生话题名恒为
+                #    /carla//lidar/point_cloud（双斜杠，issue #2）——而 rclcpp
+                #    **拒绝**重复斜杠，原生流对 ROS 节点不可达。点云由 sidecar
+                #    的 listen 回调中继到本合法中间名（y 已翻成 ENU）。
                 'input_topic': '/carla/lidar/points_raw',
                 'output_topic': '/lidar/points',
+                **ego_box,
             }],
             output='screen'),
 

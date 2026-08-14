@@ -32,12 +32,15 @@ PythonAPI wheel 只装在云机上。惰性 import 让本包在本机可构建�
 """
 
 import math
+import threading
+import time
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import JointState
+import numpy as np
+from sensor_msgs.msg import Imu, JointState, NavSatFix, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from ads_msgs.msg import VehicleCmd
@@ -65,7 +68,7 @@ class CarlaSidecarNode(Node):
         self._carla = carla_module
         self._client = client
 
-        self.declare_parameter('use_sim_time', True)
+        # use_sim_time 由参数文件带入（rclpy 自动声明），这里不重复声明。
         host_desc = '（上机时由 launch 覆盖，本地 dry-run 不连接）'
         self.declare_parameter('map_xodr_path', '')
         # spawn 位姿：ROS ENU。⚠️ 必须与 campus_loop.sdf 的自车 spawn 一致 ——
@@ -95,8 +98,13 @@ class CarlaSidecarNode(Node):
             self.get_parameter('control.throttle_per_mps2').value,
             self.get_parameter('control.brake_per_mps2').value)
 
+        # 传感器外参的单一来源（SPEC §4.1）—— sidecar 直接读 vehicle_params，
+        # 不在 carla_bridge_params 里抄一份。
+        self.declare_parameter('vehicle_params_yaml', '')
+
         self._world = self._load_world()
         self._ego = self._spawn_ego()
+        self._sensors = self._spawn_sensors()
 
         spawn_x = self.get_parameter('spawn.x_m').value
         spawn_y = self.get_parameter('spawn.y_m').value
@@ -105,6 +113,13 @@ class CarlaSidecarNode(Node):
 
         # ---- 话题（QoS 与 gazebo_bridge 逐条对齐，SPEC §4.1 契约）----
         self._odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        # 传感器中继出口。⚠️ 点云走中间名（/carla 前缀 —— bridge_topics.yaml
+        # 当年留的位置），由 lidar_preprocessor 做自车裁剪与 frame 换算后出
+        # 规范名 /lidar/points；imu/gnss 无需预处理，sidecar 直接出规范名。
+        # QoS 一律 reliable（陷阱表：best-effort 静默丢帧只剩 35%）。
+        self._lidar_pub = self.create_publisher(PointCloud2, '/carla/lidar/points_raw', 10)
+        self._imu_pub = self.create_publisher(Imu, '/imu', 10)
+        self._gnss_pub = self.create_publisher(NavSatFix, '/gnss', 10)
         self._gt_pub = self.create_publisher(Odometry, '/ego_pose_gt', 10)
         self._joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         self._tf_broadcaster = TransformBroadcaster(self)
@@ -133,6 +148,14 @@ class CarlaSidecarNode(Node):
         period_s = 1.0 / self.get_parameter('tick_hz').value
         self.create_timer(period_s, self._on_tick)
 
+        # 墙钟节拍器：同步模式下 world.tick() 的唯一来源。必须用**墙钟**——
+        # 本节点 use_sim_time=true，ROS 定时器等仿真钟，而仿真钟等 tick：
+        # 用 ROS 定时器推 tick 就是死锁。这是仿真配速不是算法时序
+        # （SPEC §5 豁免类比：bridge 看门狗的墙钟健康检查）。
+        self._ticking = True
+        self._tick_thread = threading.Thread(target=self._pace_world, daemon=True)
+        self._tick_thread.start()
+
     # ------------------------------------------------------------------
     #  世界与自车
     # ------------------------------------------------------------------
@@ -150,13 +173,30 @@ class CarlaSidecarNode(Node):
         params = self._carla.OpendriveGenerationParameters(
             vertex_distance=2.0, max_road_length=50.0, wall_height=0.0,
             additional_width=0.6, smooth_junctions=True, enable_mesh_visibility=True)
-        return self._client.generate_opendrive_world(xodr, params)
+        world = self._client.generate_opendrive_world(xodr, params)
+        # ---- 同步模式（S5 实测后加）--------------------------------------
+        # 异步模式下世界自由狂奔（实测 ~300 FPS）：仿真钟三倍速于墙钟、
+        # lidar 每 tick 只出部分弧段、物理步长不定 —— issue #3「原生与
+        # PythonAPI 不一致」的温床。同步模式 + 固定步长 0.05 s（20 FPS），
+        # 由本节点的墙钟节拍线程推 tick ⟹ RTF ≈ 1。
+        # ⚠️ 20 FPS 的含义：IMU 上限 20 Hz（Gazebo 侧 100 Hz）——S5 的六项
+        #    验收不含 IMU 频率；S6 做定位时要重估步长（见 p8_carla_bringup §4）。
+        settings = world.get_settings()
+        settings.synchronous_mode = True
+        settings.fixed_delta_seconds = 0.05
+        world.apply_settings(settings)
+        return world
 
     def _spawn_ego(self):
         """spawn 自车并对齐物理参数（apply_physics_control）."""
         blueprint_name = self.get_parameter('ego.blueprint').value
         blueprint = self._world.get_blueprint_library().find(blueprint_name)
         blueprint.set_attribute('role_name', 'ego_vehicle')
+        # ros_name 进原生话题路径的父段：没有它路径是 /carla//<sensor>/...，
+        # 而 rclcpp **拒绝**含重复斜杠的话题名 —— 原生话题在 DDS 层存在、
+        # ROS 节点却订不了（S5 实测，issue #2 的真实杀伤方式）。
+        if blueprint.has_attribute('ros_name'):
+            blueprint.set_attribute('ros_name', 'ego_vehicle')
         x, y, yaw = (self.get_parameter('spawn.x_m').value,
                      self.get_parameter('spawn.y_m').value,
                      self.get_parameter('spawn.yaw_rad').value)
@@ -170,6 +210,179 @@ class CarlaSidecarNode(Node):
         # 抄了就是两处漂移（单一来源，SPEC §4.1）。
         self.get_logger().info(f'自车已 spawn：{blueprint_name} @ ROS({x:.2f}, {y:.2f})')
         return ego
+
+    def _spawn_sensors(self):
+        """按 vehicle_params 外参 spawn 原生通道传感器（S5 实测三条落地）.
+
+        2026-08-14 云机实测（手册 §2 核对项 1）：
+          · 话题名 = /carla//<ros_name>[/point_cloud] —— **双斜杠**是 CARLA
+            issue #2（父级车辆名没进路径），照实配下游，不猜官方哪天修；
+          · **listen(no-op) 是开流条件**：原生通道没有消费者不发布；
+            客户端断开后流不断（"sensor still alive" 警告即此语义）；
+          · ros_publish_tf 必须显式关：默认开，会与 robot_state_publisher
+            抢传感器 TF —— 一段两个发布者的老坑（CLAUDE.md §5 同类）。
+
+        ⚠️ 安装位姿相对 **CARLA 车辆原点**（包围盒中心系），与 base_link
+        （后轴地面）差一个纵向偏移 —— S6 一致性表要量的项，先按
+        车长/2 − 后悬近似换算。
+        """
+        params_path = self.get_parameter('vehicle_params_yaml').value
+        if not params_path:
+            self.get_logger().warn('vehicle_params_yaml 为空 —— 不 spawn 传感器（裸联调模式）')
+            return []
+        with open(params_path, encoding='utf-8') as f:
+            vehicle = yaml.safe_load(f)
+        geo = vehicle['geometry']
+        # base_link（后轴）→ CARLA 原点（近似包围盒中心）的纵向偏移
+        axle_to_center_m = 0.5 * geo['length_m'] - geo['rear_overhang_m']
+        library = self._world.get_blueprint_library()
+        sensors = []
+        specs = [
+            ('sensor.lidar.ray_cast', 'lidar', 'lidar_link', {
+                'channels': str(vehicle['sensors']['lidar']['channels']),
+                'rotation_frequency': '10',
+                'points_per_second': str(
+                    vehicle['sensors']['lidar']['channels'] *
+                    vehicle['sensors']['lidar']['horizontal_samples'] * 10),
+                'range': '30.0',
+                'upper_fov': str(math.degrees(
+                    vehicle['sensors']['lidar']['vertical_fov_max_rad'])),
+                'lower_fov': str(math.degrees(
+                    vehicle['sensors']['lidar']['vertical_fov_min_rad'])),
+            }),
+            ('sensor.other.imu', 'imu', 'imu_link', {
+                'sensor_tick': str(1.0 / vehicle['sensors']['imu']['update_rate_hz']),
+            }),
+            ('sensor.other.gnss', 'gnss', 'gnss_link', {
+                'sensor_tick': str(1.0 / vehicle['sensors']['gnss']['update_rate_hz']),
+            }),
+        ]
+        for bp_name, ros_name, frame_id, attrs in specs:
+            bp = library.find(bp_name)
+            bp.set_attribute('ros_name', ros_name)
+            if bp.has_attribute('ros_frame_id'):
+                bp.set_attribute('ros_frame_id', frame_id)
+            if bp.has_attribute('ros_publish_tf'):
+                bp.set_attribute('ros_publish_tf', 'false')
+            for key, value in attrs.items():
+                if bp.has_attribute(key):
+                    bp.set_attribute(key, value)
+            mount = vehicle['sensors'][ros_name]
+            transform = self._carla.Transform(self._carla.Location(
+                x=mount['mount_x_m'] - axle_to_center_m,
+                y=-mount['mount_y_m'],
+                z=mount['mount_z_m']))
+            actor = self._world.spawn_actor(bp, transform, attach_to=self._ego)
+            # ---- 中继回调（S5 实测后的方案变更）------------------------------
+            # 原生通道的话题名恒为 /carla//<name>（父段为空，issue #2），而
+            # rclcpp **拒绝**重复斜杠 —— 原生流对 ROS 节点不可达。改由 sidecar
+            # 在 listen 回调里转 ROS 消息发**合法名**。带宽账：32×1800×10 Hz
+            # ≈ 9.2 MB/s，numpy 翻 y 毫秒级；RTF 判据（verify [6/6]）守着上限。
+            if ros_name == 'lidar':
+                actor.listen(self._on_lidar)
+            elif ros_name == 'imu':
+                actor.listen(self._on_imu)
+            else:
+                actor.listen(self._on_gnss)
+            sensors.append(actor)
+            self.get_logger().info(f'传感器已 spawn+中继：{ros_name}（{bp_name}）')
+        return sensors
+
+    def _pace_world(self):
+        """按固定步长的墙钟节拍推 world.tick()（RTF ≈ 1 的机制本体）."""
+        step_s = 0.05
+        next_t = time.monotonic()
+        while self._ticking:
+            try:
+                self._world.tick()
+            except RuntimeError as error:
+                self.get_logger().warn(f'world.tick 失败：{error}', throttle_duration_sec=5.0)
+            next_t += step_s
+            delay = next_t - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                next_t = time.monotonic()  # 跟不上就不追帧（RTF < 1 而不是抖动）
+
+    # ------------------------------------------------------------------
+    #  传感器中继（CARLA 左手系 → ENU：线量 y 反号；角量 x/z 反号）
+    # ------------------------------------------------------------------
+    def _sensor_stamp(self, data):
+        """CARLA 测量时间戳 → ROS 时间。与原生 /clock 同一个仿真钟源."""
+        from rclpy.time import Time
+        return Time(seconds=data.timestamp).to_msg()
+
+    def _on_lidar(self, data):
+        """LidarMeasurement → PointCloud2（xyzi float32，y 反号；按回卷聚合整圈）.
+
+        同步 20 FPS × 旋转 10 Hz ⟹ 每圈 2 个 tick、每 tick 半圈弧段。
+        按 horizontal_angle **回卷**聚合（不是数 tick —— 数 tick 在服务器
+        偶尔丢帧时会错半圈，回卷判据对任何步长/转速组合都成立）。
+        """
+        chunk = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4)
+        # ---- 按 tick 计数切帧（S5 实测终版）-------------------------------
+        # horizontal_angle 实测**不回卷**（模 2π 也救不了 —— 前两版按它切帧
+        # 一个点都发不出，兜底冲刷则攒出 5 圈半的巨包被 DDS UDP 分片静默
+        # 丢光，小消息 IMU/GNSS 全过正是旁证）。同步模式下每圈 tick 数是
+        # **确定的**：20 FPS / 旋转 10 Hz = 2 tick/圈 —— 计数切帧，确定且
+        # 与角度语义无关。留档：首几拍打印角度原值，供后续版本对表。
+        if not hasattr(self, '_lidar_chunks'):
+            self._lidar_chunks = []
+            self._lidar_angle_logged = 0
+        if self._lidar_angle_logged < 4:
+            self._lidar_angle_logged += 1
+            self.get_logger().info(
+                f'lidar tick 角度留档 #{self._lidar_angle_logged}: '
+                f'horizontal_angle={data.horizontal_angle:.4f}, 点数={chunk.shape[0]}')
+        self._lidar_chunks.append(chunk)
+        if len(self._lidar_chunks) < 2:  # = round(1/(rotation_hz·fixed_delta))
+            return
+        points = np.concatenate(self._lidar_chunks).copy()
+        self._lidar_chunks = []
+        points[:, 1] = -points[:, 1]
+        msg = PointCloud2()
+        msg.header.stamp = self._sensor_stamp(data)
+        msg.header.frame_id = 'lidar_link'
+        msg.height = 1
+        msg.width = points.shape[0]
+        msg.fields = [
+            PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
+            for i, n in enumerate(('x', 'y', 'z', 'intensity'))]
+        msg.is_bigendian = False
+        msg.point_step = 16
+        msg.row_step = 16 * points.shape[0]
+        msg.data = points.tobytes()
+        msg.is_dense = True
+        self._lidar_pub.publish(msg)
+
+    def _on_imu(self, data):
+        """IMUMeasurement → sensor_msgs/Imu.
+
+        左手系 → 右手系：加速度（极矢量）y 反号；角速度（赝矢量）x、z 反号。
+        CARLA 的加速度计与真实 IMU 一样含重力反作用（比力），语义与
+        Gazebo 侧一致，ESKF 不需要区分来源。
+        """
+        msg = Imu()
+        msg.header.stamp = self._sensor_stamp(data)
+        msg.header.frame_id = 'imu_link'
+        msg.linear_acceleration.x = data.accelerometer.x
+        msg.linear_acceleration.y = -data.accelerometer.y
+        msg.linear_acceleration.z = data.accelerometer.z
+        msg.angular_velocity.x = -data.gyroscope.x
+        msg.angular_velocity.y = data.gyroscope.y
+        msg.angular_velocity.z = -data.gyroscope.z
+        msg.orientation_covariance[0] = -1.0  # 不提供朝向（与 Gazebo IMU 同约定）
+        self._imu_pub.publish(msg)
+
+    def _on_gnss(self, data):
+        """GnssMeasurement → NavSatFix（大地坐标无手性问题，直通）."""
+        msg = NavSatFix()
+        msg.header.stamp = self._sensor_stamp(data)
+        msg.header.frame_id = 'gnss_link'
+        msg.latitude = data.latitude
+        msg.longitude = data.longitude
+        msg.altitude = data.altitude
+        self._gnss_pub.publish(msg)
 
     def _publish_map_to_odom(self):
         """静态 map→odom = spawn 位姿（与 gazebo 的 map_to_odom_static 同一约定）."""

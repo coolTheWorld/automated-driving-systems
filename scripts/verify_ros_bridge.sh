@@ -33,6 +33,8 @@ WORLD_NAME="${WORLD_NAME:-campus_minimal}"
 #     ./scripts/verify_ros_bridge.sh
 BRIDGE_NODES="${BRIDGE_NODES:-/lidar_preprocessor /vehicle_cmd_bridge /robot_state_publisher /gazebo_bridge /map_to_odom_static}"
 RTF_SOURCE="${RTF_SOURCE:-gz}"
+RAW_TOPIC="${RAW_TOPIC:-/gazebo/lidar/points_raw}"
+export RAW_TOPIC   # check_cloud_frames.py 读它（[4/6] 的中间话题名随环境变）
 
 HZ_MIN=9.0        # 计划 3.5 的验收线（10 Hz 标称，留 10% 余量）
 RTF_MIN=0.8       # 与 S2 同一条线

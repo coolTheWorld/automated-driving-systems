@@ -35,7 +35,6 @@ class TrafficLightNode(Node):
     def __init__(self):
         """声明参数并起定时器."""
         super().__init__('traffic_light')
-        self.declare_parameter('use_sim_time', True)
         # 相位时长。红 25 s：自车从 goal 发布到停止线 ~40 m，巡航+减速 ≈ 12 s，
         # 红窗要盖住「到达 + 停稳 + 判据采样」；绿 20 s 够恢复通过。
         # ⚠️ 上机后按实际场景相位账微调（与 P7 dwell 相位账同一套做法）。
