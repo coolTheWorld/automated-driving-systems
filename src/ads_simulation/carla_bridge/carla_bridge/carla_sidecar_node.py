@@ -590,6 +590,23 @@ class CarlaSidecarNode(Node):
 
         x, y, z = position_to_ros(
             transform.location.x, transform.location.y, transform.location.z)
+        # ---- 位姿跳变滤波（S6 block 场景定案）-----------------------------
+        # get_transform 在同步模式+负载下**偶发返回零/陈旧位姿**（PythonAPI
+        # 一致性 issue #3 家族）。一个坏样本进 TF ⟹ 规划起点瞬移 10-30 m ⟹
+        # 投影越过障碍物、「绕不过去」翻成「正常」一拍，车顶进锥桶（实测
+        # 119 碰撞拍）；S01 的横向 rms 劣化同源。单拍位移超过物理上限
+        # （8 m/s × 0.05 s × 5 倍余量 = 2 m）即丢样保持上一拍，计数进日志。
+        if not hasattr(self, '_last_good_xy'):
+            self._last_good_xy = (x, y)
+            self._pose_rejects = 0
+        jump = math.hypot(x - self._last_good_xy[0], y - self._last_good_xy[1])
+        if jump > 2.0:
+            self._pose_rejects += 1
+            self.get_logger().warn(
+                f'丢弃跳变位姿样本（单拍位移 {jump:.1f} m，累计 {self._pose_rejects}）',
+                throttle_duration_sec=5.0)
+            return
+        self._last_good_xy = (x, y)
         yaw = yaw_to_ros(transform.rotation.yaw)
         vx, vy, _ = (velocity.x, -velocity.y, velocity.z)
         yaw_rate = yaw_rate_to_ros(angular.z)
