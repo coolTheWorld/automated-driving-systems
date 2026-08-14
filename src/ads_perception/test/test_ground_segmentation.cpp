@@ -303,6 +303,14 @@ TEST(GroundSegmentation, RejectsAWallEvenWhenItHasMoreInliersThanTheGround)
   const Score score = Evaluate(scene, result);
   EXPECT_GT(score.ground_recall, 0.95) << "地面没被识别出来";
   EXPECT_EQ(score.leak_above, 0) << "墙面主体被当成了地面";
+
+  // P9-S1 仪器断言：墙场景里坡度门必然拒绝过候选（RANSAC 抽到墙面三点组
+  // 的概率占优）。计数器 = 0 说明仪器断线 —— 诊断哨兵自己也要被验。
+  EXPECT_GT(result.slope_rejected_count, 0) << "坡度拒绝计数器没接上";
+  EXPECT_GT(result.pool_count, 0);
+  printf(
+    "[          ] 仪器读数：pool=%d slope_rejected=%d ground/pool=%.2f\n", result.pool_count,
+    result.slope_rejected_count, static_cast<double>(result.ground_count) / result.pool_count);
 }
 
 // ---------------------------------------------------------------------------

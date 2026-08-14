@@ -131,6 +131,15 @@ struct GroundSegmentationResult
   std::vector<std::uint8_t> is_ground;
 
   int ground_count{0};
+
+  // ---- P9-S1 诊断计数（域移植仪器：CARLA 生成世界上分割失效的三嫌疑
+  //      —— 挂高偏差 / mesh 非平面 / walker 点稀 —— 要靠这些数字裁决）----
+  /// 参与采样的点数（z < max_height 的池子）。ground_count/pool_count
+  /// 是「路面占比」哨兵 —— Gazebo 基线约 0.5，掉到 0.1 级 = 分割失效。
+  int pool_count{0};
+  /// 被坡度门拒绝的候选平面轮数。持续高位 = RANSAC 总在抽到墙/斜面
+  /// （嫌疑 2 的哨兵）。
+  int slope_rejected_count{0};
 };
 
 /// 把点云分成地面与非地面。

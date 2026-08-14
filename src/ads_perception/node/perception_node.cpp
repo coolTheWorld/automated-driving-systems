@@ -83,6 +83,12 @@ struct StageStats
 {
   int input_points{0};
   int non_ground_points{0};
+  // ---- P9-S1 域移植仪器（CARLA 上分割失效的三嫌疑靠这些数字裁决）----
+  bool ground_found{false};
+  double ground_height_m{0.0};   // 平面在原点的 z（= −offset/n_z）：挂高偏差哨兵
+  double ground_slope_deg{0.0};  // 法向与 +z 夹角：mesh 非平面/斜面哨兵
+  double ground_ratio{0.0};      // ground/pool：路面占比哨兵（Gazebo 基线 ~0.5）
+  int slope_rejected{0};         // 坡度门拒绝轮数：总在抽到墙 = 嫌疑 2
   int clusters{0};
   int largest_cluster{0};
   int detections{0};
@@ -230,6 +236,17 @@ private:
     const ads_perception::GroundSegmentationResult ground =
       ads_perception::SegmentGround(points, ground_params_);
     stats.ground_ms = Elapsed(&stage);
+    stats.ground_found = ground.found;
+    stats.slope_rejected = ground.slope_rejected_count;
+    if (ground.pool_count > 0) {
+      stats.ground_ratio = static_cast<double>(ground.ground_count) / ground.pool_count;
+    }
+    if (ground.found && std::abs(ground.normal.z()) > 1e-9) {
+      // 平面 n·x + d = 0 在 x=y=0 处的 z = −d/n_z。base_link 里地面应 ≈ 0；
+      // 系统性偏离 = 传感器挂载基准差（P9 嫌疑 1）的直接读数。
+      stats.ground_height_m = -ground.offset_m / ground.normal.z();
+      stats.ground_slope_deg = std::acos(std::clamp(ground.normal.z(), -1.0, 1.0)) * 180.0 / M_PI;
+    }
 
     std::vector<Eigen::Vector3d> non_ground;
     if (ground.found) {
@@ -467,6 +484,11 @@ private:
     };
     add("input_points", stats.input_points);
     add("non_ground_points", stats.non_ground_points);
+    add("ground_found", stats.ground_found ? 1.0 : 0.0);
+    add("ground_height_m", stats.ground_height_m);
+    add("ground_slope_deg", stats.ground_slope_deg);
+    add("ground_ratio", stats.ground_ratio);
+    add("ground_slope_rejected", stats.slope_rejected);
     add("clusters", stats.clusters);
     add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);

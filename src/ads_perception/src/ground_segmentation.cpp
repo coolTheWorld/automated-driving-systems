@@ -96,6 +96,7 @@ GroundSegmentationResult SegmentGround(
       candidates.push_back(i);
     }
   }
+  result.pool_count = static_cast<int>(candidates.size());
   if (candidates.size() < 3) {
     return result;  // 连三个点都凑不出来
   }
@@ -123,6 +124,7 @@ GroundSegmentationResult SegmentGround(
     //    太陡"）的话，一堵墙会先赢下比较、再被淘汰，而那一轮就白费了 ——
     //    更糟的是若最优的几个候选全是墙，最后会退回一个内点很少的平面。
     if (normal.z() < min_normal_z) {
+      ++result.slope_rejected_count;
       continue;
     }
 
