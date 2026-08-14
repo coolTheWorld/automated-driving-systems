@@ -250,6 +250,57 @@ TEST(BehaviorArbiter, EnterImmediatelyReleaseNeedsStability)
   EXPECT_EQ(arbiter.decide(line, 10.0, none, {}, s, v).state, BehaviorState::kCruise);
 }
 
+TEST(BehaviorArbiter, RedLightAddsAStopConstraintAtTheStopLine)
+{
+  // S06 最小闭环（P8，用户拍板 2026-08-14）：红灯 ⟹ 停止线处 stop_at。
+  // 停车点 = 停止线 − 车头偏置 − 红灯边距（1.0 = SPEC「0–2 m」带的中央）。
+  //
+  // 故障注入实测（2026-08-14）：把红灯约束的 push_back 删掉（只留标签）→
+  // 本用例红 —— 这正是「把安全逻辑放进可关掉的分支」那条家规反过来验：
+  // 树只挑标签，约束必须树外合成，谁想只改树就把红灯"关掉"，这条会拦。
+  const ReferenceLine line = MakeStraightLine(120.0, 0.5);
+  BehaviorArbiter arbiter(MakeParams(), 5);
+  const std::vector<double> s{0.0, 60.0};
+  const std::vector<double> v{5.0, 5.0};
+
+  const auto decision = arbiter.decide(line, 10.0, {}, {}, s, v, 80.0);
+  ASSERT_TRUE(decision.constraint.stop_at_s_m.has_value());
+  EXPECT_NEAR(*decision.constraint.stop_at_s_m, 80.0 - 3.55 - 1.0, 1e-12);
+  EXPECT_EQ(decision.state, BehaviorState::kRedLight);
+}
+
+TEST(BehaviorArbiter, RedLightMergesWithFollowByMin)
+{
+  // 红灯停止线在前车停车点**之后** ⟹ min 合成必须挑前车的（更近的）。
+  // 反向排列由 MergeTakesTheMostConservative 覆盖 —— 这里验的是红灯
+  // 约束确实进了同一个 min，不是旁路。
+  const ReferenceLine line = MakeStraightLine(120.0, 0.5);
+  BehaviorArbiter arbiter(MakeParams(), 5);
+  const std::vector<double> s{0.0, 60.0};
+  const std::vector<double> v{5.0, 5.0};
+
+  // 前车中心 (42.2, 0)、长 4.4 ⟹ 近边 s = 40.0（TargetBox 是 map 系 OBB，
+  // 近边由 conflict 逻辑算 —— 与 FollowConvergesToAnalyticGap 同一套构造）。
+  const std::vector<TargetBox> targets{{7u, 42.2, 0.0, 4.4, 1.8}};
+  const auto decision = arbiter.decide(line, 10.0, targets, {}, s, v, 100.0);
+  ASSERT_TRUE(decision.constraint.stop_at_s_m.has_value());
+  // 前车停车点 40 − 3.55 − 4.0 = 32.45；红灯 100 − 4.55 = 95.45 ⟹ min 取前者
+  EXPECT_NEAR(*decision.constraint.stop_at_s_m, 32.45, 1e-12);
+}
+
+TEST(BehaviorArbiter, GreenOrAbsentLightImposesNothing)
+{
+  // nullopt（绿灯或压根没有灯 —— Gazebo 侧永远是这个分支）⟹ 零约束零标签。
+  const ReferenceLine line = MakeStraightLine(120.0, 0.5);
+  BehaviorArbiter arbiter(MakeParams(), 5);
+  const std::vector<double> s{0.0, 60.0};
+  const std::vector<double> v{5.0, 5.0};
+
+  const auto decision = arbiter.decide(line, 10.0, {}, {}, s, v, std::nullopt);
+  EXPECT_FALSE(decision.constraint.stop_at_s_m.has_value());
+  EXPECT_EQ(decision.state, BehaviorState::kCruise);
+}
+
 TEST(BehaviorArbiter, YieldLabelForCrossingOnly)
 {
   // 走廊外的目标 + 会横穿的预测 ⟹ YIELD 标签 + 让行停车点。

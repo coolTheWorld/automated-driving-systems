@@ -65,6 +65,8 @@ enum class BehaviorState
   kCruise,
   kFollow,
   kYield,
+  // S06 红灯（P8，决策四最小闭环）。标签仅供诊断 —— 约束照旧树外合成。
+  kRedLight,
 };
 
 /// @brief 状态名（诊断字符串）。
@@ -105,10 +107,15 @@ public:
   ///                   已按 FOLLOW 处理的目标，其假设不再进横穿判定，
   ///                   behavior.md §2.3）。
   /// @param arc_lengths_m / speeds_mps 无约束剖面（时间标注的输入）。
+  /// @param red_light_stop_s_m 红灯停止线的参考线弧长（米）；无红灯传 nullopt。
+  ///                   由 planning_node 从 /traffic_light/state 换算：
+  ///                   state ≠ GREEN ⟹ 传入（YELLOW/UNKNOWN 都按红处理 ——
+  ///                   「不知道灯色」在语义上不允许通过）；GREEN/无灯 ⟹ nullopt。
   Decision decide(
     const ads_common::ReferenceLine & line, double ego_s_m, const std::vector<TargetBox> & targets,
     const std::vector<PredictionHypothesis> & hypotheses, const std::vector<double> & arc_lengths_m,
-    const std::vector<double> & speeds_mps);
+    const std::vector<double> & speeds_mps,
+    std::optional<double> red_light_stop_s_m = std::nullopt);
 
 private:
   BehaviorParams params_;

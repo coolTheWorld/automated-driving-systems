@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PredictedTrajectoryPoint.msg"
   "msg/PredictedTrajectory.msg"
   "msg/PredictedTrajectoryArray.msg"
+  "msg/TrafficLight.msg"
   DEPENDENCIES
     std_msgs
     geometry_msgs

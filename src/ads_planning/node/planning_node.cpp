@@ -37,6 +37,7 @@
 
 #include "ads_msgs/msg/obstacle_array.hpp"
 #include "ads_msgs/msg/predicted_trajectory_array.hpp"
+#include "ads_msgs/msg/traffic_light.hpp"
 #include "ads_msgs/msg/trajectory.hpp"
 #include "ads_planning/longitudinal.hpp"
 #include "ads_planning/speed_profile.hpp"
@@ -128,6 +129,11 @@ public:
     const int release_cycles = static_cast<int>(declare_parameter<int>("behavior.release_cycles"));
     arbiter_ = std::make_unique<BehaviorArbiter>(behavior_params, release_cycles);
     prediction_timeout_s_ = declare_parameter<double>("behavior.prediction_timeout_s", 1.0);
+    // 灯态超时。⚠️ 语义与预测超时**相反方向**：预测断流 = 不发轨迹（刹停）；
+    // 灯态断流 = **按红灯处理**继续规划 —— 「不知道灯色」不允许通过，但也
+    // 不必瘫痪整条链路（灯是局部约束不是全局输入）。从未出现过 = 世界里
+    // 没有灯（Gazebo 侧永远如此），零约束。
+    traffic_light_timeout_s_ = declare_parameter<double>("behavior.traffic_light_timeout_s", 2.0);
 
     // ---- 启动告知（P7 事实 12 的收口：这两个参数被注释承诺过两次而不存在）。
     // launch 层告诉规划器「这一跑**应当**有感知/预测」：为 true 时对应输入
@@ -158,6 +164,10 @@ public:
     // P7-S3 起本节点消费预测（决策六）：stack.launch 的 prediction 开关
     // 从「纯旁路」变成了规划的输入源之一。没有预测时横穿判定为空、
     // 只剩跟车（感知近边）—— 降级方向正确，不是故障。
+    // S06 红灯（P8-S4b）。灯态是低频轻量流（sidecar 1 Hz 级），QoS 深度 1 足够。
+    traffic_light_sub_ = create_subscription<ads_msgs::msg::TrafficLight>(
+      "/traffic_light/state", 10,
+      [this](ads_msgs::msg::TrafficLight::SharedPtr msg) { traffic_light_ = std::move(msg); });
     prediction_sub_ = create_subscription<ads_msgs::msg::PredictedTrajectoryArray>(
       "/prediction/trajectories", rclcpp::QoS(10),
       [this](ads_msgs::msg::PredictedTrajectoryArray::SharedPtr msg) {
@@ -288,8 +298,27 @@ private:
       arc_lengths_m.push_back(point.s_m);
     }
     const SpeedProfile profile(*reference_line_, params_.speed);
+    // ---- 红灯停止线（S06 最小闭环）---------------------------------------
+    // GREEN ⟹ 无约束；RED/YELLOW/UNKNOWN ⟹ 停止线；**出现过又断流 ⟹ 按红**
+    // （保守方向 —— 灯态源死了不能当绿灯开过去）。从未出现 = 世界无灯。
+    std::optional<double> red_light_stop_s_m;
+    if (traffic_light_) {
+      const double age_s = (now() - rclcpp::Time(traffic_light_->header.stamp)).seconds();
+      const bool stale = age_s > traffic_light_timeout_s_;
+      const bool is_green =
+        traffic_light_->state == ads_msgs::msg::TrafficLight::STATE_GREEN && !stale;
+      if (!is_green) {
+        red_light_stop_s_m = traffic_light_->stop_line_s_m;
+        if (stale) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000, "灯态已 %.1f s 没有更新 —— 按红灯处理（保守方向）",
+            age_s);
+        }
+      }
+    }
     return arbiter_->decide(
-      *reference_line_, start.s_m, targets, hypotheses, arc_lengths_m, profile.speeds_mps());
+      *reference_line_, start.s_m, targets, hypotheses, arc_lengths_m, profile.speeds_mps(),
+      red_light_stop_s_m);
   }
 
   void tick()
@@ -535,6 +564,9 @@ private:
   bool expect_perception_{false};
   bool expect_prediction_{false};
   double prediction_timeout_s_{1.0};
+  double traffic_light_timeout_s_{2.0};
+  ads_msgs::msg::TrafficLight::SharedPtr traffic_light_;
+  rclcpp::Subscription<ads_msgs::msg::TrafficLight>::SharedPtr traffic_light_sub_;
   double obstacle_timeout_s_{1.0};
   std::optional<std::chrono::steady_clock::time_point> tick_started_;
   double last_cycle_ms_{0.0};

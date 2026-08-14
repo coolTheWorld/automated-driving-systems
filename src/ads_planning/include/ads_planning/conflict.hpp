@@ -79,6 +79,12 @@ struct BehaviorParams
   /// 后轴到车头面的距离，m。**推导量** length − rear_overhang = 3.55，
   /// 轨迹点语义是后轴（TrajectoryPoint.msg），停车点必须把车头长度让出来。
   double front_offset_m;
+
+  /// 红灯时车头面到停止线的边距，m（S06，P8 决策四最小闭环）。
+  /// 取 1.0 = SPEC「停止线前 0–2 m」判据带的中央 —— 两侧各留 1 m 给
+  /// 制动散布与定位误差。调大 → 贴近判据下界（停太远）；调小 → 贴近
+  /// 上界（压线风险）。默认 1.0，零合法（贴线停）。
+  double red_light_margin_m{1.0};
 };
 
 /// @brief 感知目标的快照（map 系 OBB 的行为层视图）。

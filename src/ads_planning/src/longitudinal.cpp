@@ -55,6 +55,8 @@ const char * BehaviorStateName(BehaviorState state)
       return "FOLLOW";
     case BehaviorState::kYield:
       return "YIELD";
+    case BehaviorState::kRedLight:
+      return "RED_LIGHT";
   }
   return "UNKNOWN";
 }
@@ -79,7 +81,7 @@ BehaviorArbiter::BehaviorArbiter(const BehaviorParams & params, int release_cycl
 BehaviorArbiter::Decision BehaviorArbiter::decide(
   const ReferenceLine & line, double ego_s_m, const std::vector<TargetBox> & targets,
   const std::vector<PredictionHypothesis> & hypotheses, const std::vector<double> & arc_lengths_m,
-  const std::vector<double> & speeds_mps)
+  const std::vector<double> & speeds_mps, std::optional<double> red_light_stop_s_m)
 {
   Decision decision;
 
@@ -115,11 +117,26 @@ BehaviorArbiter::Decision BehaviorArbiter::decide(
       crossing.s_lo_m - params_.front_offset_m - params_.yield_margin_m;
     constraints.push_back(std::move(yield_constraint));
   }
+  // 红灯（S06 最小闭环）：停止线 − 车头偏置 − 边距。边距 1.0 把车头停进
+  // SPEC「停止线前 0–2 m」判据带的中央。已越过停车点（stop_at ≤ ego_s）时
+  // 约束照给 —— plan() 的截断路径会给单点零速（与行为停车语义一致），
+  // 「冲进路口后急停」还是「硬闯」是个安全裁决，不在这里做，先停住再说。
+  if (red_light_stop_s_m.has_value()) {
+    LongitudinalConstraint red_constraint;
+    red_constraint.stop_at_s_m =
+      *red_light_stop_s_m - params_.front_offset_m - params_.red_light_margin_m;
+    constraints.push_back(std::move(red_constraint));
+  }
   decision.constraint = merge_constraints(constraints);
 
   // ---- ③ 行为树挑标签（只挑标签；显式树，无 XML）----------------------------
   BehaviorState raw = BehaviorState::kCruise;
   Fallback tree(collect(
+    // 红灯分支放最前：标签优先级 = 谁的停车点语义最"制度性"。
+    // 只挑标签 —— 红灯约束在上面②，树关不掉它（红线三条之一）。
+    std::make_unique<Sequence>(collect(
+      std::make_unique<Condition>([&] { return red_light_stop_s_m.has_value(); }),
+      Action::always([&] { raw = BehaviorState::kRedLight; }))),
     std::make_unique<Sequence>(collect(
       std::make_unique<Condition>([&] { return decision.follow.has_value(); }),
       Action::always([&] { raw = BehaviorState::kFollow; }))),
