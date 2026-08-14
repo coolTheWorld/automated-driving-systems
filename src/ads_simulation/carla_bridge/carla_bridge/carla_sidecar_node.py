@@ -163,7 +163,8 @@ class CarlaSidecarNode(Node):
             self._spawn_obstacles(obstacles_yaml, obstacles_scenario)
         actors_yaml = self.get_parameter('dynamic_actors_yaml').value
         scenario = self.get_parameter('scenario').value
-        if actors_yaml and scenario:
+        # 'none' 与空同义（stack.launch 默认透传 dynamic:=none，与 obstacles 同规矩）
+        if actors_yaml and scenario not in ('', 'none'):
             self._spawn_npcs(actors_yaml, scenario)
 
         period_s = 1.0 / self.get_parameter('tick_hz').value

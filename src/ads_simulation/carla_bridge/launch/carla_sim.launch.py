@@ -40,36 +40,137 @@ from launch_ros.actions import Node
 import yaml
 
 
+# 与 gazebo_sim.launch 的 _CLASSIFICATION **同一张表**（obstacle_truth 认 int）。
+# 抄表而不是 import：launch 文件不是可导入模块，两处都从 ads_msgs 的常量语义来。
+_CLASSIFICATION = {
+    'unknown': 0,
+    'pedestrian': 1,
+    'bicycle': 2,
+    'vehicle': 3,
+}
+
+
+def _dynamic_specs(context):
+    """dynamic:=<场景> 的目标清单 —— gazebo_sim._dynamic_actor_specs 的移植.
+
+    解析逻辑必须逐字段一致（npc_controller 与 obstacle_truth 原样复用，
+    参数语义在那两个节点里定死）。CARLA 侧不 spawn gz 模型 —— 道具由
+    sidecar 按同一份 yaml spawn 并做 pose_gt/cmd_vel 两头（S4b）。
+    """
+    scenario = LaunchConfiguration('dynamic').perform(context)
+    if scenario in ('', 'none'):
+        return []
+    share = Path(get_package_share_directory('gazebo_bridge'))
+    config = yaml.safe_load(
+        (share / 'config' / 'dynamic_actors.yaml').read_text(encoding='utf-8'))
+    if scenario not in config['scenarios']:
+        raise RuntimeError(f'dynamic:={scenario} 未定义（可选：none、'
+                           f'{"、".join(config["scenarios"])}）')
+    vehicle_geo = yaml.safe_load(
+        (share / 'config' / 'vehicle_params.yaml').read_text(encoding='utf-8'))['geometry']
+    specs = []
+    for name in config['scenarios'][scenario]['actors']:
+        actor = config['actors'][name]
+        waypoints = [(float(x), float(y)) for x, y in actor['waypoints']]
+        if actor['classification'] == 'vehicle':
+            length = float(vehicle_geo['length_m'])
+            width = float(vehicle_geo['width_m'])
+            height = float(vehicle_geo['height_m'])
+            offset_x = length / 2.0 - float(vehicle_geo['rear_overhang_m'])
+        else:
+            length = float(actor['length_m'])
+            width = float(actor['width_m'])
+            height = float(actor['height_m'])
+            offset_x = 0.0
+        dwell = [float(v) for v in actor.get('dwell_s', [0.0] * len(waypoints))]
+        dwell[0] += float(actor.get('depart_delay_s', 0.0))
+        specs.append({
+            'name': name,
+            'waypoints': waypoints,
+            'speed_mps': float(actor['speed_mps']),
+            'loop': bool(actor.get('loop', True)),
+            'dwell_s': dwell,
+            'length_m': length, 'width_m': width, 'height_m': height,
+            'offset_x_m': offset_x, 'offset_z_m': height / 2.0,
+            'classification': _CLASSIFICATION[actor['classification']],
+        })
+    return specs
+
+
+def _dynamic_actor_nodes(context, *args, **kwargs):
+    """每个动态目标一个 npc_controller —— 与 gazebo 侧同一可执行同一参数.
+
+    Gazebo 侧另有 spawn + parameter_bridge 两个动作，这里都不需要：
+    道具与话题两头由 sidecar 包办（_spawn_npcs / _tick_npcs）。
+    """
+    actions = []
+    for actor in _dynamic_specs(context):
+        npc_params = {
+            'model_name': actor['name'],
+            'waypoints_x_m': [w[0] for w in actor['waypoints']],
+            'waypoints_y_m': [w[1] for w in actor['waypoints']],
+            'speed_mps': actor['speed_mps'],
+            'loop': actor['loop'],
+            'use_sim_time': True,
+        }
+        if any(v > 0.0 for v in actor['dwell_s']):
+            npc_params['dwell_s'] = actor['dwell_s']
+        actions.append(Node(
+            package='gazebo_bridge', executable='npc_controller',
+            name=f'npc_controller_{actor["name"]}',
+            parameters=[npc_params], output='screen'))
+    return actions
+
+
 def _obstacle_truth_nodes(context, *args, **kwargs):
-    """S04 场景的真值发布器 —— 与 gazebo_sim.launch 同一换算同一节点.
+    """S04 静态 + 行为动态的真值发布器 —— 与 gazebo_sim.launch 同一换算同一节点.
 
     obstacle_truth 是仿真器无关的（参数进、话题出），照抄扁平化逻辑：
     车道坐标 → 世界坐标用 yaml 自带 lane 段（单一来源）。
+    ⚠️ obstacles:=none 时**不能早退**（gazebo 侧同款教训）：dynamic 非 none
+    时真值发布器还负责动态目标，早退 = 那一跑没有任何真值、判据报空。
     """
     scenario = LaunchConfiguration('obstacles').perform(context)
-    if scenario in ('', 'none'):
+    actors = _dynamic_specs(context)
+    if scenario in ('', 'none') and not actors:
         return []
-    config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
-                   / 'obstacles.yaml')
-    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
-    if scenario not in config['scenarios']:
-        raise RuntimeError(f'obstacles:={scenario} 未定义（可选：none、'
-                           f'{"、".join(config["scenarios"])}）')
-    lane = config['lane']
+    # perception:=true 时真值不再兼发 /perception/obstacles（交给感知栈）。
+    publish_as_perception = (
+        LaunchConfiguration('perception').perform(context).lower() not in ('true', '1'))
     truth_params = {'frame_id': 'map', 'use_sim_time': True,
-                    'publish_as_perception': True}
-    xs, ys, yaws, ls, ws, hs = [], [], [], [], [], []
-    for obstacle in config['scenarios'][scenario]['obstacles']:
-        xs.append(float(obstacle['along_x_m']))
-        ys.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
-        yaws.append(float(lane['heading_rad']))
-        ls.append(float(obstacle['length_m']))
-        ws.append(float(obstacle['width_m']))
-        hs.append(float(obstacle['height_m']))
-    truth_params.update({
-        'obstacles.center_x_m': xs, 'obstacles.center_y_m': ys,
-        'obstacles.yaw_rad': yaws, 'obstacles.length_m': ls,
-        'obstacles.width_m': ws, 'obstacles.height_m': hs})
+                    'publish_as_perception': publish_as_perception}
+    if scenario not in ('', 'none'):
+        config_path = (Path(get_package_share_directory('gazebo_bridge')) / 'config'
+                       / 'obstacles.yaml')
+        config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+        if scenario not in config['scenarios']:
+            raise RuntimeError(f'obstacles:={scenario} 未定义（可选：none、'
+                               f'{"、".join(config["scenarios"])}）')
+        lane = config['lane']
+        xs, ys, yaws, ls, ws, hs = [], [], [], [], [], []
+        for obstacle in config['scenarios'][scenario]['obstacles']:
+            xs.append(float(obstacle['along_x_m']))
+            ys.append(float(lane['center_y_m']) + float(obstacle['lateral_offset_m']))
+            yaws.append(float(lane['heading_rad']))
+            ls.append(float(obstacle['length_m']))
+            ws.append(float(obstacle['width_m']))
+            hs.append(float(obstacle['height_m']))
+        truth_params.update({
+            'obstacles.center_x_m': xs, 'obstacles.center_y_m': ys,
+            'obstacles.yaw_rad': yaws, 'obstacles.length_m': ls,
+            'obstacles.width_m': ws, 'obstacles.height_m': hs})
+    dynamic_arrays = {
+        'dynamic.names': [a['name'] for a in actors],
+        'dynamic.length_m': [a['length_m'] for a in actors],
+        'dynamic.width_m': [a['width_m'] for a in actors],
+        'dynamic.height_m': [a['height_m'] for a in actors],
+        'dynamic.offset_x_m': [a['offset_x_m'] for a in actors],
+        'dynamic.offset_z_m': [a['offset_z_m'] for a in actors],
+        'dynamic.classification': [a['classification'] for a in actors],
+    }
+    for key, value in dynamic_arrays.items():
+        if value:  # 空数组不传（launch 推断不出元素类型，gazebo 侧实测）
+            truth_params[key] = value
     return [Node(package='gazebo_bridge', executable='obstacle_truth',
                  name='obstacle_truth', parameters=[truth_params], output='screen')]
 
@@ -110,6 +211,10 @@ def generate_launch_description():
                               description='同上'),
         DeclareLaunchArgument('obstacles', default_value='',
                               description='S04 静态障碍场景（avoid/block，空=无）'),
+        DeclareLaunchArgument('dynamic', default_value='',
+                              description='行为动态场景（follow/crossing/junction 等，空=无）'),
+        DeclareLaunchArgument('perception', default_value='false',
+                              description='true 时真值不兼发 /perception/obstacles（与 gazebo 同语义）'),
 
         Node(
             package='carla_bridge',
@@ -121,11 +226,19 @@ def generate_launch_description():
                     Path(get_package_share_directory('gazebo_bridge')) / 'config' /
                     'obstacles.yaml'),
                 'obstacles_scenario': LaunchConfiguration('obstacles'),
+                # NPC 道具（S4b 机件，P8-S6 补上这根线 —— 实测 dynamic:= 一直
+                # 没接到 sidecar，三个行为场景全是「场景没激励」）
+                'dynamic_actors_yaml': str(
+                    Path(get_package_share_directory('gazebo_bridge')) / 'config' /
+                    'dynamic_actors.yaml'),
+                'scenario': LaunchConfiguration('dynamic'),
                 'vehicle_params_yaml': str(
                     Path(get_package_share_directory('ads_planning')) / 'config' /
                     'vehicle_params.yaml'),
             }],
             output='screen'),
+
+        OpaqueFunction(function=_dynamic_actor_nodes),
 
         # 点云中间话题 → 规范话题：与 gazebo 侧**同一个 C++ 节点**，
         # 只有 input_topic 不同（bridge_topics.yaml 当年就为此留了 /carla 前缀）。
