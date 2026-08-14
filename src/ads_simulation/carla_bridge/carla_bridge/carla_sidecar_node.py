@@ -43,6 +43,8 @@ import numpy as np
 from sensor_msgs.msg import Imu, JointState, NavSatFix, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
+from rosgraph_msgs.msg import Clock
+
 from ads_msgs.msg import VehicleCmd
 
 from geometry_msgs.msg import Twist
@@ -116,6 +118,12 @@ class CarlaSidecarNode(Node):
         self._spawn_pose = (spawn_x, spawn_y, spawn_yaw)
 
         # ---- 话题（QoS 与 gazebo_bridge 逐条对齐，SPEC §4.1 契约）----
+        # /clock 由 sidecar 发（S6 实测：原生 --ros2 的 clock 在世界重建后
+        # **静默死亡** —— 话题名还在发现缓存里、一条消息都不发，而 use_sim_time
+        # 的所有 ROS 定时器随之冻住，TF 树断成两棵。节拍线程每 tick 后发
+        # 快照时间，桥从此不依赖任何原生通道。⚠️ 若原生 clock 复活会出现
+        # 双发布者（时间抖动）——上机 checklist 有核对项。
+        self._clock_pub = self.create_publisher(Clock, '/clock', 10)
         self._odom_pub = self.create_publisher(Odometry, '/odom', 10)
         # 传感器中继出口。⚠️ 点云走中间名（/carla 前缀 —— bridge_topics.yaml
         # 当年留的位置），由 lidar_preprocessor 做自车裁剪与 frame 换算后出
@@ -172,11 +180,40 @@ class CarlaSidecarNode(Node):
                 '不给默认值是有意的：静默加载错地图比启动失败更难查。')
         with open(xodr_path, encoding='utf-8') as f:
             xodr = f.read()
+        # ---- 开锁器（S6 实测两次 wedge 后加）------------------------------
+        # 上一个 sidecar 被 SIGTERM 杀掉时清理钩子不执行（rclpy 默认信号
+        # 处理直接终止进程），世界留在同步模式无节拍器 —— 服务器停在 tick
+        # 栅栏上，后续重载/tick 全超时。启动时无条件先掰回异步：
+        # apply_settings 在 wedge 状态下仍能执行，这一步是唯一的解锁钥匙。
+        try:
+            world = self._client.get_world()
+            settings = world.get_settings()
+            if settings.synchronous_mode:
+                self.get_logger().warn('检测到遗留的同步模式（上任死得不干净）——先解锁')
+                settings.synchronous_mode = False
+                settings.fixed_delta_seconds = None
+                world.apply_settings(settings)
+        except RuntimeError as error:
+            self.get_logger().warn(f'解锁尝试失败（继续硬闯 generate）：{error}')
         # 参数含义：顶点距离/最大道路长度影响网格质量；额外宽度给路肩。
         # 取 CARLA 文档的常用值；画质无关紧要（我们只要几何与语义一致）。
+        # smooth_junctions=False（S6 实测第 2 次 Segfault 后改）：两次崩溃都在
+        # 车驶向路口区时（纯 Signal 11、无 OOM、与 --ros2 无关）——生成式路口
+        # 网格平滑是社区已知的崩溃源。牺牲路口网格观感换稳定；车道语义来自
+        # xodr 解析，不受网格影响。
+        # vertex_distance=0.5（1.0 仍崩，再压一档）：短目标（纯直道）轮服务器
+        # 存活、车稳停 goal —— 崩溃锚定在**弯道/路口区网格**。R=8–13.75 的
+        # 弯上 2.0 m 顶点距会产生退化三角形（物理网格上车轮碾过 = Segfault
+        # 的经典配方）。细分一档换稳定；内存富余（实测 20 GB 可用）。
+        # wall_height=1.0（S6 富遥测定案后改）：生成式世界**路外即虚空** ——
+        # 车一旦出路面就坠入虚空翻滚（实测航向冻结、伪水平速度 33 m/s），
+        # 引擎随后 Segfault。护栏墙把「硬崩溃」变成「诚实的红判据」：
+        # 车出界撞墙停下，判据照常打分，服务器活着跑下一场。
+        # ⚠️ 感知会看见墙（雷达回波）——感知层场景的影响到时候评，
+        #    真值层判据不受影响。
         params = self._carla.OpendriveGenerationParameters(
-            vertex_distance=2.0, max_road_length=50.0, wall_height=0.0,
-            additional_width=0.6, smooth_junctions=True, enable_mesh_visibility=True)
+            vertex_distance=0.5, max_road_length=50.0, wall_height=1.0,
+            additional_width=0.6, smooth_junctions=False, enable_mesh_visibility=True)
         world = self._client.generate_opendrive_world(xodr, params)
         # ---- 同步模式（S5 实测后加）--------------------------------------
         # 异步模式下世界自由狂奔（实测 ~300 FPS）：仿真钟三倍速于墙钟、
@@ -209,6 +246,18 @@ class CarlaSidecarNode(Node):
             self._carla.Location(x=cx, y=cy, z=0.3),
             self._carla.Rotation(yaw=yaw_to_carla(yaw)))
         ego = self._world.spawn_actor(blueprint, transform)
+        # ---- 转向曲线拉平（S6 弯道欠转定案后固化）------------------------
+        # CARLA 的 steering_curve **随速度衰减最大转角**（同一 steer 归一值，
+        # 车速越高实际轮角越小）——Gazebo 的 AckermannSteering 没有这条曲线，
+        # 两环境的「转向指令 → 实际轮角」增益因此不一致（P0b 量到的稳态
+        # 达成率 86.3% 的机制本体）。按对齐哲学拉平成 1.0：让 CARLA 对齐
+        # Gazebo 的执行语义，而不是给控制器开环境特例。轮胎侧偏仍在
+        # （那是本质差异，保留）。
+        physics = ego.get_physics_control()
+        physics.steering_curve = [
+            self._carla.Vector2D(x=0.0, y=1.0),
+            self._carla.Vector2D(x=50.0, y=1.0)]
+        ego.apply_physics_control(physics)
         # 物理对齐的完整映射在 scripts/carla_align_vehicle.py（P0b 验证过一次）；
         # S5 上机时按它重跑一遍再把结果固化到这里 —— 现在不抄一份过来，
         # 抄了就是两处漂移（单一来源，SPEC §4.1）。
@@ -298,9 +347,21 @@ class CarlaSidecarNode(Node):
         next_t = time.monotonic()
         while self._ticking:
             try:
-                self._world.tick()
-            except RuntimeError as error:
-                self.get_logger().warn(f'world.tick 失败：{error}', throttle_duration_sec=5.0)
+                # 短超时：默认 120 s 是给一次性重载用的，对 50 ms 一拍的
+                # tick 来说钝得离谱 —— 服务器真死时要 10 s 内暴露不是 2 分钟。
+                self._world.tick(10.0)
+                snapshot = self._world.get_snapshot()
+                clock = Clock()
+                clock.clock.sec = int(snapshot.timestamp.elapsed_seconds)
+                clock.clock.nanosec = int(
+                    (snapshot.timestamp.elapsed_seconds % 1.0) * 1e9)
+                self._clock_pub.publish(clock)
+            except Exception as error:  # noqa: B902 —— 服务器崩溃时异常类型不可枚举
+                # ⚠️ 只 catch RuntimeError 的教训（S6 实测）：服务器 Segfault 时
+                #    抛的不是 RuntimeError，节拍线程**无声死亡**，全系统 sim-time
+                #    冻结而无任何日志 —— 比崩溃更难查。catch-all + 大声报。
+                self.get_logger().error(f'world.tick 异常（服务器崩了？）：{error!r}')
+                time.sleep(2.0)
             next_t += step_s
             delay = next_t - time.monotonic()
             if delay > 0:
@@ -587,14 +648,38 @@ def main(args=None):
     host = os.environ.get('CARLA_HOST', '127.0.0.1')
     port = int(os.environ.get('CARLA_PORT', '2000'))
     client = carla.Client(host, port)
-    client.set_timeout(30.0)
+    # 120 s：generate_opendrive_world 从重量级 Town 切园区实测可超 30 s
+    # （S6 首跑在这儿超时崩过）。加载是一次性的，宽限时不掩盖任何持续性故障。
+    client.set_timeout(120.0)
 
     node = CarlaSidecarNode(carla, client)
+
+    # SIGTERM 也要走清理（pkill/launch 收进程都是 TERM）——不装这个钩子，
+    # finally 只在 SIGINT 路径执行，TERM 直接终止、世界留在同步模式 = 埋雷。
+    import signal
+
+    def _on_term(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_term)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        # ⚠️ 必须把世界还原成异步再走 —— 同步模式的世界没了节拍器，
+        #    CARLA 会**永远停在 tick 栅栏上**，之后所有 RPC（包括重载世界）
+        #    一律超时，看起来像服务器挂了。S6 首跑实测踩过：唯一解法是
+        #    重启服务器。清理钩子把这个坑焊死。
+        node._ticking = False
+        try:
+            settings = node._world.get_settings()
+            settings.synchronous_mode = False
+            settings.fixed_delta_seconds = None
+            node._world.apply_settings(settings)
+        except RuntimeError:
+            pass  # 服务器已经没了就算了 —— 别让清理挡住退出
         node.destroy_node()
         rclpy.shutdown()
 
