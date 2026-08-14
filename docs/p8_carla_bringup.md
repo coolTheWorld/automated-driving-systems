@@ -33,6 +33,11 @@ Vulkan 枚举完全正常（ctypes 三设备）—— 所以「验货时 vkEnume
    全部数据走 carla_sidecar_node 中继，/clock 也由它自发。
 3. 容器内 `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`（Dockerfile 已锁；
    CARLA 内嵌 Fast DDS，CycloneDDS 的症状是本地全好、CARLA 完全收不到）。
+4. **容器里装 carla wheel**（窗口 2 实测新容器漏了这步 —— 症状是 sidecar
+   启动即死「No module named carla」，两轮 BRINGUP_TIMEOUT 才追到）：
+   `docker exec -u root ads-dev bash -c "apt-get install -y python3-pip &&
+   python3 -m pip install carla==0.9.16 --break-system-packages"`
+   —— 镜像本体不含 pip（本地开发用不上 carla wheel，dry-run 靠惰性 import）。
 
 ## 2. 四件 dry-run 验不了的事（P0b 已知 issue，按序核）
 
