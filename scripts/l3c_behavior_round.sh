@@ -87,8 +87,9 @@ while kill -0 $REC 2>/dev/null; do
 done
 kill $GOAL_PID 2>/dev/null
 
-if grep -qE "全部通过" ${LOG}.txt; then echo "VERDICT=PASS"
-elif grep -qE "未通过" ${LOG}.txt; then echo "VERDICT=FAIL"
+# 行为记录器不打「全部通过」总结行，按判据行的 ✅/❌ 计（实测措辞对齐）
+if grep -q "❌" ${LOG}.txt; then echo "VERDICT=FAIL"
+elif grep -q "✅" ${LOG}.txt; then echo "VERDICT=PASS"
 else echo "VERDICT=INCOMPLETE（记录器没跑完 —— 超时或异常）"
 fi
 grep -vE "^\[INFO\]|^$" ${LOG}.txt | tail -30
