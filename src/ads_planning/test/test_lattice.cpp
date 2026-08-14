@@ -67,6 +67,7 @@ LatticeParams MakeParams()
   params.horizon_step_m = 10.0;  // ⟹ 3 条纵向候选：10 / 20 / 30
   params.resample_step_m = kSampleStepM;
   params.safety_margin_m = 0.5;  // SPEC §8 场景 S04
+  params.safety_floor_m = 0.5;  // 基线用例单级形态（floor == margin）；两级见专门用例
   // 运动学准入 = tan(max_steer 0.6)/wheelbase 2.7 × 转向余量 0.8（P8-S2d）
   params.max_curvature_inv_m = 0.2027;
   params.vehicle_length_m = 4.4;
@@ -213,6 +214,45 @@ TEST(Lattice, CloseObstacleForcesAShortManeuverAndTheOffsetIsHeldAfterwards)
 // ---------------------------------------------------------------------------
 //  代价函数：每一项都要能被单独观察到
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+//  两级准入（P8-S6，用户拍板）：margin 选新轨迹，floor 保底延续候选。
+//  场景数值复刻 CARLA 死锁：ego 带偏移 0.8 在锥旁（锥 −0.95），延续候选的
+//  间距 = (0.8 − 0.9) − (−0.95 + 0.25) = 0.6 —— 落在 (floor 0.5, margin 0.7)。
+// ---------------------------------------------------------------------------
+TEST(Lattice, TwoTierAdmissionLetsContinuationFinishTheManeuver)
+{
+  const ReferenceLine line = MakeStraightLine();
+  LatticeParams params = MakeParams();
+  params.safety_margin_m = 0.7;
+  params.safety_floor_m = 0.5;
+  const FrenetState beside_cone{0.0, 0.8, 0.0, 0.0};
+  const std::vector<Rectangle> obstacles{BoxAt(15.0, -0.95)};
+
+  const LatticeResult result = plan_lateral(line, beside_cone, obstacles, params);
+  ASSERT_EQ(result.status, LatticeStatus::kOk)
+    << "延续候选（间距 0.6 ≥ floor 0.5）被淘汰了 —— 两级准入没生效，死锁回归";
+  EXPECT_NEAR(result.best.target_offset_m, 0.8, 1e-12)
+    << "幸存的不该是别的候选：所有新机动都会把间距压到 margin 之下";
+  EXPECT_GT(result.best.min_clearance_m, params.safety_floor_m);
+  EXPECT_LT(result.best.min_clearance_m, params.safety_margin_m);
+}
+
+TEST(Lattice, CollapsedTiersReproduceTheDeadlock)
+{
+  // floor == margin ⟹ 单级退化。同一场景必须全灭 —— 这是把 CARLA 实测的
+  // 死锁形态（27/27 blocked、急刹停锥旁 103 s）钉进用例：谁把两级拆了，
+  // 这条不红上一条红，两条一起说清楚「为什么要有 floor」。
+  const ReferenceLine line = MakeStraightLine();
+  LatticeParams params = MakeParams();
+  params.safety_margin_m = 0.7;
+  params.safety_floor_m = 0.7;
+  const FrenetState beside_cone{0.0, 0.8, 0.0, 0.0};
+  const std::vector<Rectangle> obstacles{BoxAt(15.0, -0.95)};
+
+  const LatticeResult result = plan_lateral(line, beside_cone, obstacles, params);
+  EXPECT_EQ(result.status, LatticeStatus::kAllCandidatesBlocked);
+}
 
 TEST(Lattice, ConsistencyTermPullsTowardThePreviousChoice)
 {
@@ -499,6 +539,14 @@ TEST(Lattice, ThrowsOnInvalidParameters)
 
   bad = MakeParams();
   bad.safety_margin_m = -0.1;
+  EXPECT_THROW(plan_lateral(line, AtOrigin(), {}, bad), std::invalid_argument);
+
+  bad = MakeParams();
+  bad.safety_floor_m = 0.0;  // floor 与 margin 同规矩：不许为 0（准入不可关）
+  EXPECT_THROW(plan_lateral(line, AtOrigin(), {}, bad), std::invalid_argument);
+
+  bad = MakeParams();
+  bad.safety_floor_m = bad.safety_margin_m + 0.1;  // 保底高于选择线 = 配置错误
   EXPECT_THROW(plan_lateral(line, AtOrigin(), {}, bad), std::invalid_argument);
 
   bad = MakeParams();

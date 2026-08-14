@@ -157,6 +157,7 @@ def planning_node_params() -> dict:
         'trajectory.resample_step_m': planning['trajectory']['resample_step_m'],
         # 安全（准入条件，不是代价项）
         'safety.margin_m': planning['safety']['margin_m'],
+        'safety.floor_m': planning['safety']['floor_m'],
         'safety.stop_margin_m': planning['safety']['stop_margin_m'],
         # 代价权重
         'cost.weight_offset': planning['cost']['weight_offset'],

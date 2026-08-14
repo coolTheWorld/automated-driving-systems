@@ -64,6 +64,7 @@ PlanParams MakeParams()
   params.lattice.horizon_step_m = 10.0;
   params.lattice.resample_step_m = kSampleStepM;
   params.lattice.safety_margin_m = 0.5;
+  params.lattice.safety_floor_m = 0.5;
   // 运动学准入 = tan(max_steer 0.6)/wheelbase 2.7 × 转向余量 0.8（P8-S2d）
   params.lattice.max_curvature_inv_m = 0.2027;
   params.lattice.vehicle_length_m = 4.4;

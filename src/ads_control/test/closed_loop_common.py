@@ -114,6 +114,7 @@ def planning_params() -> dict:
         'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],
         'trajectory.resample_step_m': planning['trajectory']['resample_step_m'],
         'safety.margin_m': planning['safety']['margin_m'],
+        'safety.floor_m': planning['safety']['floor_m'],
         'safety.stop_margin_m': planning['safety']['stop_margin_m'],
         'cost.weight_offset': planning['cost']['weight_offset'],
         'cost.weight_curvature': planning['cost']['weight_curvature'],

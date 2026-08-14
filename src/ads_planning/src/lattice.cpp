@@ -74,6 +74,12 @@ void validate(const LatticeParams & params, const std::vector<Rectangle> & obsta
   //    只是关闭开关伪装成了一个合法的阈值取值。margin=0（车体擦着障碍物过）
   //    不是任何 ODD 允许的行为，没有合法使用场景。
   require_positive(params.safety_margin_m, "safety_margin_m");
+  // floor 同 margin 的理由必须严格为正（margin=0 后门那条注释同样适用）；
+  // floor > margin 没有语义（保底线高于选择线 ⟹ 两级退化且更严，配置错误）。
+  require_positive(params.safety_floor_m, "safety_floor_m");
+  if (params.safety_floor_m > params.safety_margin_m) {
+    throw std::invalid_argument("plan_lateral: safety_floor_m 大于 safety_margin_m");
+  }
   require_positive(params.vehicle_length_m, "vehicle_length_m");
   require_positive(params.vehicle_width_m, "vehicle_width_m");
   require_non_negative(params.rear_overhang_m, "rear_overhang_m");
@@ -327,6 +333,12 @@ LatticeResult plan_lateral(
   const auto evaluate_candidate = [&](
                                     double target_offset_m, double maneuver_span_m,
                                     std::vector<CartesianState> prebuilt_points = {}) {
+    // 两级准入的分档：目标偏移在当前偏移半个网格步之内 = 延续既成轨迹，
+    // 准入用 floor；其余 = 新机动，用 margin。按**目标**分而不是按几何逐点
+    // 分 —— 逐点混合会造出"前半段吃 floor 后半段吃 margin"的怪胎候选。
+    const bool is_continuation =
+      std::abs(target_offset_m - start.d_m) <= 0.5 * params.lateral_offset_step_m;
+    const double admission_m = is_continuation ? params.safety_floor_m : params.safety_margin_m;
     Candidate candidate;
     candidate.target_offset_m = target_offset_m;
     candidate.maneuver_span_m = maneuver_span_m;
@@ -372,7 +384,7 @@ LatticeResult plan_lateral(
     //    require_positive 哪天被谁改回去，撞上去的候选也过不了这里。
     //    碰撞检查不许有任何参数取值能把它关掉（SPEC §11），
     //    所以防线要有一道不吃参数的。
-    if (min_clearance_m <= 0.0 || min_clearance_m < params.safety_margin_m) {
+    if (min_clearance_m <= 0.0 || min_clearance_m < admission_m) {
       ++result.blocked_count;
       return;
     }

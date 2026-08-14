@@ -76,6 +76,7 @@ public:
     params_.lattice.horizon_step_m = declare_parameter<double>("longitudinal.horizon_step_m");
     params_.lattice.resample_step_m = declare_parameter<double>("trajectory.resample_step_m");
     params_.lattice.safety_margin_m = declare_parameter<double>("safety.margin_m");
+    params_.lattice.safety_floor_m = declare_parameter<double>("safety.floor_m");
     // 运动学准入上限（P8-S2d）。launch 从车辆能力推导（tan(max_steer)/wheelbase
     // × 转向余量系数），**不在这里再抄轴距或转角** —— 那是 vehicle_params 的地盘。
     params_.lattice.max_curvature_inv_m = declare_parameter<double>("lateral.max_curvature_inv_m");
