@@ -318,6 +318,34 @@ TEST(IdealPlant, PureProportionalCannotTrackARampAndFeedforwardFixesIt)
 //  ② 抗饱和（任务 3.4 的另一半）
 // =============================================================================
 
+TEST(IdealPlant, ACarStoppedInsideABrakingRampCanStillRestart)
+{
+  // P8-S2d 实测（junction，让行后重启）：车停在别人轨迹的制动带里
+  // （离末端 0.8 m，剖面 v_ref = 2.19、前馈 = −3.0）。前馈若原样用
+  // 剖面存的 v_ref·dv/ds，输出恒为 −3.0 + K_p·2.19 = **−0.81** ——
+  // 目标速度 2.19 却永远起不了步，车在离 goal 1.15 m 处冻住，
+  // TRACKING、指令流全正常，没有任何报错。
+  //
+  // 前馈的物理量是 a = v·dv/ds（**实际** v）。v = 0 时它就是 0 ——
+  // 负前馈按 v/v_ref 衰减后，P 项得以把车启动。
+  //
+  // 故障注入实测（2026-08-13）：去掉衰减（前馈原样透传）→ 本用例红
+  // （输出 −0.81 < 0）。
+  SpeedController controller(DefaultParams());
+  const double accel_mps2 = controller.update(2.19, -3.0, 0.0, kControlDtS);
+  EXPECT_GT(accel_mps2, 0.5) << "停着的车收到正目标速度必须给出正加速度";
+}
+
+TEST(IdealPlant, BrakingFeedforwardIsUntouchedWhenTrackingTheRamp)
+{
+  // 收窄条款的另一半：车跟得上剖面（v = v_ref）时衰减比值 = 1，
+  // 前馈必须**原样**通过 —— 已验收的制动行为（CP-P2-B/P3-B 的停车剖面）
+  // 一个数都不许变。
+  SpeedController controller(DefaultParams());
+  const double accel_mps2 = controller.update(2.19, -1.2, 2.19, kControlDtS);
+  EXPECT_NEAR(accel_mps2, -1.2, 1e-12);  // 误差 0 ⟹ 纯前馈
+}
+
 TEST(AntiWindup, TheIntegralStopsGrowingOnceTheOutputSaturates)
 {
   // 增益特意选成"先线性、后饱和"：K_p=0.2、K_i=0.5、目标 1.0 m/s，车不动。

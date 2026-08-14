@@ -58,6 +58,7 @@ void require_non_negative(double value, const char * name)
 void validate(const LatticeParams & params, const std::vector<Rectangle> & obstacles)
 {
   require_positive(params.max_lateral_offset_m, "max_lateral_offset_m");
+  require_positive(params.max_curvature_inv_m, "max_curvature_inv_m");
   require_positive(params.lateral_offset_step_m, "lateral_offset_step_m");
   require_positive(params.min_horizon_m, "min_horizon_m");
   require_positive(params.max_horizon_m, "max_horizon_m");
@@ -197,6 +198,96 @@ std::vector<CartesianState> build_lateral_geometry(
   return points;
 }
 
+namespace
+{
+
+/// @brief 候选五次式在机动段上的**峰值曲率**（密采样，1/m）。
+///
+/// ⚠️ 不能用输出几何点（0.5 m 点距）上的曲率求峰值：短机动上那些点恰好落在
+/// |d″| 的零点（along = 0 与 S 是边界条件、0.5·S 是 S 形的拐点），峰值藏在
+/// 采样点之间 —— 实测 rem=1.2、Δd=0.5 的候选峰值曲率 ≈ 2.0，而三个输出点上
+/// 全部接近 0，速度剖面与代价因此完全看不见它。
+///
+/// 采样数 32：五次式的 |κ|(s) 在机动段内至多两个峰（d″ 是三次式），
+/// 32 点的最坏漏采误差 ≪ 门限余量；再密只是白花时间。
+///
+/// @throw std::domain_error 尖点（σ = 1 − d·κ ≤ 0），调用方按"候选不可行"处理。
+template <typename ProfileFn>
+double peak_profile_curvature_inv_m(
+  const ads_common::ReferenceLine & line, double start_s_m, double span_m, ProfileFn profile)
+{
+  constexpr int kSamples = 32;
+  double peak = 0.0;
+  for (int i = 0; i <= kSamples; ++i) {
+    const double along_m = span_m * i / kSamples;
+    FrenetState state = profile(along_m);
+    state.s_m = start_s_m + along_m;
+    peak = std::max(peak, std::abs(to_cartesian(line, state).curvature_inv_m));
+  }
+  return peak;
+}
+
+double peak_curvature_inv_m(
+  const ads_common::ReferenceLine & line, const FrenetState & start, double target_offset_m,
+  double maneuver_span_m)
+{
+  const QuinticPolynomial lateral(
+    start.d_m, start.d_prime, start.d_double_prime, target_offset_m, 0.0, 0.0, maneuver_span_m);
+  return peak_profile_curvature_inv_m(line, start.s_m, maneuver_span_m, [&](double along_m) {
+    FrenetState state;
+    state.d_m = lateral.value_at(along_m);
+    state.d_prime = lateral.first_derivative_at(along_m);
+    state.d_double_prime = lateral.second_derivative_at(along_m);
+    return state;
+  });
+}
+
+/// @brief 保持候选的横向剖面：**二次衰减**，不是五次式（P8-S2d 第二刀）。
+///
+/// 五次式版保持候选要在跑道内把 d′ 压回零再稳住，峰值 |d″| ≈ 5.25·d′/S ——
+/// 实测 **d′ = 0.1（航向差 5.7°）在 1.5 m 跑道上就超运动学门**，而 Stanley
+/// 在弯道出口 ±3–6° 摆动是常态：junction 末段全部候选（含保持）被门淘汰，
+/// 车在离 goal 1.47 m 处 kStopping 停保持。
+///
+/// 二次衰减（d″ = −d′₀/S 常值）是消掉 d′ 的**最小峰值曲率**剖面：
+/// κ ≈ d′₀/S，d′ = 0.3（17°）在 1.5 m 上也只有 0.2。代价是终点偏移
+/// 漂到自然落点 d₀ + d′₀·S/2（≤ ~0.2 m），由调用方判是否仍在车道内。
+FrenetState hold_profile_at(const FrenetState & start, double decay_span_m, double along_m)
+{
+  FrenetState state;
+  if (along_m < decay_span_m) {
+    const double ratio = along_m / decay_span_m;
+    state.d_m = start.d_m + start.d_prime * along_m * (1.0 - 0.5 * ratio);
+    state.d_prime = start.d_prime * (1.0 - ratio);
+    state.d_double_prime = -start.d_prime / decay_span_m;
+  } else {
+    state.d_m = start.d_m + 0.5 * start.d_prime * decay_span_m;
+    state.d_prime = 0.0;
+    state.d_double_prime = 0.0;
+  }
+  return state;
+}
+
+/// @brief 按保持剖面生成整段几何（与 build_lateral_geometry 同样的等分采样）。
+std::vector<CartesianState> build_hold_geometry(
+  const ads_common::ReferenceLine & line, const FrenetState & start, double evaluation_span_m,
+  double resample_step_m)
+{
+  const auto segment_count =
+    std::max(1, static_cast<int>(std::llround(evaluation_span_m / resample_step_m)));
+  std::vector<CartesianState> points;
+  points.reserve(static_cast<std::size_t>(segment_count) + 1);
+  for (int i = 0; i <= segment_count; ++i) {
+    const double along_m = evaluation_span_m * i / segment_count;
+    FrenetState state = hold_profile_at(start, evaluation_span_m, along_m);
+    state.s_m = start.s_m + along_m;
+    points.push_back(to_cartesian(line, state));
+  }
+  return points;
+}
+
+}  // namespace
+
 LatticeResult plan_lateral(
   const ads_common::ReferenceLine & line, const FrenetState & start,
   const std::vector<Rectangle> & obstacles, const LatticeParams & params,
@@ -233,83 +324,145 @@ LatticeResult plan_lateral(
   double best_cost = std::numeric_limits<double>::infinity();
   bool found = false;
 
-  for (const double target_offset_m : offsets) {
-    for (const double maneuver_span_m : horizons) {
-      Candidate candidate;
-      candidate.target_offset_m = target_offset_m;
-      candidate.maneuver_span_m = maneuver_span_m;
+  const auto evaluate_candidate = [&](
+                                    double target_offset_m, double maneuver_span_m,
+                                    std::vector<CartesianState> prebuilt_points = {}) {
+    Candidate candidate;
+    candidate.target_offset_m = target_offset_m;
+    candidate.maneuver_span_m = maneuver_span_m;
 
-      // 尖点（σ = 1 − dκ ≤ 0）在本项目地图上到不了（d·κ ≤ 0.106），
-      // 但换地图或放宽 max_lateral_offset_m 之后就可能。to_cartesian 会抛，
-      // 这里**把它当成"这条候选不可行"而不是让异常穿透上去** ——
-      // 一条候选的几何退化不该让整个规划周期失败。
-      try {
+    // 尖点（σ = 1 − dκ ≤ 0）在本项目地图上到不了（d·κ ≤ 0.106），
+    // 但换地图或放宽 max_lateral_offset_m 之后就可能。to_cartesian 会抛，
+    // 这里**把它当成"这条候选不可行"而不是让异常穿透上去** ——
+    // 一条候选的几何退化不该让整个规划周期失败。
+    try {
+      if (!prebuilt_points.empty()) {
+        // 保持候选：几何与运动学门由调用处按自己的剖面做完了。
+        candidate.points = std::move(prebuilt_points);
+      } else {
+        // ---- 运动学准入（P8-S2d）：车开不出来的候选直接淘汰 ----------------
+        // 必须在几何构建之前密采样判（见 peak_curvature_inv_m 的说明 ——
+        // 输出点距上的曲率在短机动上恰好全落在零点，峰值是看不见的）。
+        if (
+          peak_curvature_inv_m(line, start, target_offset_m, maneuver_span_m) >
+          params.max_curvature_inv_m) {
+          ++result.blocked_count;
+          ++result.curvature_blocked_count;
+          return;
+        }
         candidate.points = build_lateral_geometry(
           line, start, target_offset_m, maneuver_span_m, evaluation_span_m, params.resample_step_m);
+      }
+    } catch (const std::domain_error &) {
+      ++result.blocked_count;
+      return;
+    }
+
+    double min_clearance_m = std::numeric_limits<double>::infinity();
+    for (const CartesianState & pose : candidate.points) {
+      const Rectangle body = vehicle_body_at(pose, params);
+      for (const Rectangle & obstacle : obstacles) {
+        min_clearance_m = std::min(min_clearance_m, distance_m(body, obstacle));
+      }
+    }
+
+    // **准入条件，不是代价项**：不满足直接淘汰，不允许"够便宜就擦着过"。
+    //
+    // ⚠️ 重叠（<= 0）单独一道**与 margin 无关**的硬性淘汰：即使上面那条
+    //    require_positive 哪天被谁改回去，撞上去的候选也过不了这里。
+    //    碰撞检查不许有任何参数取值能把它关掉（SPEC §11），
+    //    所以防线要有一道不吃参数的。
+    if (min_clearance_m <= 0.0 || min_clearance_m < params.safety_margin_m) {
+      ++result.blocked_count;
+      return;
+    }
+
+    candidate.min_clearance_m = min_clearance_m;
+
+    // -------------------------------------------------------------------------
+    //  代价
+    // -------------------------------------------------------------------------
+    // 曲率项用**候选自身**的弦长做一阶求积，而不是参考线的 Δs：
+    // 两者差一个因子 √(σ² + d′²)，而这个因子**逐候选不同**（d 不同 ⟹ σ 不同），
+    // 拿参考线的 Δs 会系统性地偏袒外侧候选。直接用输出点的弦长最省事也最一致 ——
+    // 下游用这些点建 ReferenceLine 时算出来的弧长就是它。
+    double curvature_integral = 0.0;
+    for (std::size_t i = 0; i + 1 < candidate.points.size(); ++i) {
+      const double chord_m = std::hypot(
+        candidate.points[i + 1].x_m - candidate.points[i].x_m,
+        candidate.points[i + 1].y_m - candidate.points[i].y_m);
+      curvature_integral +=
+        candidate.points[i].curvature_inv_m * candidate.points[i].curvature_inv_m * chord_m;
+    }
+
+    // 无障碍物时 min_clearance 是 +∞，`weight/∞ = 0` —— 于是"没有障碍物"与
+    // "障碍物无穷远"在代价上等价，这正是想要的语义，不需要额外分支。
+    const double clearance_cost = params.weight_clearance / min_clearance_m;
+
+    // 首次规划时一致性项恒为 0，**不是拿 0 当"上一次"**：
+    // 后者会在车本来就偏着的情况下凭空引入一个回中心线的偏好，
+    // 而那个偏好本该由 weight_offset 单独表达。
+    double consistency_cost = 0.0;
+    if (previous_target_offset_m.has_value()) {
+      const double delta = target_offset_m - previous_target_offset_m.value();
+      consistency_cost = params.weight_consistency * delta * delta;
+    }
+
+    candidate.cost = params.weight_offset * target_offset_m * target_offset_m +
+                     params.weight_curvature * curvature_integral + clearance_cost +
+                     consistency_cost;
+
+    if (candidate.cost < best_cost) {
+      best_cost = candidate.cost;
+      result.best = std::move(candidate);
+      found = true;
+    }
+  };
+
+  for (const double target_offset_m : offsets) {
+    for (const double maneuver_span_m : horizons) {
+      evaluate_candidate(target_offset_m, maneuver_span_m);
+    }
+  }
+
+  // ---- 短跑道保持候选（P8-S2d）--------------------------------------------
+  // 剩余长度装不下任何常规机动（S < min_horizon）时，网格候选全是「在
+  // 不足 min_horizon 的跨度上强行收敛」—— Δd 只要 0.1，1 m 跨度上的峰值
+  // |d″| ≈ 0.58 就已超运动学门限，于是**整张网格都会被上面那道门淘汰**。
+  // 这不是门太严：那些机动车确实做不出来。缺的是「不做新机动，保持当前
+  // 偏移走完最后几米」这个物理上唯一合理的选项 —— 补上它，末端永远至少
+  // 有一条可跟踪的候选，除非连保持现状都被障碍物堵死（那时 kStopping
+  // 才是正确语义）。P7-S4 junction 实测：没有它，出弯残余 0.5 m 偏差 +
+  // 剩 1 m 跑道 → 全候选淘汰 → 车在离 goal 1.16 m 处 NO_PATH 停保持。
+  //
+  // 目标夹回 ±max_offset：暂态可能越界（起点状态不受网格约束），
+  // 保持在界外会一路压着线走完 —— 夹回去是温和的（超出量通常只有厘米级）。
+  if (evaluation_span_m < params.min_horizon_m) {
+    ++result.candidate_count;
+    // 自然落点 = d₀ + d′₀·S/2（二次衰减的终点，见 hold_profile_at 的说明）。
+    const double natural_end_m = start.d_m + 0.5 * start.d_prime * evaluation_span_m;
+    if (std::abs(natural_end_m) <= params.max_lateral_offset_m) {
+      try {
+        const double hold_peak = peak_profile_curvature_inv_m(
+          line, start.s_m, evaluation_span_m,
+          [&](double along_m) { return hold_profile_at(start, evaluation_span_m, along_m); });
+        if (hold_peak > params.max_curvature_inv_m) {
+          ++result.blocked_count;
+          ++result.curvature_blocked_count;
+        } else {
+          evaluate_candidate(
+            natural_end_m, evaluation_span_m,
+            build_hold_geometry(line, start, evaluation_span_m, params.resample_step_m));
+        }
       } catch (const std::domain_error &) {
         ++result.blocked_count;
-        continue;
       }
-
-      double min_clearance_m = std::numeric_limits<double>::infinity();
-      for (const CartesianState & pose : candidate.points) {
-        const Rectangle body = vehicle_body_at(pose, params);
-        for (const Rectangle & obstacle : obstacles) {
-          min_clearance_m = std::min(min_clearance_m, distance_m(body, obstacle));
-        }
-      }
-
-      // **准入条件，不是代价项**：不满足直接淘汰，不允许"够便宜就擦着过"。
-      //
-      // ⚠️ 重叠（<= 0）单独一道**与 margin 无关**的硬性淘汰：即使上面那条
-      //    require_positive 哪天被谁改回去，撞上去的候选也过不了这里。
-      //    碰撞检查不许有任何参数取值能把它关掉（SPEC §11），
-      //    所以防线要有一道不吃参数的。
-      if (min_clearance_m <= 0.0 || min_clearance_m < params.safety_margin_m) {
-        ++result.blocked_count;
-        continue;
-      }
-
-      candidate.min_clearance_m = min_clearance_m;
-
-      // -------------------------------------------------------------------------
-      //  代价
-      // -------------------------------------------------------------------------
-      // 曲率项用**候选自身**的弦长做一阶求积，而不是参考线的 Δs：
-      // 两者差一个因子 √(σ² + d′²)，而这个因子**逐候选不同**（d 不同 ⟹ σ 不同），
-      // 拿参考线的 Δs 会系统性地偏袒外侧候选。直接用输出点的弦长最省事也最一致 ——
-      // 下游用这些点建 ReferenceLine 时算出来的弧长就是它。
-      double curvature_integral = 0.0;
-      for (std::size_t i = 0; i + 1 < candidate.points.size(); ++i) {
-        const double chord_m = std::hypot(
-          candidate.points[i + 1].x_m - candidate.points[i].x_m,
-          candidate.points[i + 1].y_m - candidate.points[i].y_m);
-        curvature_integral +=
-          candidate.points[i].curvature_inv_m * candidate.points[i].curvature_inv_m * chord_m;
-      }
-
-      // 无障碍物时 min_clearance 是 +∞，`weight/∞ = 0` —— 于是"没有障碍物"与
-      // "障碍物无穷远"在代价上等价，这正是想要的语义，不需要额外分支。
-      const double clearance_cost = params.weight_clearance / min_clearance_m;
-
-      // 首次规划时一致性项恒为 0，**不是拿 0 当"上一次"**：
-      // 后者会在车本来就偏着的情况下凭空引入一个回中心线的偏好，
-      // 而那个偏好本该由 weight_offset 单独表达。
-      double consistency_cost = 0.0;
-      if (previous_target_offset_m.has_value()) {
-        const double delta = target_offset_m - previous_target_offset_m.value();
-        consistency_cost = params.weight_consistency * delta * delta;
-      }
-
-      candidate.cost = params.weight_offset * target_offset_m * target_offset_m +
-                       params.weight_curvature * curvature_integral + clearance_cost +
-                       consistency_cost;
-
-      if (candidate.cost < best_cost) {
-        best_cost = candidate.cost;
-        result.best = std::move(candidate);
-        found = true;
-      }
+    } else {
+      // 自然落点会出车道：退回五次式收敛到界内（d′ 大时可能被门淘汰 ——
+      // 那时车正带着大横向速度冲向车道边缘，kStopping 停下是正确语义）。
+      const double hold_offset_m =
+        std::clamp(start.d_m, -params.max_lateral_offset_m, params.max_lateral_offset_m);
+      evaluate_candidate(hold_offset_m, evaluation_span_m);
     }
   }
 

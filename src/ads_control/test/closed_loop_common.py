@@ -25,6 +25,7 @@ test_closed_loop_obstacle.py）共用起点/终点常量与三份参数搬运逻
    「测试跑的参数和实际部署的不一样」—— 测试全绿，上车不对。
 """
 
+import math
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -104,6 +105,10 @@ def planning_params() -> dict:
     return {
         'lateral.max_offset_m': planning['lateral']['max_offset_m'],
         'lateral.offset_step_m': planning['lateral']['offset_step_m'],
+        # 运动学准入上限（P8-S2d）——推导链与 stack.launch.py 同一条。
+        'lateral.max_curvature_inv_m': (
+            math.tan(lim['max_steer_angle_rad']) / geo['wheelbase_m']
+            * planning['lateral']['steering_authority_fraction']),
         'longitudinal.min_horizon_m': planning['longitudinal']['min_horizon_m'],
         'longitudinal.max_horizon_m': planning['longitudinal']['max_horizon_m'],
         'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],

@@ -107,6 +107,8 @@ struct PlanResult
   /// 「27 条全被淘汰」和「一条都没生成」是完全不同的故障，必须分得开。
   std::size_t candidate_count{0};
   std::size_t blocked_count{0};
+  /// 因运动学不可跟踪（峰值曲率超限）被淘汰的候选数（P8-S2d，见 lattice.hpp）。
+  std::size_t curvature_blocked_count{0};
 
   /// `kStopping` 时：停车点距最近障碍物的纵向裕度，单位 m。用于验收判据。
   /// 其余状态下为 `+∞`。

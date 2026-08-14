@@ -178,6 +178,7 @@ PlanResult plan(
     plan_lateral(line, start, obstacles, params.lattice, previous_target_offset_m);
   result.candidate_count = lattice.candidate_count;
   result.blocked_count = lattice.blocked_count;
+  result.curvature_blocked_count = lattice.curvature_blocked_count;
 
   if (lattice.status == LatticeStatus::kHorizonTooShort) {
     result.status = PlanStatus::kRouteExhausted;

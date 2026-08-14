@@ -75,6 +75,9 @@ public:
     params_.lattice.horizon_step_m = declare_parameter<double>("longitudinal.horizon_step_m");
     params_.lattice.resample_step_m = declare_parameter<double>("trajectory.resample_step_m");
     params_.lattice.safety_margin_m = declare_parameter<double>("safety.margin_m");
+    // 运动学准入上限（P8-S2d）。launch 从车辆能力推导（tan(max_steer)/wheelbase
+    // × 转向余量系数），**不在这里再抄轴距或转角** —— 那是 vehicle_params 的地盘。
+    params_.lattice.max_curvature_inv_m = declare_parameter<double>("lateral.max_curvature_inv_m");
     params_.stop_margin_m = declare_parameter<double>("safety.stop_margin_m");
     // 障碍物列表多久没更新就算过期，s。取 1.0 = 感知标称周期（0.1 s）的 10 倍：
     // 感知自己的航迹删除窗口是 0.5 s（max_misses），1.0 s 已是整条流水线死透。
@@ -476,6 +479,9 @@ private:
     add("cycle_ms", std::to_string(last_cycle_ms_));
     add("candidate_count", std::to_string(result.candidate_count));
     add("blocked_count", std::to_string(result.blocked_count));
+    // 「撞」和「开不出来」分开报（P8-S2d）—— 排查方向完全不同：
+    // 前者查障碍物与间距，后者查末端跑道与横向暂态。
+    add("curvature_blocked_count", std::to_string(result.curvature_blocked_count));
     add("lateral_offset_m", std::to_string(result.lateral_offset_m));
     add("point_count", std::to_string(result.points.size()));
     if (result.status == PlanStatus::kStopping) {

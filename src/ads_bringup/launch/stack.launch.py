@@ -38,6 +38,7 @@
 #  跑整个系统才用本文件。
 # =============================================================================
 
+import math
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -142,6 +143,11 @@ def planning_node_params() -> dict:
         # 采样网格
         'lateral.max_offset_m': planning['lateral']['max_offset_m'],
         'lateral.offset_step_m': planning['lateral']['offset_step_m'],
+        # 运动学准入上限（P8-S2d）：车辆能力 × 转向余量系数。
+        # 轴距/最大转角来自 vehicle_params（单一来源），系数来自 planning_params。
+        'lateral.max_curvature_inv_m': (
+            math.tan(lim['max_steer_angle_rad']) / geo['wheelbase_m']
+            * planning['lateral']['steering_authority_fraction']),
         'longitudinal.min_horizon_m': planning['longitudinal']['min_horizon_m'],
         'longitudinal.max_horizon_m': planning['longitudinal']['max_horizon_m'],
         'longitudinal.horizon_step_m': planning['longitudinal']['horizon_step_m'],

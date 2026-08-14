@@ -67,6 +67,8 @@ LatticeParams MakeParams()
   params.horizon_step_m = 10.0;  // ⟹ 3 条纵向候选：10 / 20 / 30
   params.resample_step_m = kSampleStepM;
   params.safety_margin_m = 0.5;  // SPEC §8 场景 S04
+  // 运动学准入 = tan(max_steer 0.6)/wheelbase 2.7 × 转向余量 0.8（P8-S2d）
+  params.max_curvature_inv_m = 0.2027;
   params.vehicle_length_m = 4.4;
   params.vehicle_width_m = 1.8;
   params.rear_overhang_m = 0.85;
@@ -383,6 +385,81 @@ TEST(Lattice, CollisionUsesTheBodyCenterNotTheRearAxle)
 
   ASSERT_EQ(result.candidate_count, 1u) << "构造失败：候选不止一条，这条用例就不成立了";
   EXPECT_EQ(result.status, LatticeStatus::kAllCandidatesBlocked);
+}
+
+TEST(Lattice, EndOfRouteWithLateralTransientHoldsTheOffsetInsteadOfStopping)
+{
+  // P8-S2d 的核心用例，P7-S4 junction 实测的最小复现：出弯残余 0.5 m 横向
+  // 偏差 + 剩 1.2 m 跑道。修复前：网格候选全是「在 1 m 跨度上强行收敛」的
+  // 五次式，峰值曲率 ≈ 2.0（R = 0.5 m，车开不出来）—— 它们要么被旁边障碍物
+  // 挡下（现场：全候选淘汰 → 车在离 goal 1.16 m 处 NO_PATH 停保持），
+  // 要么被选中后让车蠕行。修复 = 两件事咬合：
+  //   ① 运动学准入门把开不出来的网格候选全部淘汰（密采样五次式峰值曲率 ——
+  //      输出点距 0.5 m 在短机动上恰好采在 |d″| 零点，峰值藏在点之间）；
+  //   ② 短跑道保持候选（不做新机动，保持当前偏移走完）补上唯一合理的选项。
+  //
+  // 故障注入实测（2026-08-13，写完立刻做的）：
+  //   去掉保持候选 ② → 本用例红（kAllCandidatesBlocked —— 门是对的，
+  //                     那些机动确实做不出来，缺的是合理选项）；
+  //   去掉曲率门 ①（上限调到 1e9）→ 本用例红（d_T=0 的爆曲率候选胜出，
+  //                     target_offset 断言失败 —— 修复前的蠕行/被挡形态）。
+  const ReferenceLine line = MakeStraightLine(100.0);
+  const FrenetState near_end{line.length_m() - 1.2, 0.5, 0.0, 0.0};
+  const LatticeResult result = plan_lateral(line, near_end, {}, MakeParams());
+
+  ASSERT_EQ(result.status, LatticeStatus::kOk) << "末端短跑道 + 横向暂态必须仍有可行轨迹";
+  // 胜出的必须是保持候选：目标 ≈ 当前偏移（不是网格上的强行收敛值）。
+  EXPECT_NEAR(result.best.target_offset_m, 0.5, 1e-9);
+  // 网格候选（Δd ≥ 0.1）在 1.2 m 跨度上峰值 |d″| ≥ 0.4，全部过不了运动学门。
+  EXPECT_GE(result.curvature_blocked_count, 8u)
+    << "曲率门没有拦住短跨度强行收敛的候选 —— 它们是车开不出来的";
+  // 保持候选的几何必须是平的：任何一点的曲率都远小于门限
+  // （修复前被选中的候选峰值 ≈ 2.0，藏在输出采样点之间）。
+  for (const auto & pt : result.best.points) {
+    EXPECT_LT(std::abs(pt.curvature_inv_m), 0.01);
+  }
+}
+
+TEST(Lattice, HeadingTransientOnShortRunwayStillYieldsATrackableTrajectory)
+{
+  // P8-S2d 第二刀（junction 实测第二回暴露的）：**d′ 暂态**版本的末端边界。
+  // 车离终点 1.5 m、带 0.2 的横向速度（航向差 11°—— Stanley 弯道出口的
+  // 常态量级）。保持候选如果用五次式（把 d′ 压回零再稳住），峰值
+  // |d″| ≈ 0.53 > 门限 0.20 —— **连保持候选都被运动学门淘汰**，
+  // 全候选出局 → kStopping：实测车在离 goal 1.47 m 处停保持，
+  // 而车道笔直、前方空无一物。
+  //
+  // 修法：保持候选改**二次衰减**剖面（d″ = −d′₀/S 常值，消掉 d′ 的
+  // 最小峰值曲率剖面）：κ ≈ d′₀/S = 0.13 < 门限，终点漂到自然落点
+  // d₀ + d′₀·S/2。
+  //
+  // 故障注入实测（2026-08-13）：保持候选退回五次式几何 → 本用例红
+  // （kStopping —— 二次衰减是它能存活的唯一原因）。
+  const ReferenceLine line = MakeStraightLine(100.0);
+  const FrenetState near_end{line.length_m() - 1.5, -0.2, 0.2, 0.0};
+  const LatticeResult result = plan_lateral(line, near_end, {}, MakeParams());
+
+  ASSERT_EQ(result.status, LatticeStatus::kOk)
+    << "带航向暂态的末端短跑道必须仍有可行轨迹（二次衰减保持候选）";
+  // 自然落点 = −0.2 + 0.2·1.5/2 = −0.05。
+  EXPECT_NEAR(result.best.target_offset_m, -0.05, 1e-9);
+  // 几何曲率必须在运动学门之内（车开得出来）。
+  for (const auto & pt : result.best.points) {
+    EXPECT_LT(std::abs(pt.curvature_inv_m), 0.2027);
+  }
+}
+
+TEST(Lattice, RunwayPermittingPartialConvergenceStillConverges)
+{
+  // 保持候选**不能**抢走还够跑道的场景：剩 5 m 时 Δd=0.3 的温和收敛
+  // （峰值 |d″| ≈ 5.77×0.3/25 ≈ 0.07 < 门限）仍然可行且代价更低 ——
+  // 末端处理是「跑道允许多少收敛多少」，不是「一到末端就放弃回中心」。
+  const ReferenceLine line = MakeStraightLine(100.0);
+  const FrenetState approaching{line.length_m() - 5.0, 0.5, 0.0, 0.0};
+  const LatticeResult result = plan_lateral(line, approaching, {}, MakeParams());
+
+  ASSERT_EQ(result.status, LatticeStatus::kOk);
+  EXPECT_LT(std::abs(result.best.target_offset_m), 0.5 - 1e-9) << "跑道还够温和收敛时不该原地保持";
 }
 
 TEST(Lattice, ReportsHorizonTooShortNearTheEndOfTheRoute)
