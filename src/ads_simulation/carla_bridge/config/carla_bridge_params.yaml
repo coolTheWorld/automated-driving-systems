@@ -27,11 +27,17 @@ carla_sidecar:
     control:
       # 与 gazebo 侧 vehicle_cmd_bridge 的看门狗同值同语义。
       watchdog_timeout_s: 0.5
-      # ⚠️ throttle/brake 标定常数 —— **上机重标**（S5 checklist）。
-      #    初值是保守猜测：1.5 m/s² 满加速 ≈ 60% 油门、3 m/s² ≈ 全刹。
-      #    P0b 已证明 CARLA 的执行机构响应（τ=0.140 s）与 Gazebo（0.294 s）
-      #    不同，映射常数没有理由相同。
-      throttle_per_mps2: 0.4
-      brake_per_mps2: 0.33
+      # throttle/brake 标定 —— S5 实测（2026-08-14，RTX 3090，Town10，
+      # 工作带 v∈[2,6]）：油门-加速度强非线性（0.4 顶不动风阻、0.6→0.51、
+      # 0.8→2.28 m/s²），线性拟合带偏置：throttle = bias + k·a。
+      #   k    = Δth/Δa = 0.2/1.77 ≈ 0.113
+      #   bias = 0.6 − 0.113×0.51 ≈ 0.54（工作带内风阻/滚阻的持续补偿）
+      # brake：全刹实测 −5.40 m/s² ⟹ 1/5.40 ≈ 0.185。
+      # 怠速死区 0.05：bias 在静止小指令下会蠕动，死区内直接怠速。
+      # ⚠️ 换蓝图/换 CARLA 版本要重标（scripts/carla_calibrate_throttle.py 是那把尺子）。
+      throttle_per_mps2: 0.113
+      brake_per_mps2: 0.185
+      throttle_bias: 0.54
+      idle_below_mps2: 0.05
 
     tick_hz: 50.0

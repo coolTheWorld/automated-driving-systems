@@ -37,7 +37,8 @@ class ControlMapping:
 
     def __init__(
             self, max_steer_rad: float, max_accel_mps2: float, max_decel_mps2: float,
-            throttle_per_mps2: float, brake_per_mps2: float):
+            throttle_per_mps2: float, brake_per_mps2: float,
+            throttle_bias: float = 0.0, idle_below_mps2: float = 0.0):
         """构造并校验参数.
 
         :param max_steer_rad: 最大转角（rad），来自 vehicle_params limits
@@ -58,6 +59,16 @@ class ControlMapping:
         self._max_decel_mps2 = max_decel_mps2
         self._throttle_per_mps2 = throttle_per_mps2
         self._brake_per_mps2 = brake_per_mps2
+        # S5 实测（RTX 3090，Town10 工作带 v∈[2,6]）：油门-加速度强非线性
+        # （0.4 顶不动风阻、0.6→0.51、0.8→2.28 m/s²）——线性拟合必须带
+        # **偏置**（风阻/滚阻的持续补偿）：throttle = bias + k·a。
+        # bias>0 时静止小指令会蠕动，配 idle 死区（a_cmd ≤ 死区 ⟹ 怠速）。
+        for name, value in (('throttle_bias', throttle_bias),
+                            ('idle_below_mps2', idle_below_mps2)):
+            if not (math.isfinite(value) and value >= 0.0):
+                raise ValueError(f'ControlMapping: {name} 必须是有限非负数，得到 {value}')
+        self._throttle_bias = throttle_bias
+        self._idle_below_mps2 = idle_below_mps2
 
     def is_valid(self, steer_rad: float, accel_mps2: float) -> bool:
         """指令是否有效（**校验在先，喂狗在后** —— 调用方按此顺序用）.
@@ -88,7 +99,11 @@ class ControlMapping:
 
         clamped_accel = max(-self._max_decel_mps2, min(self._max_accel_mps2, accel_mps2))
         if clamped_accel >= 0.0:
-            throttle = min(1.0, clamped_accel * self._throttle_per_mps2)
+            if clamped_accel <= self._idle_below_mps2:
+                throttle = 0.0  # 怠速死区：偏置项在静止小指令下会蠕动
+            else:
+                throttle = min(
+                    1.0, self._throttle_bias + clamped_accel * self._throttle_per_mps2)
             brake = 0.0
         else:
             throttle = 0.0

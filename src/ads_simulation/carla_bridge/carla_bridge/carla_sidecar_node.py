@@ -83,8 +83,10 @@ class CarlaSidecarNode(Node):
         self.declare_parameter('control.watchdog_timeout_s', 0.5)
         # throttle/brake 标定常数：⚠️ 上机重标（P0b：τ、稳态达成率都与 Gazebo
         # 不同）。初值取「1.5 m/s² 满油门的 40%、3.0 m/s² 满刹车」量级的保守猜测。
-        self.declare_parameter('control.throttle_per_mps2', 0.4)
-        self.declare_parameter('control.brake_per_mps2', 0.33)
+        self.declare_parameter('control.throttle_per_mps2', 0.113)
+        self.declare_parameter('control.brake_per_mps2', 0.185)
+        self.declare_parameter('control.throttle_bias', 0.54)
+        self.declare_parameter('control.idle_below_mps2', 0.05)
         self.declare_parameter('limits.max_steer_angle_rad', 0.6)
         self.declare_parameter('limits.max_accel_mps2', 1.5)
         self.declare_parameter('limits.max_decel_mps2', 3.0)
@@ -96,7 +98,9 @@ class CarlaSidecarNode(Node):
             self.get_parameter('limits.max_accel_mps2').value,
             self.get_parameter('limits.max_decel_mps2').value,
             self.get_parameter('control.throttle_per_mps2').value,
-            self.get_parameter('control.brake_per_mps2').value)
+            self.get_parameter('control.brake_per_mps2').value,
+            self.get_parameter('control.throttle_bias').value,
+            self.get_parameter('control.idle_below_mps2').value)
 
         # 传感器外参的单一来源（SPEC §4.1）—— sidecar 直接读 vehicle_params，
         # 不在 carla_bridge_params 里抄一份。

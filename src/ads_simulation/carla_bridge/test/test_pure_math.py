@@ -126,6 +126,15 @@ class TestControlMapping:
         assert ControlMapping.full_brake() == \
             {'steer': 0.0, 'throttle': 0.0, 'brake': 1.0}
 
+    def test_bias_shifts_throttle_and_idle_deadband_prevents_creep(self):
+        # S5 标定形态：throttle = bias + k·a（发动机+风阻非线性的带内线性化）；
+        # 死区防蠕动 —— bias 单独存在时静止小指令会让车爬走。
+        m = ControlMapping(0.6, 1.5, 3.0, 0.113, 0.185,
+                           throttle_bias=0.54, idle_below_mps2=0.05)
+        assert m.to_carla(0.0, 1.0)['throttle'] == pytest.approx(0.54 + 0.113)
+        assert m.to_carla(0.0, 0.04)['throttle'] == 0.0   # 死区内怠速
+        assert m.to_carla(0.0, -1.0)['brake'] == pytest.approx(0.185)
+
     def test_rejects_non_positive_parameters(self):
         with pytest.raises(ValueError):
             ControlMapping(0.0, 1.5, 3.0, 0.4, 0.33)
