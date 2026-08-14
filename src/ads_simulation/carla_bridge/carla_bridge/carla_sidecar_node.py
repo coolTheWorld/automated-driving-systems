@@ -156,6 +156,7 @@ class CarlaSidecarNode(Node):
         self.declare_parameter('obstacles_scenario', '')
         self._npcs = {}
         self._last_npc_tick_ns = None  # NPC 积分用实际仿真 dt（见 _on_tick 注释）
+        self._last_throttle = 0.0      # 油门上升速率限幅的记忆（见 _apply_control）
         obstacles_yaml = self.get_parameter('obstacles_yaml').value
         obstacles_scenario = self.get_parameter('obstacles_scenario').value
         # 'none' = 什么都不生成（与 Gazebo 的「没有 none 场景」语义一致：
@@ -603,6 +604,15 @@ class CarlaSidecarNode(Node):
             v = self._ego.get_velocity()
             fields = self._mapping.to_carla(
                 *self._last_cmd, speed_mps=math.hypot(v.x, v.y))
+            # 油门**上升**速率限幅（P8-S6 实测）：bias 0.54 的断崖 × 20 FPS
+            # ⟹ 小加速指令一拍打满 0.6+ 开度，弯道目标 3.9 实测冲到 4.6，
+            # 轮胎侧滑外漂 —— S01 弯道 a_lat 3.07（判据 2.0）的机理本体。
+            # 只限上升（2.0/s ⟹ 每 tick 0.1，断崖爬 ~5 拍）；收油与刹车
+            # 不限 —— 减速是安全方向，必须立即。纯执行器域，不碰控制律。
+            rise_cap = self._last_throttle + 2.0 * 0.05
+            if fields['throttle'] > rise_cap:
+                fields = dict(fields, throttle=rise_cap)
+        self._last_throttle = fields['throttle']
         control = self._carla.VehicleControl(
             throttle=fields['throttle'], brake=fields['brake'], steer=fields['steer'])
         self._ego.apply_control(control)
