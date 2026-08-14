@@ -12,6 +12,18 @@ RTX 4090/5070Ti 级、显存 ≥ 8 GB、**CPU ≥ 8 物理核**（CARLA 物理�
 镜像自选 + 必须能设 `NVIDIA_DRIVER_CAPABILITIES=all`（`graphics` 能力项默认
 不开，没有它 CARLA 一启动就崩而 nvidia-smi 一切正常）。
 
+⚠️ **驱动版本硬约束（2026-08-14 实测，窗口 2 的 4090/VM）**：
+**580-open 驱动上 CARLA 首个 vkQueueSubmit 即 `VK_ERROR_DEVICE_LOST`**，
+内核刷 **Xid 32**（corrupted push buffer），UE4 崩得连日志目录都来不及建。
+Vulkan 枚举完全正常（ctypes 三设备）—— 所以「验货时 vkEnumerate 过了」
+不等于能跑，**枚举不提交命令流**。`-norhithread` / `-opengl` 都救不了
+（CARLA 的 UE4 没编 OpenGL RHI，flag 被静默无视）。
+**修法：降到 550 专有版**（`apt remove nvidia-driver-580-open` +
+`apt install nvidia-driver-550` + reboot），实测 550.163.01 秒起。
+选机时优先驱动 ≤570 的宿主；上机自检第 0 步就看 `nvidia-smi` 驱动版本。
+降级坑：重启后 `unattended-upgrades` 抢 dpkg 锁会让 apt 静默失败 ——
+**装完必须断言 `dpkg -l` 与内核模块在位才允许 reboot**，否则白折腾一轮。
+
 ## 1. 环境自检（照 p0b §2.1–2.3）
 
 1. Vulkan 硬件设备可见（`vkEnumeratePhysicalDevices` 设备类型非 CPU）。
