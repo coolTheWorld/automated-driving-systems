@@ -42,7 +42,11 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from ads_msgs.msg import VehicleCmd
 
+from geometry_msgs.msg import Twist
+import yaml
+
 from carla_bridge.control_mapping import ControlMapping
+from carla_bridge.npc_kinematics import scenario_actor_names, step_pose
 from carla_bridge.transforms import (
     position_to_carla, position_to_ros, relative_pose_in_frame, yaw_rate_to_ros,
     yaw_to_carla, yaw_to_quaternion, yaw_to_ros)
@@ -112,6 +116,20 @@ class CarlaSidecarNode(Node):
         self._last_cmd_time = None
         self.create_subscription(VehicleCmd, '/vehicle_cmd', self._on_cmd, 10)
 
+        # ---- NPC 道具（P8-S4b，用户拍板「sidecar 复刻航点驱动」）----------
+        # 控制器复用 gazebo_bridge 的 npc_controller（仿真器无关：吃
+        # /model/<n>/pose_gt 出 /model/<n>/cmd_vel）。sidecar 只补两头：
+        # 发 pose_gt（CARLA 位姿）、收 cmd_vel（体系 twist → step_pose 积分
+        # → set_transform）。行为与 gz VelocityControl 逐语义对齐
+        # （npc_kinematics.py 的对照表），场景判据时间窗才对得上。
+        self.declare_parameter('dynamic_actors_yaml', '')
+        self.declare_parameter('scenario', '')
+        self._npcs = {}
+        actors_yaml = self.get_parameter('dynamic_actors_yaml').value
+        scenario = self.get_parameter('scenario').value
+        if actors_yaml and scenario:
+            self._spawn_npcs(actors_yaml, scenario)
+
         period_s = 1.0 / self.get_parameter('tick_hz').value
         self.create_timer(period_s, self._on_tick)
 
@@ -168,6 +186,62 @@ class CarlaSidecarNode(Node):
         tf.transform.rotation.z = qz
         tf.transform.rotation.w = qw
         self._static_tf.sendTransform(tf)
+
+    # ------------------------------------------------------------------
+    #  NPC 道具
+    # ------------------------------------------------------------------
+    def _spawn_npcs(self, actors_yaml_path, scenario):
+        """按场景 spawn NPC 道具并接上 npc_controller 的话题对."""
+        cfg = yaml.safe_load(open(actors_yaml_path, encoding='utf-8'))
+        library = self._world.get_blueprint_library()
+        for name in scenario_actor_names(cfg, scenario):
+            actor_cfg = cfg['actors'][name]
+            first_wp = actor_cfg['waypoints'][0]
+            x0, y0 = float(first_wp[0]), float(first_wp[1])
+            # 车用与 ego 不同的蓝图（道具不需要对齐动力学 —— 位姿由脚本管）；
+            # 行人用 walker。⚠️ 生成器的机械校验（外廓/航点在界内）依旧由
+            # gen_dynamic_actors --check 守着 —— 这里不重复校验，单一来源。
+            if actor_cfg.get('classification') == 'pedestrian':
+                blueprint = library.filter('walker.pedestrian.*')[0]
+            else:
+                blueprint = library.find('vehicle.nissan.micra')
+            cx, cy, _ = position_to_carla(x0, y0, 0.0)
+            transform = self._carla.Transform(self._carla.Location(x=cx, y=cy, z=0.2))
+            actor = self._world.spawn_actor(blueprint, transform)
+            # 位姿全归脚本：物理开着会与 set_transform 抢位姿（道具抖动）。
+            actor.set_simulate_physics(False)
+            npc = {
+                'actor': actor, 'pose': (x0, y0, 0.0), 'cmd': (0.0, 0.0, 0.0),
+                'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),
+            }
+            self._npcs[name] = npc
+            self.create_subscription(
+                Twist, f'/model/{name}/cmd_vel',
+                lambda msg, key=name: self._npcs[key].__setitem__(
+                    'cmd', (msg.linear.x, msg.linear.y, msg.angular.z)), 10)
+            self.get_logger().info(f'NPC 已 spawn：{name} @ ({x0:.1f}, {y0:.1f})')
+
+    def _tick_npcs(self, dt_s, stamp):
+        """积分 cmd_vel → set_transform，并发 pose_gt（npc_controller 的输入）."""
+        for name, npc in self._npcs.items():
+            x, y, yaw = step_pose(*npc['pose'], *npc['cmd'], dt_s)
+            npc['pose'] = (x, y, yaw)
+            cx, cy, _ = position_to_carla(x, y, 0.0)
+            npc['actor'].set_transform(self._carla.Transform(
+                self._carla.Location(x=cx, y=cy, z=0.2),
+                self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+            gt = Odometry()
+            gt.header.stamp = stamp
+            gt.header.frame_id = 'map'
+            gt.child_frame_id = f'{name}_base'
+            gt.pose.pose.position.x = x
+            gt.pose.pose.position.y = y
+            qx, qy, qz, qw = yaw_to_quaternion(yaw)
+            gt.pose.pose.orientation.x = qx
+            gt.pose.pose.orientation.y = qy
+            gt.pose.pose.orientation.z = qz
+            gt.pose.pose.orientation.w = qw
+            npc['pub'].publish(gt)
 
     # ------------------------------------------------------------------
     #  控制反向通道
@@ -275,6 +349,7 @@ class CarlaSidecarNode(Node):
         joints.position = [0.0] * 6
         self._joint_pub.publish(joints)
 
+        self._tick_npcs(1.0 / self.get_parameter('tick_hz').value, stamp)
         self._apply_control()
 
 

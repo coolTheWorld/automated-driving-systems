@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'carla_sidecar_node = carla_bridge.carla_sidecar_node:main',
+            'traffic_light_node = carla_bridge.traffic_light_node:main',
         ],
     },
 )

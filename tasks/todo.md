@@ -4,7 +4,7 @@
 > 状态：**P0a 29/29**、**P1 28/28**、**P2 28/28**、**P3 已验收（plan 全表 9/9+4/4）**、
 > 　　**P0b 方案 B 已实测**、**P4 已验收（复检修复后六轮全过）**、**P5 已验收（Gazebo 半）**、
 > 　　**P6 预测已验收（双层全过）**、**P7 行为决策已验收（CP-P7-A 7/7 + CP-P7-B，2026-08-13）**
-> 　　**进行中：P8 场景测试体系 + CI（S1–S4 ✅，下一步 S5 云端联调 —— 要用户租机 + 两个拍板）**
+> 　　**进行中：P8 场景测试体系 + CI（S1–S4b ✅ 本地半区全铺满，S5/S6 等用户租 Vast.ai 云机）**
 > 更新：2026-08-13　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：**P3/P4/P5 与 2026-08-12 复检的进度都记在「🔖 下次从这里继续」里**
@@ -19,11 +19,14 @@
 **当前位置**：**P8 进行中** —— S1–S3 ✅（CP-P8-A 达成：run_all 连续两轮
 9/9、⑨ 无照印、metrics 98 行全 PASS）、**S4 ✅ carla_bridge 本地开发完成
 （2026-08-14）**：dry-run 21/21 + 注入验红，verify_ros_bridge.sh 已参数化
-且 Gazebo 默认路径实跑 6/6 复验。**下一步 S5 云端联调 —— 被外部前置卡住：
-① 用户在 Vast.ai 租 RTX 4090/5070Ti 级实例（规格见 docs/p8_carla_bringup.md
-§0）并提供 SSH；② 两个待拍板：TrafficLight 消息形态（动 ads_msgs，先问
-后做）、NPC 编排方案（sidecar 复刻航点 vs Traffic Manager，手册 §5）。**
-上机流程与 checklist 全在 docs/p8_carla_bringup.md。
+且 Gazebo 默认路径实跑 6/6 复验。**两个拍板已落**（2026-08-14：专用 TrafficLight 消息 / sidecar 复刻
+航点驱动），**S4b 本地半区已建完**：红灯链路（消息 → 行为约束 →
+planning_node 订阅，注入验红）+ NPC 复刻（npc_controller 原样复用，
+sidecar 补 pose_gt/cmd_vel 两头 + step_pose 运动学积分）+ 虚拟灯节点。
+**S5 唯一在等的是外部前置：用户在 Vast.ai 租 RTX 4090/5070Ti 级实例
+（规格 docs/p8_carla_bringup.md §0，约 $0.3–0.5/h，本轮预计 10–20 h）
+并提供 SSH。**上机第一件事照手册 §1–§2（Vulkan 先行、四件 dry-run
+验不了的事）。
 
 **🚩 CP-P8-A 达成**（2026-08-14）：两轮汇总表全 PASS 见
 `.scenario_runs/20260814_003900` 与 `20260814_005429`；台账八条中六条已清
