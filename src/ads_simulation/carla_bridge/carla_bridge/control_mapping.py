@@ -69,6 +69,15 @@ class ControlMapping:
                 raise ValueError(f'ControlMapping: {name} 必须是有限非负数，得到 {value}')
         self._throttle_bias = throttle_bias
         self._idle_below_mps2 = idle_below_mps2
+        # S6 实测（红灯停止线 + block 驻车）：CARLA 静止时 brake=0.185·|a| 的
+        # 小开度锁不住车（Town10 路面有坡度，实测红窗末仍蠕动 0.11 m/s、
+        # 驻车点 6 cm 往复摇晃）——真车低层控制器的标准做法是**静止闩锁**：
+        # 车近停 + 控制器没要求前进 ⟹ 恒定保持刹车。无状态设计是安全的，
+        # 因为两个分支都在刹车（不存在 throttle/brake 振荡的配方），
+        # 而放开条件（accel > 怠速死区）只由上游控制器给出。
+        # Gazebo 物理天然不蠕动，此差异属执行器层，不碰控制律（SPEC §4.1）。
+        self._hold_brake = 0.30          # ≈1.6 m/s² 等效制动，平地驻车绰绰有余
+        self._hold_below_mps = 0.15      # 进入闩锁的车速门限（高于蠕动实测 0.11）
 
     def is_valid(self, steer_rad: float, accel_mps2: float) -> bool:
         """指令是否有效（**校验在先，喂狗在后** —— 调用方按此顺序用）.
@@ -79,7 +88,9 @@ class ControlMapping:
         """
         return math.isfinite(steer_rad) and math.isfinite(accel_mps2)
 
-    def to_carla(self, steer_rad: float, accel_mps2: float) -> dict:
+    def to_carla(
+            self, steer_rad: float, accel_mps2: float,
+            speed_mps: float = float('nan')) -> dict:
         """有效指令 → CARLA VehicleControl 字段.
 
         ⚠️ **CARLA 的 steer 归一化到 [−1, 1] 且左手系（正 = 右转）**；
@@ -87,6 +98,9 @@ class ControlMapping:
 
         :param steer_rad: 目标转角，rad（右手系，正 = 左转）
         :param accel_mps2: 目标加速度，m/s²（负 = 制动）
+        :param speed_mps: 当前车速（m/s，标量）。传 NaN 时驻车闩锁不参与
+            （闩锁条件对 NaN 恒假 —— 这里是**利用**「NaN 比较恒假」而不是被它咬，
+            未知车速下退回纯映射是安全方向）
         :return: {'steer': float, 'throttle': float, 'brake': float}
         :raise ValueError: 指令非有限（调用方应先 is_valid，这里是双保险）
         """
@@ -96,6 +110,10 @@ class ControlMapping:
         clamped_steer = max(-self._max_steer_rad, min(self._max_steer_rad, steer_rad))
         # 归一化 + 左手系翻转：ROS 正转角（左转）→ CARLA 负 steer
         steer_carla = -clamped_steer / self._max_steer_rad
+
+        # 驻车闩锁：车近停且控制器没要求前进 ⟹ 恒定保持刹车（转向照常回正）
+        if abs(speed_mps) < self._hold_below_mps and accel_mps2 <= self._idle_below_mps2:
+            return {'steer': steer_carla, 'throttle': 0.0, 'brake': self._hold_brake}
 
         clamped_accel = max(-self._max_decel_mps2, min(self._max_accel_mps2, accel_mps2))
         if clamped_accel >= 0.0:

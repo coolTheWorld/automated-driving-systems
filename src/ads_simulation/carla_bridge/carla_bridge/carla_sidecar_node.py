@@ -573,8 +573,13 @@ class CarlaSidecarNode(Node):
         expired = (
             self._last_cmd_time is None or
             (self.get_clock().now() - self._last_cmd_time).nanoseconds * 1e-9 > timeout_s)
-        fields = (self._mapping.full_brake() if expired
-                  else self._mapping.to_carla(*self._last_cmd))
+        if expired:
+            fields = self._mapping.full_brake()
+        else:
+            # 车速给驻车闩锁用（0.9.x 的 get_velocity 读客户端每 tick 快照，无额外 RPC）
+            v = self._ego.get_velocity()
+            fields = self._mapping.to_carla(
+                *self._last_cmd, speed_mps=math.hypot(v.x, v.y))
         control = self._carla.VehicleControl(
             throttle=fields['throttle'], brake=fields['brake'], steer=fields['steer'])
         self._ego.apply_control(control)

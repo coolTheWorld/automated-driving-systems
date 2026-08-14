@@ -135,6 +135,23 @@ class TestControlMapping:
         assert m.to_carla(0.0, 0.04)['throttle'] == 0.0   # 死区内怠速
         assert m.to_carla(0.0, -1.0)['brake'] == pytest.approx(0.185)
 
+    def test_standstill_hold_latch(self):
+        # S6 实测：静止时 0.185·|a| 的小开度锁不住车（红窗末蠕动 0.11 m/s、
+        # 驻车 6 cm 摇晃）。闩锁：近停 + 不要求前进 ⟹ 恒定保持刹车。
+        m = ControlMapping(0.6, 1.5, 3.0, 0.113, 0.185,
+                           throttle_bias=0.54, idle_below_mps2=0.05)
+        held = m.to_carla(0.0, -0.5, speed_mps=0.05)
+        assert held['brake'] == pytest.approx(0.30) and held['throttle'] == 0.0
+        # 怠速指令（非负但在死区内）同样闩住 —— 否则红灯下溜坡
+        assert m.to_carla(0.0, 0.0, speed_mps=0.0)['brake'] == pytest.approx(0.30)
+        # 控制器一要求加速立刻放开（绿灯起步不能被闩死）
+        go = m.to_carla(0.0, 1.0, speed_mps=0.05)
+        assert go['brake'] == 0.0 and go['throttle'] > 0.5
+        # 车还在动（≥ 门限）不闩 —— 行车中制动必须按标定映射走
+        assert m.to_carla(0.0, -1.0, speed_mps=2.0)['brake'] == pytest.approx(0.185)
+        # 未知车速（NaN）退回纯映射 —— 利用「NaN 比较恒假」的安全方向
+        assert m.to_carla(0.0, -1.0)['brake'] == pytest.approx(0.185)
+
     def test_rejects_non_positive_parameters(self):
         with pytest.raises(ValueError):
             ControlMapping(0.0, 1.5, 3.0, 0.4, 0.33)
