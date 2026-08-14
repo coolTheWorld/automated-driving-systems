@@ -155,6 +155,7 @@ class CarlaSidecarNode(Node):
         self.declare_parameter('obstacles_yaml', '')
         self.declare_parameter('obstacles_scenario', '')
         self._npcs = {}
+        self._last_npc_tick_ns = None  # NPC 积分用实际仿真 dt（见 _on_tick 注释）
         obstacles_yaml = self.get_parameter('obstacles_yaml').value
         obstacles_scenario = self.get_parameter('obstacles_scenario').value
         # 'none' = 什么都不生成（与 Gazebo 的「没有 none 场景」语义一致：
@@ -519,7 +520,15 @@ class CarlaSidecarNode(Node):
             else:
                 blueprint = library.find('vehicle.nissan.micra')
             cx, cy, _ = position_to_carla(x0, y0, 0.0)
-            transform = self._carla.Transform(self._carla.Location(x=cx, y=cy, z=0.2))
+            # ⚠️ 高空 spawn（P8-S6 实测：junction 三辆 NPC 在路面 spawn 直接
+            #    「Spawn failed because of collision」）：Gazebo 道具无碰撞、
+            #    草地航点物理上没事，而 CARLA 的 spawn_actor **做碰撞检查**
+            #    （路缘墙 wall_height=1.0 / 彼此 / 自车都算）。位姿本就全归
+            #    脚本管 —— 首拍 set_transform（瞬移，无碰撞检查）即归位；
+            #    逐台抬 3 m 错开，免得道具之间在空中互撞。
+            spawn_z = 30.0 + 3.0 * len(self._npcs)
+            transform = self._carla.Transform(
+                self._carla.Location(x=cx, y=cy, z=spawn_z))
             actor = self._world.spawn_actor(blueprint, transform)
             # 位姿全归脚本：物理开着会与 set_transform 抢位姿（道具抖动）。
             actor.set_simulate_physics(False)
@@ -554,6 +563,12 @@ class CarlaSidecarNode(Node):
             gt.pose.pose.orientation.y = qy
             gt.pose.pose.orientation.z = qz
             gt.pose.pose.orientation.w = qw
+            # twist 必须填（P8-S6 实测：漏填时判据读到 lead_v 恒 0，
+            # 「前车驶离」永远判不出来）。语义与 gz 桥的 Odometry 一致：
+            # child_frame（体系）下的速度 —— cmd 本来就是体系 twist，直传。
+            gt.twist.twist.linear.x = npc['cmd'][0]
+            gt.twist.twist.linear.y = npc['cmd'][1]
+            gt.twist.twist.angular.z = npc['cmd'][2]
             npc['pub'].publish(gt)
 
     # ------------------------------------------------------------------
@@ -684,7 +699,18 @@ class CarlaSidecarNode(Node):
         joints.position = [0.0] * 6
         self._joint_pub.publish(joints)
 
-        self._tick_npcs(1.0 / self.get_parameter('tick_hz').value, stamp)
+        # ⚠️ dt 用**实际流逝的仿真时间**，不能用 1/tick_hz（P8-S6 实测）：
+        #    仿真钟粒度 = 同步步长 0.05 s（20 更新/秒），50 Hz 的 ROS 定时器
+        #    每次钟更新至多触发一次 → 实际 20 Hz，dt 填 1/50 ⟹ NPC 全员
+        #    慢 2.5 倍（lead 3.0 → 实测 1.2 m/s），行人在道内滞留超窗、
+        #    「驶离」滑出记录窗，三个行为场景的相位账全部错位。
+        now_ns = self.get_clock().now().nanoseconds
+        if self._last_npc_tick_ns is not None:
+            npc_dt_s = min(max((now_ns - self._last_npc_tick_ns) * 1e-9, 0.0), 0.2)
+        else:
+            npc_dt_s = 0.0
+        self._last_npc_tick_ns = now_ns
+        self._tick_npcs(npc_dt_s, stamp)
         self._apply_control()
 
 
