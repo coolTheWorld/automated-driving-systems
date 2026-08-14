@@ -104,7 +104,7 @@ while kill -0 $REC 2>/dev/null; do
   sleep 10
 done
 kill $TAP 2>/dev/null
-if grep -q 全部通过 ${LOG}.txt; then echo "VERDICT=PASS"
-elif grep -q 有判据未通过 ${LOG}.txt; then echo "VERDICT=FAIL"
+if grep -qE "全部通过|^0 项未通过" ${LOG}.txt; then echo "VERDICT=PASS"
+elif grep -qE "有判据未通过|[1-9][0-9]* 项未通过" ${LOG}.txt; then echo "VERDICT=FAIL"
 else echo "VERDICT=INCOMPLETE（记录器没跑完 —— 超时或异常）"; fi
 grep -E "PASS|FAIL|m/s|误差" ${LOG}.txt | head -12
