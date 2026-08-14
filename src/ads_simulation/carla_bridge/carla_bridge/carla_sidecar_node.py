@@ -222,9 +222,16 @@ class CarlaSidecarNode(Node):
         # 车出界撞墙停下，判据照常打分，服务器活着跑下一场。
         # ⚠️ 感知会看见墙（雷达回波）——感知层场景的影响到时候评，
         #    真值层判据不受影响。
+        # additional_width 0.6 → 2.0（P8-S6 junction 实测）：弯道油门超调
+        # 0.7 m/s（粗粒度映射，已在差异台账）× 轮胎滑移把 R=13.75 拉宽 ~13%
+        # ⟹ 90° 弯累计外漂 >0.6 m，车**亲上贴边的护栏墙**被物理逮捕
+        # （控制器命令 +1.5 时实测 −4.6，规划器全程「正常」—— 症状是
+        # 「车在弯里自己停了」，五轮排查全在查规划/控制）。Gazebo 同弯是
+        # **草肩**，出线无代价 —— 这是世界生成保真度差异，不是栈的病。
+        # 2.0 m 硬化路肩恢复同一容错语义；wall_height 的虚空保护不动。
         params = self._carla.OpendriveGenerationParameters(
             vertex_distance=0.5, max_road_length=50.0, wall_height=1.0,
-            additional_width=0.6, smooth_junctions=False, enable_mesh_visibility=True)
+            additional_width=2.0, smooth_junctions=False, enable_mesh_visibility=True)
         world = self._client.generate_opendrive_world(xodr, params)
         # ---- 同步模式（S5 实测后加）--------------------------------------
         # 异步模式下世界自由狂奔（实测 ~300 FPS）：仿真钟三倍速于墙钟、
