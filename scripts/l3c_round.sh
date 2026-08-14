@@ -14,16 +14,30 @@ source /workspace/install/setup.bash
 set -u
 
 cleanup() {
+  # 按**安装路径前缀**杀，不按节点名枚举 —— S06 排查五轮的教训：名单漏了
+  # obstacle_truth，三个孤儿带着 block 锥桶世界观（publish_as_perception）
+  # 污染后续所有轮：幻影 stop_at 与真规划**交替发布**，控制被两股轨迹拉扯成
+  # 微冲-停；S01 退化轮的车正是停在幻影锥桶前。与陷阱表「两套仿真并存」同族：
+  # 这是 ROS 层的「两套世界观并存」，症状同样是所有测量作废。
   pkill -f "install/carla_bridge/li[b]" 2>/dev/null
-  pkill -f "gazebo_bridge/lidar_preproces[s]or" 2>/dev/null
+  pkill -f "install/gazebo_bridge/li[b]" 2>/dev/null
+  pkill -f "install/ads_[a-z]*/li[b]" 2>/dev/null
   pkill -f "robot_state_publishe[r] " 2>/dev/null
   pkill -f "ros2 launc[h]" 2>/dev/null
-  pkill -f "map_nod[e]" 2>/dev/null; pkill -f "planning_nod[e]" 2>/dev/null
-  pkill -f "control_nod[e]" 2>/dev/null
+  pkill -f "traffic_light_nod[e]" 2>/dev/null
   sleep 2
 }
 trap cleanup EXIT
 cleanup
+# 残留守卫：清完还有活的算法/桥节点就拒跑（僵尸除外 —— stat 首字母 Z，
+# 容器 PID 1 不 reap，defunct 无 DDS 存在、无害）。守卫必须有 —— 正是它
+# 这一类检查在 P5 拦下过两次会被污染的测量（CLAUDE.md 陷阱表）。
+LEFT=$(ps -eo stat=,args= | awk '$1 !~ /^Z/' | grep -cE "install/(ads_|gazebo_bridge|carla_bridge)" || true)
+if [ "${LEFT}" != "0" ]; then
+  echo "VERDICT=RESIDUE(${LEFT} 个残留进程，拒绝起跑)"
+  ps -eo stat=,args= | awk '$1 !~ /^Z/' | grep -E "install/(ads_|gazebo_bridge|carla_bridge)"
+  exit 4
+fi
 
 server_ok() { timeout 5 bash -c "echo > /dev/tcp/127.0.0.1/2000" 2>/dev/null; }
 server_ok || { echo "VERDICT=SERVER_DEAD（起跑前）"; exit 3; }
