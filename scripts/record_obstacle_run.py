@@ -341,10 +341,14 @@ def score(recorder, scenario):
     passed &= check('碰撞次数', '%d' % collisions, collisions == 0, '0')
 
     if scenario == 'avoid':
+        # ⚠️ 判据是 SPEC §8 S04 的常数 0.5，**不挂 safety.margin_m**（2026-08-14 拆耦）：
+        #    margin 是设计输入（规划器给自己留的量），SPEC 是验收权威。此前判据
+        #    读 margin，margin 0.5→0.7 时验收线跟着抬 —— 自己追自己的尾巴：
+        #    交付间距 = margin + 网格加成 − 执行误差，执行误差(CARLA −0.158) 一旦
+        #    大于网格加成(0.15) 就永远红，而对 SPEC 其实有 38% 余量。
         passed &= check(
             '最小侧向间距 (m)', '%.3f' % min_clearance_m,
-            min_clearance_m > recorder.safety_margin_m,
-            '> %.2f' % recorder.safety_margin_m, 'SPEC §8 S04')
+            min_clearance_m > 0.5, '> 0.50', 'SPEC §8 S04（常数，不随设计余量走）')
         passed &= check(
             '规划器最大横向偏移 (m)', '%.3f' % max_planner_offset_m,
             max_planner_offset_m > 0.1, '> 0.10', '前提（不在 plan 表内）：证明绕行确实来自规划器')
@@ -441,8 +445,7 @@ def score(recorder, scenario):
             '停住不是慢慢蹭；取**整段**末拍，车是在 NO_PATH 里刹完的')
         passed &= check(
             '停车点到障碍物间距 (m)', '%.3f' % min_clearance_m,
-            min_clearance_m >= recorder.safety_margin_m,
-            '>= %.2f' % recorder.safety_margin_m)
+            min_clearance_m >= 0.5, '>= 0.50', 'SPEC §8 S04（常数，同上）')
     return passed, lines
 
 

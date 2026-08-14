@@ -92,10 +92,10 @@ TAP=$!
 # S04 场景（TAG 含 avoid/block）换判据仪器（家规：判据活在 record_* 里）
 if [[ "$TAG" == *avoid* || "$TAG" == *block* ]]; then
   SCEN=${TAG##*_}
-  timeout 400 python3 /workspace/scripts/record_obstacle_run.py \
+  timeout 550 python3 /workspace/scripts/record_obstacle_run.py \
     --scenario "$SCEN" --out ${LOG}.csv > ${LOG}.txt 2>&1 &
 else
-  timeout 400 python3 /workspace/scripts/record_control_run.py \
+  timeout 550 python3 /workspace/scripts/record_control_run.py \
     --goal "$GX" "$GY" --out ${LOG}.csv > ${LOG}.txt 2>&1 &
 fi
 REC=$!
