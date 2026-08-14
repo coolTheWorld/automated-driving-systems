@@ -121,7 +121,7 @@ public:
     // 配两遍的症状是「改了车长之后跟停间距还按旧车头算」，没有一层会报错。
     behavior_params.front_offset_m =
       params_.lattice.vehicle_length_m - params_.lattice.rear_overhang_m;
-    // 阻挡阈值同为推导量（= 车半宽 + 安全间距 − 最大横向偏移，本配置 0.55）。
+    // 阻挡阈值同为推导量（= 车半宽 + 安全间距 − 最大横向偏移，本配置 0.75）。
     // 它与 lattice 的可行性判断共用同一组参数 —— 改了任何一个，两处一起变。
     behavior_params.blocking_half_m = params_.lattice.vehicle_width_m / 2.0 +
                                       params_.lattice.safety_margin_m -
