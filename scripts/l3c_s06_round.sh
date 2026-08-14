@@ -11,13 +11,24 @@ cleanup() {
   # 按**安装路径前缀**杀，不按节点名枚举 —— S06 五轮排查的教训：
   # 名单漏了 obstacle_truth，三个孤儿带着 block 锥桶世界观污染后续所有轮
   # （幻影 stop_at=22.2 与真规划交替，车被拉扯成微冲-停）。
-  pkill -f "install/carla_bridge/li[b]" 2>/dev/null
-  pkill -f "install/gazebo_bridge/li[b]" 2>/dev/null
-  pkill -f "install/ads_[a-z]*/li[b]" 2>/dev/null
-  pkill -f "robot_state_publishe[r] " 2>/dev/null
-  pkill -f "ros2 launc[h]" 2>/dev/null
-  pkill -f "traffic_light_nod[e]" 2>/dev/null
-  sleep 2
+  PATTERNS=(
+    "install/carla_bridge/li[b]" "install/gazebo_bridge/li[b]"
+    "install/ads_[a-z]*/li[b]" "robot_state_publishe[r] "
+    "ros2 launc[h]" "traffic_light_nod[e]")
+  for PAT in "${PATTERNS[@]}"; do pkill -f "$PAT" 2>/dev/null; done
+  # TERM 后必须给「等待 + 升级 -9」：sidecar 的 SIGTERM 钩子走 finally 还原
+  # 异步模式，服务器已被 -9 时那个 RPC 永远不回来 —— 实测留下孤儿 sidecar，
+  # 被下一轮的残留守卫拦下（守卫立功，但轮次白等一场）。
+  for i in 1 2 3 4 5; do
+    LIVE=0
+    for PAT in "${PATTERNS[@]}"; do pgrep -f "$PAT" >/dev/null 2>&1 && LIVE=1; done
+    [ "$LIVE" = "0" ] && break
+    sleep 2
+  done
+  if [ "${LIVE:-0}" = "1" ]; then
+    for PAT in "${PATTERNS[@]}"; do pkill -9 -f "$PAT" 2>/dev/null; done
+    sleep 2
+  fi
 }
 trap cleanup EXIT
 cleanup
