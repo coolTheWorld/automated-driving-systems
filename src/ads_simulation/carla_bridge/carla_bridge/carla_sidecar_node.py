@@ -578,6 +578,8 @@ class CarlaSidecarNode(Node):
             npc = {
                 'actor': actor, 'pose': (x0, y0, 0.0), 'cmd': (0.0, 0.0, 0.0),
                 'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),
+                # 车辆与行人走不同的物理驱动（见 _tick_npcs 的实测注释）
+                'is_walker': actor_cfg.get('classification') == 'pedestrian',
             }
             self._npcs[name] = npc
             self.create_subscription(
@@ -612,8 +614,35 @@ class CarlaSidecarNode(Node):
                 projected is not None and
                 location.distance(projected.transform.location) <= 5.0)
             if near_road:
-                npc['actor'].set_transform(self._carla.Transform(
-                    location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+                # ⚠️ 车辆不能连续瞬移（P9-S1 终局判别）：walker 是运动学胶囊，
+                #    20 Hz set_transform 后照常被 lidar 打中（28.7 m 处 146 点）；
+                #    PhysX **轮式**车辆被连续瞬移时场景查询结构失效 ——
+                #    单次瞬移可见（裸 API 四车实验 10541 点）、每拍瞬移不可见
+                #    （6.5 m 处 0 点，物理位姿却分毫不差）。
+                #    车辆改**速度驱动**：set_target_velocity 让物理正常推进
+                #    （查询结构随动力学更新），漂移/转向超阈才单次瞬移复位。
+                if npc['is_walker']:
+                    npc['actor'].set_transform(self._carla.Transform(
+                        location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+                else:
+                    actual = npc['actor'].get_transform()
+                    drift_m = actual.location.distance(location)
+                    yaw_err = abs(
+                        (actual.rotation.yaw - yaw_to_carla(yaw) + 180.0) % 360.0 - 180.0)
+                    if drift_m > 0.5 or yaw_err > 8.0:
+                        npc['actor'].set_transform(self._carla.Transform(
+                            location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+                        npc['actor'].set_target_velocity(
+                            self._carla.Vector3D(0.0, 0.0, 0.0))
+                    elif dt_s > 0.0:
+                        # 世界系目标速度：朝「本拍积分位姿」收敛（含纠漂项）
+                        gain = 2.0  # 漂移收敛带宽 1/s；过大会与物理步长打架
+                        vx_w = npc['cmd'][0] * math.cos(yaw) + gain * (
+                            location.x - actual.location.x)
+                        vy_carla = -npc['cmd'][0] * math.sin(yaw) + gain * (
+                            location.y - actual.location.y)
+                        npc['actor'].set_target_velocity(
+                            self._carla.Vector3D(vx_w, vy_carla, 0.0))
             gt = Odometry()
             gt.header.stamp = stamp
             gt.header.frame_id = 'map'
