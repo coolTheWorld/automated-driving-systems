@@ -109,6 +109,7 @@ class CarlaSidecarNode(Node):
         self.declare_parameter('vehicle_params_yaml', '')
 
         self._world = self._load_world()
+        self._carla_map = self._world.get_map()  # 瞬移走廊夹取用（见 _tick_npcs）
         self._ego = self._spawn_ego()
         self._sensors = self._spawn_sensors()
 
@@ -564,9 +565,21 @@ class CarlaSidecarNode(Node):
             x, y, yaw = step_pose(*npc['pose'], *npc['cmd'], dt_s)
             npc['pose'] = (x, y, yaw)
             cx, cy, _ = position_to_carla(x, y, 0.0)
-            npc['actor'].set_transform(self._carla.Transform(
-                self._carla.Location(x=cx, y=cy, z=0.2),
-                self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+            location = self._carla.Location(x=cx, y=cy, z=0.2)
+            # ⚠️ 瞬移走廊夹取（P9-S1 实锤）：航点约定允许「草地上空掉头」
+            #    （P5 冻结基线），Gazebo 无碰撞道具没事；CARLA 物理开着
+            #    （雷达可见性所需）时瞬移出路 = 穿墙 = PhysX 穿透解算把车
+            #    弹到 4.8 km 高空（cast_ray 实测抓到的飞车）。判「在不在路上」
+            #    问地图本身（project_to_road=False 路外返回 None），路外冻住
+            #    **物理体**；pose_gt（真值/判据/npc_controller 的世界）照常走完
+            #    剧本 —— 与 Gazebo 的语义差只剩「路外那截物理车不动」，
+            #    而所有判据窗口都在路内。
+            on_road = self._carla_map.get_waypoint(
+                location, project_to_road=False,
+                lane_type=self._carla.LaneType.Any) is not None
+            if on_road:
+                npc['actor'].set_transform(self._carla.Transform(
+                    location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
             gt = Odometry()
             gt.header.stamp = stamp
             gt.header.frame_id = 'map'
