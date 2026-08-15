@@ -231,9 +231,15 @@ class CarlaSidecarNode(Node):
         # 「车在弯里自己停了」，五轮排查全在查规划/控制）。Gazebo 同弯是
         # **草肩**，出线无代价 —— 这是世界生成保真度差异，不是栈的病。
         # 2.0 m 硬化路肩恢复同一容错语义；wall_height 的虚空保护不动。
+        # additional_width 2.0 → 6.0（P9-S2）：墙是**虚空脚手架不是世界内容**
+        # （Gazebo 同位置是草地）。2.0 时墙簇在弯角被 L-Shape OBB 斜撑成
+        # 29×3.75 的空腹大框侵入车道（虚警 + 抢真值配对 = 近边误差恒 11.6），
+        # 且行人路肩路径压在墙线上。6.0：墙退出感知主战场、平坦裙板变宽
+        # 反哺 RANSAC 稳定性、行人路径落回 mesh 上。路肩容错语义（弯道
+        # 冲宽回弹）只增不减。
         params = self._carla.OpendriveGenerationParameters(
             vertex_distance=0.5, max_road_length=50.0, wall_height=1.0,
-            additional_width=2.0, smooth_junctions=False, enable_mesh_visibility=True)
+            additional_width=6.0, smooth_junctions=False, enable_mesh_visibility=True)
         world = self._client.generate_opendrive_world(xodr, params)
         # ---- 同步模式（S5 实测后加）--------------------------------------
         # 异步模式下世界自由狂奔（实测 ~300 FPS）：仿真钟三倍速于墙钟、
@@ -595,10 +601,17 @@ class CarlaSidecarNode(Node):
             #    **物理体**；pose_gt（真值/判据/npc_controller 的世界）照常走完
             #    剧本 —— 与 Gazebo 的语义差只剩「路外那截物理车不动」，
             #    而所有判据窗口都在路内。
-            on_road = self._carla_map.get_waypoint(
-                location, project_to_road=False,
-                lane_type=self._carla.LaneType.Any) is not None
-            if on_road:
+            # 「在不在路上」→「离路近不近」（P9-S2 放宽）：行人的路肩路径
+            # （P5 冻结基线）在车道外 —— 严格 on-lane 夹取把行人物理体冻在
+            # 高空 spawn 点（实测行人 0% 的一半原因）。放宽为投影距离 ≤5 m：
+            # 路肩/裙板可走，路尽头的草地端点（x=105 等）依旧冻住。
+            projected = self._carla_map.get_waypoint(
+                location, project_to_road=True,
+                lane_type=self._carla.LaneType.Any)
+            near_road = (
+                projected is not None and
+                location.distance(projected.transform.location) <= 5.0)
+            if near_road:
                 npc['actor'].set_transform(self._carla.Transform(
                     location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
             gt = Odometry()
