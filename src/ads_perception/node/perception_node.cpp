@@ -234,8 +234,52 @@ private:
 
     // ---- ① 地面分割（base_link 系，地面 z ≈ 0 是它的前提）--------------
     auto stage = std::chrono::steady_clock::now();
-    const ads_perception::GroundSegmentationResult ground =
+    ads_perception::GroundSegmentationResult ground =
       ads_perception::SegmentGround(points, ground_params_);
+    // ---- 平面时间一致性门（P9-S2，「门成立要有空档」实测后上的门）----------
+    // 停驻实测帧间平面差 0.5-0.7°；坏帧是 5°+ 的歪平面（6.9° 坡度门内），
+    // 30 m 外高度差 3 m ⟹ 远段路整体被判非地面 ⟹ 28 m 巨板虚警。
+    // 空档（0.7° vs 5°）近一个量级 ⟹ 门取 2°/0.15 m。上一块 ≤1 s 新时，
+    // 越门的新平面**弃用**、按上一块重分类；found=false 同样兜底 ——
+    // 10 Hz 管线里 0.1 s 陈旧的好平面 ≫ 没有平面。超龄则接受现实重置。
+    const rclcpp::Time cloud_stamp(msg->header.stamp);
+    const bool last_fresh = last_plane_valid_ && (cloud_stamp - last_plane_stamp_).seconds() < 1.0;
+    bool replace_by_last = false;
+    if (ground.found) {
+      const double angle_rad =
+        std::acos(std::clamp(ground.normal.dot(last_plane_normal_), -1.0, 1.0));
+      const double height_m =
+        std::abs(ground.normal.z()) > 1e-9 ? -ground.offset_m / ground.normal.z() : 1e9;
+      const double last_height_m = std::abs(last_plane_normal_.z()) > 1e-9
+                                     ? -last_plane_offset_ / last_plane_normal_.z()
+                                     : 1e9;
+      if (last_fresh && (angle_rad > 0.035 || std::abs(height_m - last_height_m) > 0.15)) {
+        replace_by_last = true;
+      }
+    } else if (last_fresh) {
+      replace_by_last = true;
+    }
+    if (replace_by_last) {
+      ground.found = true;
+      ground.normal = last_plane_normal_;
+      ground.offset_m = last_plane_offset_;
+      ground.ground_count = 0;
+      ground.is_ground.assign(points.size(), 0U);
+      for (std::size_t i = 0; i < points.size(); ++i) {
+        if (
+          std::abs(ground.normal.dot(points[i]) + ground.offset_m) <=
+          ground_params_.distance_threshold_m) {
+          ground.is_ground[i] = 1U;
+          ++ground.ground_count;
+        }
+      }
+      ++ground_held_count_;
+    } else if (ground.found) {
+      last_plane_normal_ = ground.normal;
+      last_plane_offset_ = ground.offset_m;
+      last_plane_stamp_ = cloud_stamp;
+      last_plane_valid_ = true;
+    }
     stats.ground_ms = Elapsed(&stage);
     stats.ground_found = ground.found;
     stats.slope_rejected = ground.slope_rejected_count;
@@ -500,6 +544,7 @@ private:
     add("ground_slope_deg", stats.ground_slope_deg);
     add("ground_ratio", stats.ground_ratio);
     add("ground_slope_rejected", stats.slope_rejected);
+    add("ground_held_count", ground_held_count_);
     add("clusters", stats.clusters);
     add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);
@@ -545,6 +590,12 @@ private:
   double max_cloud_age_s_{0.15};
   double diagnostics_period_s_{1.0};
   double min_extent_m_{0.0};
+  // 平面时间一致性门的状态（见回调内注释）
+  bool last_plane_valid_{false};
+  Eigen::Vector3d last_plane_normal_{Eigen::Vector3d::UnitZ()};
+  double last_plane_offset_{0.0};
+  rclcpp::Time last_plane_stamp_{0, 0, RCL_ROS_TIME};
+  int ground_held_count_{0};
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   std::int64_t last_diag_ns_{0};
   std::int64_t dropped_stale_clouds_{0};
