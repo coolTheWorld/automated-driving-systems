@@ -123,3 +123,71 @@ utc,git_sha,scenario,layer,criterion,value,limit,passed
 2026-08-15T07:52:40Z,f7cea54,follow,truth,③ 驶离后恢复,0.70 s,≤ 3 s,PASS
 2026-08-15T07:52:40Z,f7cea54,follow,truth,⑧ 零碰撞（真值最小间距）,4.48 m,> 0.3 m,PASS
 2026-08-15T07:52:40Z,f7cea54,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T07:54:40Z,df62111,follow,perception,① TTC 最小值（v_rel≥1.5）,inf s @t=None,> 2 s,PASS
+2026-08-15T07:54:40Z,df62111,follow,perception,② 跟停稳态间距,-3.82 m（249 拍）,"[4, 10] m",FAIL
+2026-08-15T07:54:40Z,df62111,follow,perception,③ 驶离后恢复,0.02 s,≤ 3 s,PASS
+2026-08-15T07:54:40Z,df62111,follow,perception,⑧ 零碰撞（真值最小间距）,0.00 m,> 0.3 m,FAIL
+2026-08-15T07:56:19Z,df62111,crossing,truth,④ 占道期间完全停止,停于 t=43.1，距 4.04 m,v<0.05 且距离>3 m,PASS
+2026-08-15T07:56:19Z,df62111,crossing,truth,⑤ 全程真值最近距离,1.62 m @t=54.3,> 1 m,PASS
+2026-08-15T07:56:19Z,df62111,crossing,truth,⑥ 离开车道后恢复,0.86 s,≤ 3 s,PASS
+2026-08-15T07:56:19Z,df62111,crossing,truth,⑧ 零碰撞（真值最小间距）,1.62 m,> 0.3 m,PASS
+2026-08-15T07:56:19Z,df62111,crossing,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T07:58:01Z,df62111,crossing,perception,④ 占道期间完全停止,停于 t=43.1，距 4.09 m,v<0.05 且距离>3 m,PASS
+2026-08-15T07:58:01Z,df62111,crossing,perception,⑤ 全程真值最近距离,0.01 m @t=45.8,> 1 m,FAIL
+2026-08-15T07:58:01Z,df62111,crossing,perception,⑥ 离开车道后恢复,0.02 s,≤ 3 s,PASS
+2026-08-15T07:58:01Z,df62111,crossing,perception,⑧ 零碰撞（真值最小间距）,0.01 m,> 0.3 m,FAIL
+2026-08-15T07:58:01Z,df62111,crossing,perception,⑨ 行为状态切换次数,2（CRUISE→YIELD→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:01:06Z,df62111,junction,truth,⑦ 对车流的真值最小间距,4.23 m @t=96.8 vs cross_car_c,> 1.5 m,PASS
+2026-08-15T08:01:06Z,df62111,junction,truth,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-15T08:01:06Z,df62111,junction,truth,⑧ 零碰撞（真值最小间距）,4.23 m,> 0.3 m,PASS
+2026-08-15T08:01:06Z,df62111,junction,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:04:10Z,df62111,junction,perception,⑦ 对车流的真值最小间距,0.00 m @t=98.5 vs cross_car_c,> 1.5 m,FAIL
+2026-08-15T08:04:10Z,df62111,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-15T08:04:10Z,df62111,junction,perception,⑧ 零碰撞（真值最小间距）,0.00 m,> 0.3 m,FAIL
+2026-08-15T08:11:59Z,df62111,follow,truth,① TTC 最小值（v_rel≥1.5）,2.43 s @t=47.84,> 2 s,PASS
+2026-08-15T08:11:59Z,df62111,follow,truth,② 跟停稳态间距,4.41 m（498 拍）,"[4, 10] m",PASS
+2026-08-15T08:11:59Z,df62111,follow,truth,③ 驶离后恢复,0.68 s,≤ 3 s,PASS
+2026-08-15T08:11:59Z,df62111,follow,truth,⑧ 零碰撞（真值最小间距）,4.41 m,> 0.3 m,PASS
+2026-08-15T08:11:59Z,df62111,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:14:07Z,df62111,follow,perception,① TTC 最小值（v_rel≥1.5）,inf s @t=None,> 2 s,PASS
+2026-08-15T08:14:07Z,df62111,follow,perception,② 跟停稳态间距,-5.19 m（426 拍）,"[4, 10] m",FAIL
+2026-08-15T08:14:07Z,df62111,follow,perception,③ 驶离后恢复,2.84 s,≤ 3 s,PASS
+2026-08-15T08:14:07Z,df62111,follow,perception,⑧ 零碰撞（真值最小间距）,0.00 m,> 0.3 m,FAIL
+2026-08-15T08:16:32Z,df62111,follow,truth,① TTC 最小值（v_rel≥1.5）,2.43 s @t=48.040000000000006,> 2 s,PASS
+2026-08-15T08:16:32Z,df62111,follow,truth,② 跟停稳态间距,4.46 m（499 拍）,"[4, 10] m",PASS
+2026-08-15T08:16:32Z,df62111,follow,truth,③ 驶离后恢复,0.76 s,≤ 3 s,PASS
+2026-08-15T08:16:32Z,df62111,follow,truth,⑧ 零碰撞（真值最小间距）,4.46 m,> 0.3 m,PASS
+2026-08-15T08:16:32Z,df62111,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:18:31Z,df62111,follow,perception,① TTC 最小值（v_rel≥1.5）,2.37 s @t=48.141000000000005,> 2 s,PASS
+2026-08-15T08:18:31Z,df62111,follow,perception,② 跟停稳态间距,4.37 m（501 拍）,"[4, 10] m",PASS
+2026-08-15T08:18:31Z,df62111,follow,perception,③ 驶离后恢复,0.90 s,≤ 3 s,PASS
+2026-08-15T08:18:31Z,df62111,follow,perception,⑧ 零碰撞（真值最小间距）,4.37 m,> 0.3 m,PASS
+2026-08-15T08:18:31Z,df62111,follow,perception,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:42:34Z,df62111,follow,truth,① TTC 最小值（v_rel≥1.5）,2.44 s @t=47.74,> 2 s,PASS
+2026-08-15T08:42:34Z,df62111,follow,truth,② 跟停稳态间距,4.48 m（499 拍）,"[4, 10] m",PASS
+2026-08-15T08:42:34Z,df62111,follow,truth,③ 驶离后恢复,0.66 s,≤ 3 s,PASS
+2026-08-15T08:42:34Z,df62111,follow,truth,⑧ 零碰撞（真值最小间距）,4.48 m,> 0.3 m,PASS
+2026-08-15T08:42:34Z,df62111,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:44:30Z,df62111,follow,perception,① TTC 最小值（v_rel≥1.5）,2.38 s @t=48.06,> 2 s,PASS
+2026-08-15T08:44:30Z,df62111,follow,perception,② 跟停稳态间距,4.38 m（502 拍）,"[4, 10] m",PASS
+2026-08-15T08:44:30Z,df62111,follow,perception,③ 驶离后恢复,0.86 s,≤ 3 s,PASS
+2026-08-15T08:44:30Z,df62111,follow,perception,⑧ 零碰撞（真值最小间距）,4.38 m,> 0.3 m,PASS
+2026-08-15T08:44:30Z,df62111,follow,perception,⑨ 行为状态切换次数,2（CRUISE→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:46:16Z,df62111,crossing,truth,④ 占道期间完全停止,停于 t=43.1，距 4.05 m,v<0.05 且距离>3 m,PASS
+2026-08-15T08:46:16Z,df62111,crossing,truth,⑤ 全程真值最近距离,1.59 m @t=53.3,> 1 m,PASS
+2026-08-15T08:46:16Z,df62111,crossing,truth,⑥ 离开车道后恢复,0.86 s,≤ 3 s,PASS
+2026-08-15T08:46:16Z,df62111,crossing,truth,⑧ 零碰撞（真值最小间距）,1.59 m,> 0.3 m,PASS
+2026-08-15T08:46:16Z,df62111,crossing,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:47:53Z,df62111,crossing,perception,④ 占道期间完全停止,停于 t=43.1，距 4.10 m,v<0.05 且距离>3 m,PASS
+2026-08-15T08:47:53Z,df62111,crossing,perception,⑤ 全程真值最近距离,1.66 m @t=53.4,> 1 m,PASS
+2026-08-15T08:47:53Z,df62111,crossing,perception,⑥ 离开车道后恢复,0.78 s,≤ 3 s,PASS
+2026-08-15T08:47:53Z,df62111,crossing,perception,⑧ 零碰撞（真值最小间距）,1.66 m,> 0.3 m,PASS
+2026-08-15T08:47:53Z,df62111,crossing,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:50:42Z,df62111,junction,truth,⑦ 对车流的真值最小间距,4.23 m @t=96.7 vs cross_car_c,> 1.5 m,PASS
+2026-08-15T08:50:42Z,df62111,junction,truth,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-15T08:50:42Z,df62111,junction,truth,⑧ 零碰撞（真值最小间距）,4.23 m,> 0.3 m,PASS
+2026-08-15T08:50:42Z,df62111,junction,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T08:53:38Z,df62111,junction,perception,⑦ 对车流的真值最小间距,1.98 m @t=96.8 vs cross_car_c,> 1.5 m,PASS
+2026-08-15T08:53:38Z,df62111,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-15T08:53:38Z,df62111,junction,perception,⑧ 零碰撞（真值最小间距）,1.98 m,> 0.3 m,PASS
+2026-08-15T08:53:38Z,df62111,junction,perception,⑨ 行为状态切换次数,4（CRUISE→YIELD→FOLLOW→YIELD→CRUISE）,≤ 4 次,PASS

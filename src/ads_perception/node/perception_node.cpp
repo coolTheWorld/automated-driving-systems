@@ -89,6 +89,8 @@ struct StageStats
   double ground_slope_deg{0.0};  // 法向与 +z 夹角：mesh 非平面/斜面哨兵
   double ground_ratio{0.0};      // ground/pool：路面占比哨兵（Gazebo 基线 ~0.5）
   int slope_rejected{0};         // 坡度门拒绝轮数：总在抽到墙 = 嫌疑 2
+  int razor_dropped{0};  // 剃刀门吞掉的框数：合法目标被吞的哨兵（P9 Gazebo 回归案）
+  double razor_min_extent_m{1e9};  // 本帧被吞框里最大的那个 min(l,w)：门与目标剖面的距离
   int clusters{0};
   int largest_cluster{0};
   int detections{0};
@@ -127,6 +129,7 @@ public:
     fit_params_.angle_step_rad = declare_parameter<double>("lshape.angle_step_rad", 0.01745);
     fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
     min_extent_m_ = declare_parameter<double>("cluster.min_extent_m", 0.1);
+    razor_max_height_m_ = declare_parameter<double>("cluster.razor_max_height_m", 0.3);
 
     // ---- 跟踪 -----------------------------------------------------------
     tracker_params_.process_accel_stddev_mps2 =
@@ -352,8 +355,20 @@ private:
       // 并以短命航迹打碎跟踪器（ID 切换 47、速度误差 6.0 的上游）。
       // ODD（SPEC §2）里不存在最小水平尺寸 < 0.1 m 的目标 —— 行人 0.4、
       // 锥桶 0.5、车 1.8；这是按**物理**收的准入门，不是按场景调的补丁。
-      // Gazebo 侧全部合法目标远在门上，回归零劣化（CP-P5-B 抽轮验证）。
-      if (std::min(box.length_m, box.width_m) < min_extent_m_) {
+      // ⚠️ P9 Gazebo 回归案（2026-08-15）推翻了「合法目标远在门上」：L-Shape
+      //    量的是**可见剖面**不是物体 —— 正对的盒状目标只露一个面，深度
+      //    方向剩下的是雷达噪声（σ=1 cm），min(l,w) 实测 p50 0.047 / max
+      //    0.097，**每一帧**都被 0.1 门吞掉（A/B：门 0.1 跟停 −5.19 m 撞车；
+      //    门 0 全绿）。CARLA 网格有曲面所以从没露过马脚。
+      //    真正的物理先验是「剃刀条是**一维**的」：既薄**又矮**（地面接缝
+      //    残留一环点，竖向延展 ≈ 0）；而正对目标薄但**高**（车尾面 1.3 m、
+      //    行人 1.5 m）。两个条件缺一不可 —— 只按薄收门等于把所有正对的
+      //    盒子当剃刀条。
+      if (
+        std::min(box.length_m, box.width_m) < min_extent_m_ && box.height_m < razor_max_height_m_) {
+        ++stats.razor_dropped;
+        stats.razor_min_extent_m =
+          std::min(stats.razor_min_extent_m, std::min(box.length_m, box.width_m));
         continue;
       }
 
@@ -545,6 +560,8 @@ private:
     add("ground_ratio", stats.ground_ratio);
     add("ground_slope_rejected", stats.slope_rejected);
     add("ground_held_count", ground_held_count_);
+    add("razor_dropped", stats.razor_dropped);
+    add("razor_min_extent_m", stats.razor_dropped > 0 ? stats.razor_min_extent_m : 0.0);
     add("clusters", stats.clusters);
     add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);
@@ -590,6 +607,7 @@ private:
   double max_cloud_age_s_{0.15};
   double diagnostics_period_s_{1.0};
   double min_extent_m_{0.0};
+  double razor_max_height_m_{0.0};
   // 平面时间一致性门的状态（见回调内注释）
   bool last_plane_valid_{false};
   Eigen::Vector3d last_plane_normal_{Eigen::Vector3d::UnitZ()};
