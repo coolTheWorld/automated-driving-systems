@@ -424,7 +424,17 @@ class CarlaSidecarNode(Node):
             return
         points = np.concatenate(self._lidar_chunks).copy()
         self._lidar_chunks = []
-        points[:, 1] = -points[:, 1]
+        # ⚠️ **不翻 y**（P9-S1 镜像探针铁案，2026-08-15）：按「CARLA 左手系」
+        #    的教科书推理这里该 y 反号 —— 实测反了之后点云与真值成镜像
+        #    （npc 车 60 帧正窗 0 点、镜像窗 58054 点），即 0.9.16 的
+        #    LidarMeasurement 原始数据手性已与 ROS 约定一致，再翻一次 =
+        #    镜像世界。路与墙左右对称 + S04/行为判据全走真值，这个符号错
+        #    潜伏了三个租机窗口，直到 P5（点云第一个消费者）上线才炸 ——
+        #    「接第一个消费者 = 对上游再验收」的第 N 次执行。
+        #    回归守卫：scripts/p9_mirror_probe.py（非对称地标是唯一能抓
+        #    符号错误的证据 —— 对称世界里镜像与正确不可区分）。
+        #    ⚠️ IMU 中继的反号（_on_imu）与此同源存疑，P4-CARLA 上线前
+        #    必须用同类非对称实验重审，不要照抄本结论。
         msg = PointCloud2()
         msg.header.stamp = self._sensor_stamp(data)
         msg.header.frame_id = 'lidar_link'
