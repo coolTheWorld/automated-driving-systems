@@ -97,3 +97,29 @@ utc,git_sha,scenario,layer,criterion,value,limit,passed
 2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
 2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑧ 零碰撞（真值最小间距）,2.80 m,> 0.3 m,PASS
 2026-08-14T01:09:17Z,5c7b63f,junction,perception,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,max_lateral_error_m,0.269236,0.3,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,rms_lateral_error_m,0.0895937,0.1,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,steady_speed_error_mps,0.0626324,0.2,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,max_lateral_accel_mps2,1.86957,2.0,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,max_steer_rate_rad_s,0.5,0.5,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,goal_position_error_m,0.273192,1.0,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,goal_residual_speed_mps,0,0.05,PASS
+2026-08-15T07:49:20Z,f7cea54,S01_S02_S07,-,max_cycle_time_ms,4,10.0,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,碰撞次数,0,0,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,最小侧向间距 (m),0.699,> 0.50,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,规划器最大横向偏移 (m),0.800,> 0.10,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,不越车道边线：最小余量 (m),0.162,> 0,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,回中心稳态 |d| (m),0.018,<= 0.15,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,绕完规划器偏移归零 (m),0.000,< 0.10,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,绕障段最大横向加速度 (m/s²),0.750,<= 1.5,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,绕障段跟踪误差 (m),0.086,<= 0.15,PASS
+2026-08-15T07:50:14Z,f7cea54,S04_avoid,-,规划周期耗时 (ms),2.5,<= 50,PASS
+2026-08-15T07:50:49Z,f7cea54,S04_block,-,碰撞次数,0,0,PASS
+2026-08-15T07:50:49Z,f7cea54,S04_block,-,规划器报告不可行的拍数,444,> 0,PASS
+2026-08-15T07:50:49Z,f7cea54,S04_block,-,终速 (m/s),0.000,< 0.10,PASS
+2026-08-15T07:50:49Z,f7cea54,S04_block,-,停车点到障碍物间距 (m),4.040,>= 0.50,PASS
+2026-08-15T07:52:40Z,f7cea54,follow,truth,① TTC 最小值（v_rel≥1.5）,2.43 s @t=47.74,> 2 s,PASS
+2026-08-15T07:52:40Z,f7cea54,follow,truth,② 跟停稳态间距,4.48 m（497 拍）,"[4, 10] m",PASS
+2026-08-15T07:52:40Z,f7cea54,follow,truth,③ 驶离后恢复,0.70 s,≤ 3 s,PASS
+2026-08-15T07:52:40Z,f7cea54,follow,truth,⑧ 零碰撞（真值最小间距）,4.48 m,> 0.3 m,PASS
+2026-08-15T07:52:40Z,f7cea54,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS

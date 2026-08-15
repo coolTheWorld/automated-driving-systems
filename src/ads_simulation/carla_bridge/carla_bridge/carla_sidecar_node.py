@@ -604,6 +604,15 @@ class CarlaSidecarNode(Node):
                 'yaw0': yaw0,
                 # 车辆与行人走不同的物理驱动（见 _tick_npcs 的实测注释）
                 'is_walker': is_walker,
+                # ---- P9-S2 黄金线索的仪器（actor 运行中消失）----------------
+                # 服务器侧存活（get_actors 普查，10 s 一次）+ z 轨迹环形缓冲
+                # （每拍一样，留最近 60 拍 = 3 s）。死亡瞬间一次性倒出：消失
+                # 时刻、最后位姿、最近 z 序列 —— 「z 一路下坠 = 掉出世界被
+                # 引擎回收（UE4 KillZ）」与「z 正常却没了 = 别的客户端销毁」
+                # 在同一份日志里就分得开，不必再猜。
+                'server_alive': True,
+                'z_trace': [],
+                'spawn_z': float(transform.location.z),
             }
             self._npcs[name] = npc
             self.create_subscription(
@@ -612,9 +621,51 @@ class CarlaSidecarNode(Node):
                     'cmd', (msg.linear.x, msg.linear.y, msg.angular.z)), 10)
             self.get_logger().info(f'NPC 已 spawn：{name} @ ({x0:.1f}, {y0:.1f})')
 
+    def _npc_census(self, stamp):
+        """10 s 一次的服务器侧普查：谁还在世界里（get_actors 是 RPC，问的是服务器）.
+
+        ⚠️ 为什么不用 actor.is_alive：那是**客户端本地**标志，只有经本客户端
+        destroy() 才翻假；服务器把 actor 收走（KillZ / 别的客户端销毁）时它
+        照样 True，而 get_transform() 对不存在的 actor **不抛错、返回全零**
+        （libcarla CopyActorSnapshotIfPresent 的语义）—— 于是真值悄悄变成原点、
+        感知看到 0 点、没有任何一层报错。这就是「0 点轮」的机制候选之一。
+        """
+        try:
+            ids = {actor.id for actor in self._world.get_actors()}
+        except Exception as error:  # noqa: B902
+            self.get_logger().warn(f'NPC 普查 get_actors 失败：{error!r}')
+            return
+        sim_t = stamp.sec + stamp.nanosec * 1e-9
+        for name, npc in self._npcs.items():
+            present = npc['actor'].id in ids
+            x, y, _ = npc['pose']
+            zs = ' '.join(f'{z:.1f}' for _, z in npc['z_trace'][-12:])
+            if npc['server_alive'] and not present:
+                npc['server_alive'] = False
+                self.get_logger().error(
+                    f'NPC {name}（id={npc["actor"].id}）**已从服务器消失** t={sim_t:.1f} s：'
+                    f'最后位姿 ({x:.1f}, {y:.1f})，spawn_z={npc["spawn_z"]:.1f}，'
+                    f'最近 z 序列（每 5 拍一样）[{zs}] —— z 一路下坠 = 掉出世界'
+                    f'（KillZ 回收，查航点/墙）；z 正常 = 被别的客户端 destroy')
+            else:
+                self.get_logger().info(
+                    f'NPC 普查 t={sim_t:.1f} s：{name} 在服务器={present} '
+                    f'pose=({x:.1f}, {y:.1f}) z 近况 [{zs}]（世界 actor 总数 {len(ids)}）')
+
     def _tick_npcs(self, dt_s, stamp):
         """积分 cmd_vel → set_transform，并发 pose_gt（npc_controller 的输入）."""
+        self._npc_tick_index = getattr(self, '_npc_tick_index', 0) + 1
         for name, npc in self._npcs.items():
+            # z 轨迹留样（每 5 拍一样，环形 60 样 = 15 s）——普查/死亡报告用
+            if self._npc_tick_index % 5 == 0:
+                try:
+                    z_now = float(npc['actor'].get_transform().location.z)
+                except Exception:  # noqa: B902 —— 仪器不许把主环带崩
+                    z_now = float('nan')
+                npc['z_trace'].append((self._npc_tick_index, z_now))
+                del npc['z_trace'][:-60]
+            if not npc['server_alive']:
+                continue  # 已死的 actor 不再驱动/不再发真值（发原点会把判据带偏）
             x, y, yaw = step_pose(*npc['pose'], *npc['cmd'], dt_s)
             npc['pose'] = (x, y, yaw)
             cx, cy, _ = position_to_carla(x, y, 0.0)
@@ -841,6 +892,10 @@ class CarlaSidecarNode(Node):
             npc_dt_s = 0.0
         self._last_npc_tick_ns = now_ns
         self._tick_npcs(npc_dt_s, stamp)
+        # 每 200 拍（20 Hz 下 10 s）一次服务器侧普查 —— get_actors 是 RPC，
+        # 0.1 Hz 的代价可忽略；首拍也查一次，拿到「出生即在」的基线。
+        if self._npcs and (self._npc_tick_index == 1 or self._npc_tick_index % 200 == 0):
+            self._npc_census(stamp)
         self._apply_control()
 
 

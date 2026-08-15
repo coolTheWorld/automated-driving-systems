@@ -46,7 +46,10 @@ Xid 32 案定性为宿主特异）**：S1 完成（五案裁决）+ S2 十刀（
 诊断法已写进 plan）。**黄金线索（收窗时抓获）**：栈起 40 s 后 npc 车 **actor 从
 get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常，此前
 「0 点」轮全部要按此重读；裸环境九连测全可见，瞬移隐形理论作废。
-下窗口序列：① 每 10 s dump get_actors 抓消失时刻/死因 ② 破案后
+下窗口序列：① 每 10 s dump get_actors 抓消失时刻/死因（**仪器已入库**：
+sidecar `_npc_census` + `scripts/p9_actor_watch.py`，上机零准备；先看 z 序列
+—— 一路下坠 = KillZ 回收，算术上 46 s 自由落体与 40 s 吻合）② 破案后
 选驱动方式（瞬移可能复活）③ 门/阈值按新框架复扫 ④ Gazebo 回归
+（**2026-08-15 本地已跑** `run_all_scenarios.sh gazebo`，结果见 plan S2 行）
 ⑤ CP-P9-A 两轮。云实例记得销毁。
 
