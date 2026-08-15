@@ -46,10 +46,16 @@ Xid 32 案定性为宿主特异）**：S1 完成（五案裁决）+ S2 十刀（
 诊断法已写进 plan）。**黄金线索（收窗时抓获）**：栈起 40 s 后 npc 车 **actor 从
 get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常，此前
 「0 点」轮全部要按此重读；裸环境九连测全可见，瞬移隐形理论作废。
-下窗口序列：① 每 10 s dump get_actors 抓消失时刻/死因（**仪器已入库**：
-sidecar `_npc_census` + `scripts/p9_actor_watch.py`，上机零准备；先看 z 序列
-—— 一路下坠 = KillZ 回收，算术上 46 s 自由落体与 40 s 吻合）② 破案后
-选驱动方式（瞬移可能复活）③ 门/阈值按新框架复扫 ④ Gazebo 回归
-（**2026-08-15 本地已跑** `run_all_scenarios.sh gazebo`，结果见 plan S2 行）
-⑤ CP-P9-A 两轮。云实例记得销毁。
+**2026-08-15 本地日（零租金）战果**：④ Gazebo 回归跑出 P9-S2 第一个
+回归事故 —— 三个行为场景感知层全撞车，根因剃刀门吞正对目标（L-Shape 剖面
+≠ ODD 包络，perception.md §3 同坑第二次），修为二条件门（薄且矮）后行为×3
+双层 6/6、CP-P5-B 五轮核心判据全过（ID 切换 2–6 贴边摆与门无关，P5 已知
+形态列 S5）；全仓 1135 tests 绿。**云窗口弹药全部备好**：`cloud_window_open.sh`
+一键开场（五里程碑）、actor 消失案仪器（sidecar `_npc_census` +
+`p9_actor_watch.py`）、l3c_p5_round / l3c_behavior_round 照旧。
+**窗口 4 序列**（全部需要实例）：① 开场一键 → ② `l3c_p5_round.sh both`
+一轮同时拿三样：actor 普查（消失时刻 + z 序列 → KillZ 还是句柄）、二条件
+剃刀门对 CARLA 接缝条族的覆盖（p9_capture_frame）、S2 收官谜的
+detections-vs-confirmed 时间线 → ③ 破案后定驱动方式 → ④ 门/阈值复扫 →
+⑤ CP-P9-A 两轮 → ⑥ S4 行为感知层三场景【CP-P9-B】。云实例记得销毁。
 
