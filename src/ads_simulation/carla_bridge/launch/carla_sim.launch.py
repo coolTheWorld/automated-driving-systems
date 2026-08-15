@@ -71,7 +71,11 @@ def _dynamic_specs(context):
     specs = []
     for name in config['scenarios'][scenario]['actors']:
         actor = config['actors'][name]
-        waypoints = [(float(x), float(y)) for x, y in actor['waypoints']]
+        # carla_waypoints 副本优先（P9-S2 拍板）：真车化后路外段撞墙，
+        # CARLA 侧吃收进路内的副本；Gazebo launch 不认这个键（基线不动）。
+        waypoints = [
+            (float(x), float(y))
+            for x, y in actor.get('carla_waypoints', actor['waypoints'])]
         if actor['classification'] == 'vehicle':
             length = float(vehicle_geo['length_m'])
             width = float(vehicle_geo['width_m'])

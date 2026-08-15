@@ -550,7 +550,7 @@ class CarlaSidecarNode(Node):
         library = self._world.get_blueprint_library()
         for name in scenario_actor_names(cfg, scenario):
             actor_cfg = cfg['actors'][name]
-            first_wp = actor_cfg['waypoints'][0]
+            first_wp = actor_cfg.get('carla_waypoints', actor_cfg['waypoints'])[0]
             x0, y0 = float(first_wp[0]), float(first_wp[1])
             # 车用与 ego 不同的蓝图（道具不需要对齐动力学 —— 位姿由脚本管）；
             # 行人用 walker。⚠️ 生成器的机械校验（外廓/航点在界内）依旧由
@@ -627,7 +627,8 @@ class CarlaSidecarNode(Node):
             near_road = (
                 projected is not None and
                 location.distance(projected.transform.location) <= 5.0)
-            if near_road:
+            # 车辆不受走廊夹取（物理车有墙兜底；冻控制会让真车失控滑行）。
+            if near_road or not npc['is_walker']:
                 # ⚠️ 统一理论（P9-S1/S2 九轮判别的终点）：PhysX **轮式**车辆
                 #    「近期被 set_transform 过」的若干 tick 内对 gpu-lidar 隐形 ——
                 #    dwell 静止（无瞬移）5-11k 点可见、移动（速度驱动跟不上 →
