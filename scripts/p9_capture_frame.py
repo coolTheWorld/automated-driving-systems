@@ -216,7 +216,9 @@ class CaptureNode(Node):
                     key=lambda o: math.hypot(o[0] - tx, o[1] - ty))
                 gap = math.hypot(best[0] - tx, best[1] - ty)
                 speed = math.hypot(best[2], best[3])
-                trichotomy.append(f'{gap:.1f}m/v{speed:.1f}')
+                trichotomy.append(
+                    f'真值({tx:.0f},{ty:.0f})↔障碍({best[0]:.0f},{best[1]:.0f})'
+                    f' {gap:.1f}m/v{speed:.1f}')
             lines.append(f'  ↳ {name} 最近感知障碍（距真值/速度）：' + '  '.join(trichotomy))
         if not names:
             lines.append('（没收到任何 NPC 真值）')

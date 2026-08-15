@@ -566,20 +566,34 @@ class CarlaSidecarNode(Node):
             #    （路缘墙 wall_height=1.0 / 彼此 / 自车都算）。位姿本就全归
             #    脚本管 —— 首拍 set_transform（瞬移，无碰撞检查）即归位；
             #    逐台抬 3 m 错开，免得道具之间在空中互撞。
-            spawn_z = 30.0 + 3.0 * len(self._npcs)
+            is_walker = actor_cfg.get('classification') == 'pedestrian'
+            if is_walker:
+                # walker：高空 spawn（避碰撞检查）+ 首拍瞬移落地，与既往一致。
+                spawn_z = 30.0 + 3.0 * len(self._npcs)
+            else:
+                # 车辆（P9-S2 apply_control 闭环）：轮胎要接地才有牵引力 ——
+                # 直接路面 spawn（P5/P7 的车辆首航点都在路上；撞车/撞墙时
+                # 才退回高空——那说明场景摆错了，宁可它掉下来砸出红判据）。
+                spawn_z = 0.5
             transform = self._carla.Transform(
                 self._carla.Location(x=cx, y=cy, z=spawn_z))
-            actor = self._world.spawn_actor(blueprint, transform)
-            # 位姿仍全归脚本（每 tick set_transform 覆盖一切），但物理**开着**：
-            # 关物理 = 从物理场景摘除 = gpu-lidar raycast 打不到（P9-S1 实锤，
-            # 行为场景没暴露是因为判据全走 pose_gt —— 第一个雷达消费者才验出）。
-            # 关重力防「teleport 与下坠抢位姿」的抖动；无重力+无指令 = 不施力。
-            actor.set_enable_gravity(False)
+            try:
+                actor = self._world.spawn_actor(blueprint, transform)
+            except RuntimeError:
+                transform.location.z = 30.0 + 3.0 * len(self._npcs)
+                actor = self._world.spawn_actor(blueprint, transform)
+                self.get_logger().warn(
+                    f'NPC {name} 路面 spawn 碰撞，退高空 —— 查场景首航点摆放')
+            # 物理必须开（关物理 = 从物理场景摘除 = lidar 打不到，P9-S1 实锤）。
+            # walker 关重力（瞬移驱动防下坠抢位姿）；车辆重力**开**——
+            # apply_control 的牵引力来自轮胎接地（P9-S2 闭环）。
+            if is_walker:
+                actor.set_enable_gravity(False)
             npc = {
                 'actor': actor, 'pose': (x0, y0, 0.0), 'cmd': (0.0, 0.0, 0.0),
                 'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),
                 # 车辆与行人走不同的物理驱动（见 _tick_npcs 的实测注释）
-                'is_walker': actor_cfg.get('classification') == 'pedestrian',
+                'is_walker': is_walker,
             }
             self._npcs[name] = npc
             self.create_subscription(
@@ -614,35 +628,40 @@ class CarlaSidecarNode(Node):
                 projected is not None and
                 location.distance(projected.transform.location) <= 5.0)
             if near_road:
-                # ⚠️ 车辆不能连续瞬移（P9-S1 终局判别）：walker 是运动学胶囊，
-                #    20 Hz set_transform 后照常被 lidar 打中（28.7 m 处 146 点）；
-                #    PhysX **轮式**车辆被连续瞬移时场景查询结构失效 ——
-                #    单次瞬移可见（裸 API 四车实验 10541 点）、每拍瞬移不可见
-                #    （6.5 m 处 0 点，物理位姿却分毫不差）。
-                #    车辆改**速度驱动**：set_target_velocity 让物理正常推进
-                #    （查询结构随动力学更新），漂移/转向超阈才单次瞬移复位。
+                # ⚠️ 统一理论（P9-S1/S2 九轮判别的终点）：PhysX **轮式**车辆
+                #    「近期被 set_transform 过」的若干 tick 内对 gpu-lidar 隐形 ——
+                #    dwell 静止（无瞬移）5-11k 点可见、移动（速度驱动跟不上 →
+                #    每 2-3 拍 drift 复位 = 高频瞬移流）0 点隐形、裸测瞬移一次后
+                #    静置可见；walker（运动学胶囊）免疫，每拍瞬移照常可见。
+                #    且 set_target_velocity 实测不产生位移（裸测末位置不变）。
+                #    ⟹ 车辆走 **apply_control 物理闭环**（ego 本身就是「移动 +
+                #    可见」的存在性证明）：cmd_vel 经 ControlMapping 转油门刹车，
+                #    转向按轴距反解；真值改发**物理实际**（_tick_npcs 末尾），
+                #    判据/感知/npc_controller 对物理闭环，积分器只剩走廊夹取用。
                 if npc['is_walker']:
                     npc['actor'].set_transform(self._carla.Transform(
                         location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
                 else:
-                    actual = npc['actor'].get_transform()
-                    drift_m = actual.location.distance(location)
-                    yaw_err = abs(
-                        (actual.rotation.yaw - yaw_to_carla(yaw) + 180.0) % 360.0 - 180.0)
-                    if drift_m > 0.5 or yaw_err > 8.0:
-                        npc['actor'].set_transform(self._carla.Transform(
-                            location, self._carla.Rotation(yaw=yaw_to_carla(yaw))))
-                        npc['actor'].set_target_velocity(
-                            self._carla.Vector3D(0.0, 0.0, 0.0))
-                    elif dt_s > 0.0:
-                        # 世界系目标速度：朝「本拍积分位姿」收敛（含纠漂项）
-                        gain = 2.0  # 漂移收敛带宽 1/s；过大会与物理步长打架
-                        vx_w = npc['cmd'][0] * math.cos(yaw) + gain * (
-                            location.x - actual.location.x)
-                        vy_carla = -npc['cmd'][0] * math.sin(yaw) + gain * (
-                            location.y - actual.location.y)
-                        npc['actor'].set_target_velocity(
-                            self._carla.Vector3D(vx_w, vy_carla, 0.0))
+                    velocity = npc['actor'].get_velocity()
+                    speed_mps = math.hypot(velocity.x, velocity.y)
+                    accel_cmd = max(-3.0, min(1.5, 1.5 * (npc['cmd'][0] - speed_mps)))
+                    # 转向：cmd 的 wz 与当前车速按自行车模型反解前轮角
+                    #（δ = atan(wz·L/v)），低速夹到 0.5 m/s 防除零。
+                    steer_rad = math.atan2(
+                        npc['cmd'][2] * 2.7, max(speed_mps, 0.5))
+                    fields = self._mapping.to_carla(
+                        steer_rad, accel_cmd, speed_mps=speed_mps)
+                    npc['actor'].apply_control(self._carla.VehicleControl(
+                        throttle=fields['throttle'], brake=fields['brake'],
+                        steer=fields['steer']))
+            if not npc['is_walker']:
+                # 真值 = 物理实际（apply_control 闭环后积分器不再是事实来源；
+                # 报积分值会让判据在「感知看的车」与「真值说的车」之间量出
+                # 纯粹的虚构误差 —— P5 检测率的隐形杀手之一）。
+                actual = npc['actor'].get_transform()
+                x, y, _ = position_to_ros(actual.location.x, actual.location.y, 0.0)
+                yaw = yaw_to_ros(actual.rotation.yaw)
+                npc['pose'] = (x, y, yaw)
             gt = Odometry()
             gt.header.stamp = stamp
             gt.header.frame_id = 'map'
