@@ -95,7 +95,13 @@ class CaptureNode(Node):
     def on_cloud(self, msg):
         if len(self.frames) >= self.frames_wanted:
             return
-        self.frames.append(cloud_points(msg))
+        # ⚠️ 真值随帧**同拍**快照（首版在报告时刻读真值 —— 迎面车 4 m/s，
+        #    帧与报告差几秒 = 位移十几米，邻域比对全是垃圾）。
+        self.frames.append({
+            'points': cloud_points(msg),
+            'truth': dict(self.truth),
+            'ego': self.ego,
+        })
 
     def on_diag(self, msg):
         if not msg.status:
@@ -115,7 +121,7 @@ class CaptureNode(Node):
     def report(self):
         lines = ['===== P9-S1 感知域诊断报告 =====']
         # ① 挂高：z 直方图（全部帧合并）+ 诊断的地面高度
-        zs = sorted(z for frame in self.frames for _, _, z in frame)
+        zs = sorted(z for frame in self.frames for _, _, z in frame['points'])
         if zs:
             lines.append(f'/lidar/points 合并 {len(self.frames)} 帧共 {len(zs)} 点；'
                          f'z 分位数：p5={zs[int(0.05 * len(zs))]:.3f} '
@@ -142,23 +148,36 @@ class CaptureNode(Node):
                 f'ratio 中位 {ratios[len(ratios) // 2]:.2f}（Gazebo 基线≈0.5）  '
                 f'slope 中位 {slopes[len(slopes) // 2]:.1f}°  '
                 f'slope_rejected 中位 {rejected[len(rejected) // 2]:.0f}')
-        # ③ walker：真值邻域点数（base_link 系 —— 把真值换到车体系）
-        if self.ego:
-            ex, ey, eyaw = self.ego
-            cos_yaw, sin_yaw = math.cos(-eyaw), math.sin(-eyaw)
-            for name, (tx, ty) in sorted(self.truth.items()):
+        # ③ walker：真值邻域点数 —— **逐帧配同拍真值**（异步教训见 on_cloud）
+        names = sorted({n for f in self.frames for n in f['truth']})
+        for name in names:
+            per_frame = []
+            for frame in self.frames:
+                if name not in frame['truth'] or frame['ego'] is None:
+                    continue
+                ex, ey, eyaw = frame['ego']
+                tx, ty = frame['truth'][name]
                 dx, dy = tx - ex, ty - ey
-                bx = dx * cos_yaw - dy * sin_yaw
-                by = dx * sin_yaw + dy * cos_yaw
-                dist = math.hypot(bx, by)
-                near = sum(
-                    1 for frame in self.frames for x, y, _ in frame
-                    if math.hypot(x - bx, y - by) < 3.0)
-                lines.append(
-                    f'真值 {name}: 距自车 {dist:.1f} m，3 m 邻域点数（{len(self.frames)} 帧计）'
-                    f' = {near}   ↳ 0 = 没打到/被吞（嫌疑③）')
-        else:
-            lines.append('（没收到 /ego_pose_gt —— 邻域统计缺）')
+                cos_yaw, sin_yaw = math.cos(eyaw), math.sin(eyaw)
+                bx = dx * cos_yaw + dy * sin_yaw
+                by = -dx * sin_yaw + dy * cos_yaw
+                near = sum(1 for x, y, _ in frame['points']
+                           if math.hypot(x - bx, y - by) < 3.0)
+                per_frame.append((math.hypot(bx, by), near))
+            if per_frame:
+                text = '  '.join(f'{d:.1f}m→{n}点' for d, n in per_frame)
+                lines.append(f'真值 {name} 逐帧（距离→3m 邻域点数）：{text}')
+        if not names:
+            lines.append('（没收到任何 NPC 真值）')
+        # 附：z∈[1.25,1.75] 神秘带的 XY 范围（基线云里 +1.5 桶 9326 点是什么）
+        band = [(x, y) for f in self.frames for x, y, z in f['points']
+                if 1.25 <= z <= 1.75]
+        if band:
+            xs2 = sorted(x for x, _ in band)
+            ys2 = sorted(y for _, y in band)
+            lines.append(
+                f'z∈[1.25,1.75] 带 {len(band)} 点：x∈[{xs2[0]:.1f},{xs2[-1]:.1f}] '
+                f'y∈[{ys2[0]:.1f},{ys2[-1]:.1f}]（自车系）')
         report = '\n'.join(lines)
         with open(f'{self.out_prefix}_report.txt', 'w', encoding='utf-8') as f:
             f.write(report + '\n')
