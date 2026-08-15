@@ -91,6 +91,8 @@ struct StageStats
   int slope_rejected{0};         // 坡度门拒绝轮数：总在抽到墙 = 嫌疑 2
   int razor_dropped{0};  // 剃刀门吞掉的框数：合法目标被吞的哨兵（P9 Gazebo 回归案）
   double razor_min_extent_m{1e9};  // 本帧被吞框里最大的那个 min(l,w)：门与目标剖面的距离
+  double razor_max_range_m{0.0};  // 本帧被吞框里最远的距离：远距单环回波被吞的哨兵
+  double razor_max_top_m{0.0};  // 本帧被吞框里最高的簇顶（离地）：吞到的是地面残留还是目标
   int clusters{0};
   int largest_cluster{0};
   int detections{0};
@@ -369,6 +371,13 @@ private:
         ++stats.razor_dropped;
         stats.razor_min_extent_m =
           std::min(stats.razor_min_extent_m, std::min(box.length_m, box.width_m));
+        // 被吞框的距离与簇顶离地高度（观察用：吞到的是地面残留还是远处目标的单环）
+        double top_m = -1e9;
+        for (const auto & pt : cluster_points) {
+          top_m = std::max(top_m, pt.z());
+        }
+        stats.razor_max_range_m = std::max(stats.razor_max_range_m, box.center.norm());
+        stats.razor_max_top_m = std::max(stats.razor_max_top_m, top_m);
         continue;
       }
 
@@ -562,6 +571,8 @@ private:
     add("ground_held_count", ground_held_count_);
     add("razor_dropped", stats.razor_dropped);
     add("razor_min_extent_m", stats.razor_dropped > 0 ? stats.razor_min_extent_m : 0.0);
+    add("razor_max_range_m", stats.razor_max_range_m);
+    add("razor_max_top_m", stats.razor_dropped > 0 ? stats.razor_max_top_m : 0.0);
     add("clusters", stats.clusters);
     add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);
