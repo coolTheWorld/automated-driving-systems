@@ -35,6 +35,7 @@ import struct
 import rclpy
 from rclpy.node import Node
 
+from ads_msgs.msg import ObstacleArray
 from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
@@ -67,6 +68,12 @@ class CaptureNode(Node):
         self.saved_raw = False
 
         self.create_subscription(PointCloud2, '/lidar/points', self.on_cloud, 10)
+        self.obstacles = []   # 最近一帧感知输出：[(x, y, vx, vy)] map 系
+        self.create_subscription(
+            ObstacleArray, '/perception/obstacles',
+            lambda m: setattr(self, 'obstacles', [
+                (o.center_x_m, o.center_y_m, o.velocity_x_mps, o.velocity_y_mps)
+                for o in m.obstacles]), 10)
         self.create_subscription(PointCloud2, '/carla/lidar/points_raw', self.on_raw, 10)
         self.create_subscription(DiagnosticArray, '/perception/diagnostics', self.on_diag, 10)
         for name in ('npc_car', 'pedestrian'):
@@ -101,6 +108,7 @@ class CaptureNode(Node):
             'points': cloud_points(msg),
             'truth': dict(self.truth),
             'ego': self.ego,
+            'obstacles': list(self.obstacles),
         })
 
     def on_diag(self, msg):
@@ -167,6 +175,20 @@ class CaptureNode(Node):
             if per_frame:
                 text = '  '.join(f'{d:.1f}m→{n}点' for d, n in per_frame)
                 lines.append(f'真值 {name} 逐帧（距离→3m 邻域点数）：{text}')
+            # 三分法第二层：感知输出里离真值最近的障碍物（map 系直接比）
+            trichotomy = []
+            for frame in self.frames:
+                if name not in frame['truth'] or not frame['obstacles']:
+                    trichotomy.append('无输出')
+                    continue
+                tx, ty = frame['truth'][name]
+                best = min(
+                    frame['obstacles'],
+                    key=lambda o: math.hypot(o[0] - tx, o[1] - ty))
+                gap = math.hypot(best[0] - tx, best[1] - ty)
+                speed = math.hypot(best[2], best[3])
+                trichotomy.append(f'{gap:.1f}m/v{speed:.1f}')
+            lines.append(f'  ↳ {name} 最近感知障碍（距真值/速度）：' + '  '.join(trichotomy))
         if not names:
             lines.append('（没收到任何 NPC 真值）')
         # 附：z∈[1.25,1.75] 神秘带的 XY 范围（基线云里 +1.5 桶 9326 点是什么）
