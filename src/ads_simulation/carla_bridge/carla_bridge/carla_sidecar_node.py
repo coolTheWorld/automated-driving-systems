@@ -322,6 +322,17 @@ class CarlaSidecarNode(Node):
                     vehicle['sensors']['lidar']['vertical_fov_max_rad'])),
                 'lower_fov': str(math.degrees(
                     vehicle['sensors']['lidar']['vertical_fov_min_rad'])),
+                # ---- 丢点模型拉平（P9-S2，对齐哲学 —— steering_curve 同法理）--
+                # CARLA 默认 dropoff_general_rate=0.45（随机丢 45%！）+
+                # 零强度丢弃 0.4：3.6 m 的车实测只剩 16-40 点/帧（应有数百），
+                # 检测率近场 17% < 远场 73% 的倒挂由此而来。Gazebo 雷达无
+                # 丢点模型 —— 双环境行为漂移的头号来源之一，全部关掉；
+                # 噪声对齐 Gazebo 的 σ=1 cm（check_sensor_noise 的那把尺子）。
+                'dropoff_general_rate': '0.0',
+                'dropoff_intensity_limit': '0.0',
+                'dropoff_zero_intensity': '0.0',
+                'atmosphere_attenuation_rate': '0.0',
+                'noise_stddev': '0.01',
             }),
             ('sensor.other.imu', 'imu', 'imu_link', {
                 'sensor_tick': str(1.0 / vehicle['sensors']['imu']['update_rate_hz']),
