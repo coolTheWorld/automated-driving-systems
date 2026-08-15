@@ -124,6 +124,11 @@ class CaptureNode(Node):
         if 'ground_height_m' in row:
             self.diag_rows.append(row)
 
+    @staticmethod
+    def _median_of(rows, key):
+        vals = sorted(r.get(key, 0.0) for r in rows)
+        return vals[len(vals) // 2] if vals else 0.0
+
     def done(self):
         return len(self.frames) >= self.frames_wanted and len(self.diag_rows) >= 3
 
@@ -157,6 +162,15 @@ class CaptureNode(Node):
                 f'ratio 中位 {ratios[len(ratios) // 2]:.2f}（Gazebo 基线≈0.5）  '
                 f'slope 中位 {slopes[len(slopes) // 2]:.1f}°  '
                 f'slope_rejected 中位 {rejected[len(rejected) // 2]:.0f}')
+            lines.append(
+                '流水线计数中位：input %.0f → non_ground %.0f → clusters %.0f → '
+                'detections %.0f → confirmed %.0f（held %.0f）' % (
+                    self._median_of(self.diag_rows, 'input_points'),
+                    self._median_of(self.diag_rows, 'non_ground_points'),
+                    self._median_of(self.diag_rows, 'clusters'),
+                    self._median_of(self.diag_rows, 'detections'),
+                    self._median_of(self.diag_rows, 'confirmed_tracks'),
+                    self._median_of(self.diag_rows, 'ground_held_count')))
         # ③ walker：真值邻域点数 —— **逐帧配同拍真值**（异步教训见 on_cloud）
         names = sorted({n for f in self.frames for n in f['truth']})
         for name in names:
