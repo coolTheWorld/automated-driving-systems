@@ -72,7 +72,8 @@ class CaptureNode(Node):
         self.create_subscription(
             ObstacleArray, '/perception/obstacles',
             lambda m: setattr(self, 'obstacles', [
-                (o.center_x_m, o.center_y_m, o.velocity_x_mps, o.velocity_y_mps)
+                (o.pose.position.x, o.pose.position.y,
+                 o.velocity_mps.x, o.velocity_mps.y)
                 for o in m.obstacles]), 10)
         self.create_subscription(PointCloud2, '/carla/lidar/points_raw', self.on_raw, 10)
         self.create_subscription(DiagnosticArray, '/perception/diagnostics', self.on_diag, 10)
