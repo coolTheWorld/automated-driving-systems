@@ -67,6 +67,7 @@ class CaptureNode(Node):
         self.ego = None           # (x, y, yaw) map 系
         self.saved_raw = False
         self.raw_counts = []
+        self.dyn_saved = 0
 
         self.create_subscription(PointCloud2, '/lidar/points', self.on_cloud, 10)
         self.obstacles = []   # 最近一帧感知输出：[(x, y, vx, vy)] map 系
@@ -115,6 +116,21 @@ class CaptureNode(Node):
         self.get_logger().info(f'原始帧已落盘：{len(points)} 点')
 
     def on_cloud(self, msg):
+        # 动态帧落盘（P9-S2 离线化）：车在 20 m 内的时刻抓 processed 整帧，
+        # 拉回本地零租金复现聚类桥接 —— 云上单变量盲试到拐点后的正确工具。
+        if ('npc_car' in self.truth and self.ego is not None and
+                self.dyn_saved < 3):
+            ex, ey, _ = self.ego
+            tx, ty = self.truth['npc_car']
+            if math.hypot(tx - ex, ty - ey) < 20.0:
+                self.dyn_saved += 1
+                with open(f'{self.out_prefix}_dyn{self.dyn_saved}.csv',
+                          'w', encoding='utf-8') as f:
+                    f.write(f'# ego {ex:.3f} {ey:.3f} yaw {self.ego[2]:.4f} '
+                            f'npc {tx:.3f} {ty:.3f}\n')
+                    f.write('x,y,z\n')
+                    for x, y, z in cloud_points(msg):
+                        f.write(f'{x:.3f},{y:.3f},{z:.3f}\n')
         if len(self.frames) >= self.frames_wanted:
             return
         # ⚠️ 真值随帧**同拍**快照（首版在报告时刻读真值 —— 迎面车 4 m/s，
