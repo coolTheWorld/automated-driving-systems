@@ -122,7 +122,7 @@ class CaptureNode(Node):
                 self.dyn_saved < 3):
             ex, ey, _ = self.ego
             tx, ty = self.truth['npc_car']
-            if math.hypot(tx - ex, ty - ey) < 20.0:
+            if math.hypot(tx - ex, ty - ey) < 25.0:
                 self.dyn_saved += 1
                 with open(f'{self.out_prefix}_dyn{self.dyn_saved}.csv',
                           'w', encoding='utf-8') as f:
