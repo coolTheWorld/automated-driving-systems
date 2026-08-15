@@ -171,6 +171,15 @@ public:
       create_publisher<ads_msgs::msg::ObstacleArray>("/perception/obstacles", rclcpp::QoS(10));
     diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
       "/perception/diagnostics", rclcpp::QoS(10));
+    // ---- 逐帧检测（跟踪器**之前**）的旁路出口，只给仪器看 ------------------
+    // P9-S2 收官谜「10 m 外双类全零」要在四段流水线（分割/聚类/剃刀门/跟踪
+    // 确认）之间二分：diagnostics 的 `detections` 只有**个数**，分不出「那个
+    // 数里有没有真值旁边的那一个」；而 /perception/obstacles 只出**确认**航迹。
+    // 缺的正是中间这层 —— 每帧的检测框（map 系、无 ID、无速度）。下游模块
+    // **不许订阅它**（不是契约的一部分，SPEC §4.1 的对外话题只有 obstacles）；
+    // 它与 diagnostics 同性质：给人和评测脚本看的。
+    detection_pub_ =
+      create_publisher<ads_msgs::msg::ObstacleArray>("/perception/detections", rclcpp::QoS(10));
 
     // ⚠️ 点云用 **reliable + 深度 10**，与 lidar_preprocessor 的发布端一致。
     //    best-effort 会静默丢帧（实测只剩标称的 35%），而症状是
@@ -395,6 +404,7 @@ private:
     }
     stats.fit_ms = Elapsed(&stage);
     stats.detections = static_cast<int>(detections.size());
+    PublishDetections(detections, msg->header.stamp);
 
     // ---- ④ 跟踪（map 系 —— 恒速模型要求惯性系）--------------------------
     const rclcpp::Time stamp(msg->header.stamp);
@@ -518,6 +528,43 @@ private:
     obstacle_pub_->publish(array);
   }
 
+  void PublishDetections(
+    const std::vector<ads_perception::Detection> & detections,
+    const builtin_interfaces::msg::Time & stamp)
+  {
+    // 旁路仪器（见构造函数里的注释）：每帧检测框原样出门，不过跟踪器。
+    // id = 本帧序号（跨帧无意义）、速度恒零、yaw 是 L-Shape **轴向**
+    // （heading_resolved=false 如实标出）——消费者只有评测脚本。
+    ads_msgs::msg::ObstacleArray array;
+    array.header.stamp = stamp;
+    array.header.frame_id = map_frame_;
+    array.obstacles.reserve(detections.size());
+    std::uint32_t index = 0;
+    for (const ads_perception::Detection & detection : detections) {
+      ads_msgs::msg::Obstacle obstacle;
+      obstacle.header = array.header;
+      obstacle.id = index++;
+      obstacle.classification = static_cast<std::uint8_t>(ads_perception::ClassifyBySize(
+        detection.length_m, detection.width_m, detection.height_m, classifier_params_));
+      obstacle.pose.position.x = detection.position.x();
+      obstacle.pose.position.y = detection.position.y();
+      obstacle.pose.position.z = 0.5 * detection.height_m;
+      tf2::Quaternion quaternion;
+      quaternion.setRPY(0.0, 0.0, detection.yaw_rad);
+      obstacle.pose.orientation.x = quaternion.x();
+      obstacle.pose.orientation.y = quaternion.y();
+      obstacle.pose.orientation.z = quaternion.z();
+      obstacle.pose.orientation.w = quaternion.w();
+      obstacle.heading_resolved = false;
+      obstacle.size_m.x = detection.length_m;
+      obstacle.size_m.y = detection.width_m;
+      obstacle.size_m.z = detection.height_m;
+      obstacle.existence_probability = 1.0F;
+      array.obstacles.push_back(obstacle);
+    }
+    detection_pub_->publish(array);
+  }
+
   void CountIdSwitches(const std::vector<ads_perception::Track> & tracks)
   {
     // ID 切换 = 上一帧有、这一帧没了的航迹数。
@@ -635,6 +682,7 @@ private:
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<ads_msgs::msg::ObstacleArray>::SharedPtr obstacle_pub_;
+  rclcpp::Publisher<ads_msgs::msg::ObstacleArray>::SharedPtr detection_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
 };

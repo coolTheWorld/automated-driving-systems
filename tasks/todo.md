@@ -5,7 +5,7 @@
 > 　　**P0b 方案 B 已实测**、**P4 已验收（复检修复后六轮全过）**、**P5 已验收（Gazebo 半）**、
 > 　　**P6 预测已验收（双层全过）**、**P7 行为决策已验收（CP-P7-A 7/7 + CP-P7-B，2026-08-13）**
 > 　　**P8 已完成（CP-P8-A + CP-P8-B，2026-08-14）—— 感知域移植挂 P9 首片**
-> 更新：2026-08-14　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
+> 更新：2026-08-15　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：**P3/P4/P5 与 2026-08-12 复检的进度都记在「🔖 下次从这里继续」里**
 > （它们没有单独的清单小节 —— 任务详拆在 [plan.md](./plan.md) 第四至六部分）；
@@ -53,9 +53,20 @@ get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常�
 形态列 S5）；全仓 1135 tests 绿。**云窗口弹药全部备好**：`cloud_window_open.sh`
 一键开场（五里程碑）、actor 消失案仪器（sidecar `_npc_census` +
 `p9_actor_watch.py`）、l3c_p5_round / l3c_behavior_round 照旧。
-**窗口 4 序列**（全部需要实例）：① 开场一键 → ② `l3c_p5_round.sh both`
-一轮同时拿三样：actor 普查（消失时刻 + z 序列 → KillZ 还是句柄）、二条件
-剃刀门对 CARLA 接缝条族的覆盖（p9_capture_frame）、S2 收官谜的
-detections-vs-confirmed 时间线 → ③ 破案后定驱动方式 → ④ 门/阈值复扫 →
-⑤ CP-P9-A 两轮 → ⑥ S4 行为感知层三场景【CP-P9-B】。云实例记得销毁。
+**窗口 4 战报（2026-08-15，同一台 5090，实例 82.68.63.172:41794 —— 收窗前记得销毁）**：
+①② 完成 —— **三案定谳**：actor 消失 = 新客户端首查为空的读数幻影（两条线全程在）；
+「10 m 外双类全零」= sidecar `np.frombuffer(raw_data)` 悬空视图 → 每帧半个世界；
+「不翻 y」= 坏输入上的实验，raw 是 UE 右正要翻。**四刀落袋（全在 sidecar/launch，
+感知没动）**：copy+翻 y / 撤墙（弯角 L 形墙 OBB 侵道）/ 后轴 base_link（轮位读 1.410）+
+传感器挂点 / 行人落地 + micra 真值 + 真值 z 报物理底面。**表：0% → round 4/5 车 100%
+行人 100%（15 m 内）、横向 0.26、虚警 0、符号/遮挡 ID 过；余近边 0.68-0.71、速度
+1.03-1.07、ID 切换 4-6（三项同源：≥25 m micra 前脸断两簇 + 车顶自反射 60%）**。
+仪器入库：`p9_lidar_probe.py`（裸测尺子）、`/perception/detections`、
+`P9_INSTRUMENTS=1` 随轮起。台账：plan P9-S2/S3、bringup §6 #11-14、perception.md §8.3/§11。
+**下一步（需拍板）**：(a) 远距聚类断裂 —— 改共享感知（自适应容差/2D 投影聚类）+
+Gazebo 回归；(b) 车顶自反射 —— `mount_z_m` 1.6→≥2.2（vehicle_params 单一来源，
+两环境一起动，P5 Gazebo 基线重跑）或接受为差异。拍板后 ⑤ CP-P9-A 两轮 → ⑥ S4
+行为感知层三场景【CP-P9-B】。⚠️ 本地回归未跑：本窗口只动了 CARLA 侧
+（sidecar/launch）+ 感知加了个旁路发布器（L1/L3 全绿 1135）；改共享聚类前先跑
+`run_all_scenarios.sh gazebo S03`。
 

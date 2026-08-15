@@ -39,6 +39,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import yaml
 
+from carla_bridge.npc_kinematics import CARLA_NPC_VEHICLE_SIZE_M
+
 
 # 与 gazebo_sim.launch 的 _CLASSIFICATION **同一张表**（obstacle_truth 认 int）。
 # 抄表而不是 import：launch 文件不是可导入模块，两处都从 ads_msgs 的常量语义来。
@@ -66,8 +68,6 @@ def _dynamic_specs(context):
     if scenario not in config['scenarios']:
         raise RuntimeError(f'dynamic:={scenario} 未定义（可选：none、'
                            f'{"、".join(config["scenarios"])}）')
-    vehicle_geo = yaml.safe_load(
-        (share / 'config' / 'vehicle_params.yaml').read_text(encoding='utf-8'))['geometry']
     specs = []
     for name in config['scenarios'][scenario]['actors']:
         actor = config['actors'][name]
@@ -77,10 +77,12 @@ def _dynamic_specs(context):
             (float(x), float(y))
             for x, y in actor.get('carla_waypoints', actor['waypoints'])]
         if actor['classification'] == 'vehicle':
-            length = float(vehicle_geo['length_m'])
-            width = float(vehicle_geo['width_m'])
-            height = float(vehicle_geo['height_m'])
-            offset_x = length / 2.0 - float(vehicle_geo['rear_overhang_m'])
+            # CARLA 侧道具是 nissan.micra，真值按**它的**包围盒给、原点即中心
+            # （P9 窗口 4 定案，推导见 npc_kinematics.CARLA_NPC_VEHICLE_SIZE_M）。
+            # Gazebo launch 那套「vehicle_params 的 4.4 + 后轴偏移 1.35」在这里
+            # 是错的刺激物：真值框比物理车前移 1.35 m、长 0.77 m。
+            length, width, height = CARLA_NPC_VEHICLE_SIZE_M
+            offset_x = 0.0
         else:
             length = float(actor['length_m'])
             width = float(actor['width_m'])

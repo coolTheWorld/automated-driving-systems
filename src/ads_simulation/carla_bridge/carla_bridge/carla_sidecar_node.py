@@ -51,7 +51,8 @@ from geometry_msgs.msg import Twist
 import yaml
 
 from carla_bridge.control_mapping import ControlMapping
-from carla_bridge.npc_kinematics import scenario_actor_names, step_pose
+from carla_bridge.npc_kinematics import (
+    CARLA_NPC_VEHICLE_BLUEPRINT, CARLA_NPC_VEHICLE_SIZE_M, scenario_actor_names, step_pose)
 from carla_bridge.transforms import (
     position_to_carla, position_to_ros, relative_pose_in_frame, yaw_rate_to_ros,
     yaw_to_carla, yaw_to_quaternion, yaw_to_ros)
@@ -237,8 +238,18 @@ class CarlaSidecarNode(Node):
         # 且行人路肩路径压在墙线上。6.0：墙退出感知主战场、平坦裙板变宽
         # 反哺 RANSAC 稳定性、行人路径落回 mesh 上。路肩容错语义（弯道
         # 冲宽回弹）只增不减。
+        # wall_height 1.0 → 0.0（P9 窗口 4，2026-08-15，点云修好后的第一轮）：
+        # 退 6 m 只救了直道。**弯角**处外墙是一段直墙 + 一段圆弧墙的 L 形连通簇，
+        # 它的 OBB 是 52×15 m 的空腹大框、中心落在车道里 —— 结构物航迹照实
+        # 发布，规划把它当拦路静物，自车在 x≈66 处（东南角前 20 m）停到超时；
+        # 353 帧车道内虚警全是它（还有它被 6.0 记忆上限截断的 6×6 版本）。
+        # 试过 additional_width=25 让墙退出 30 m 量程：内圈弯角半径 12−1.75−25<0，
+        # 网格自交、墙折回路内 —— 更糟。OBB 对凹形大结构就是描述不了（perception.md
+        # 边界节），场景侧根治 = **不要墙**：Gazebo 同处本来就是草地，两环境的
+        # 感知输入从此同构。代价：出界 6 m 以上会坠入虚空让引擎崩（P8-S6 的老账），
+        # 6 m 裙板留着当第一道容错；行为/跟踪判据全在路内，P8 起没再亲过墙。
         params = self._carla.OpendriveGenerationParameters(
-            vertex_distance=0.5, max_road_length=50.0, wall_height=1.0,
+            vertex_distance=0.5, max_road_length=50.0, wall_height=0.0,
             additional_width=6.0, smooth_junctions=False, enable_mesh_visibility=True)
         world = self._client.generate_opendrive_world(xodr, params)
         # ---- 同步模式（S5 实测后加）--------------------------------------
@@ -287,8 +298,52 @@ class CarlaSidecarNode(Node):
         # 物理对齐的完整映射在 scripts/carla_align_vehicle.py（P0b 验证过一次）；
         # S5 上机时按它重跑一遍再把结果固化到这里 —— 现在不抄一份过来，
         # 抄了就是两处漂移（单一来源，SPEC §4.1）。
-        self.get_logger().info(f'自车已 spawn：{blueprint_name} @ ROS({x:.2f}, {y:.2f})')
+        # ---- base_link = 后轴地面中心（P9 窗口 4 定案）------------------------
+        # CARLA 的 actor 原点是包围盒 xy 中心，而 SPEC/URDF 的 base_link 是**后轴**
+        # （CLAUDE.md §3：Stanley/自行车模型都以后轴为参考点）。此前 sidecar 把原点
+        # 当 base_link 发：/ego_pose_gt、TF、传感器安装全都偏了一个「原点→后轴」
+        # —— 雷达按 URDF 的 lidar_link（后轴前 1.35）去解算，实际却装在原点，
+        # 整片点云沿车头方向平移 1.41 m：CP-P5-B 行人近边误差恒 +1.1～1.3 m、
+        # 车过身时横向误差 0.78 —— 全是它，与感知算法无关。
+        # 偏移**从物理轮位读**（后轮相对原点的 x），不写常数：换蓝图它自己对。
+        # ⚠️ 轮位（世界系）在第一拍物理之前是垃圾（实测读出 −28.6 m）——先推两拍。
+        #    此刻节拍线程还没起，同步模式下 tick 由这里直接推，没人抢。
+        for _ in range(2):
+            self._world.tick(10.0)
+        rear_axle_offset_m = self._rear_axle_offset_from_wheels(ego)
+        # spawn 参数指的是 base_link 位姿：把 actor 挪到「后轴落在 spawn 点」的位置。
+        # set_transform 是瞬移无碰撞检查，此刻车还没落地、也没人碰它。
+        cx_origin = cx + rear_axle_offset_m * math.cos(math.radians(yaw_to_carla(yaw)))
+        cy_origin = cy + rear_axle_offset_m * math.sin(math.radians(yaw_to_carla(yaw)))
+        ego.set_transform(self._carla.Transform(
+            self._carla.Location(x=cx_origin, y=cy_origin, z=0.3),
+            self._carla.Rotation(yaw=yaw_to_carla(yaw))))
+        self._rear_axle_offset_m = rear_axle_offset_m
+        self.get_logger().info(
+            f'自车已 spawn：{blueprint_name} @ ROS({x:.2f}, {y:.2f})（base_link=后轴；'
+            f'原点在后轴前 {rear_axle_offset_m:.3f} m，由物理轮位读出）')
         return ego
+
+    @staticmethod
+    def _rear_axle_offset_from_wheels(vehicle) -> float:
+        """actor 原点 → 后轴中心的纵向偏移（正 = 原点在后轴之前），从物理控制里的轮位读.
+
+        wheels[2]/[3] 是后轮（CARLA 约定 FL/FR/RL/RR），position 是**世界系、厘米**。
+        citroen.c3 实测 −1.410（前轮 +1.274，轴距 2.684 与 P0b 一致）。
+        """
+        transform = vehicle.get_transform()
+        yaw = math.radians(transform.rotation.yaw)
+        rear = [w.position for w in vehicle.get_physics_control().wheels[2:4]]
+        if len(rear) != 2:
+            raise RuntimeError('自车物理控制里读不到两只后轮 —— 蓝图不是四轮车？')
+        dx = [(p.x / 100.0 - transform.location.x) for p in rear]
+        dy = [(p.y / 100.0 - transform.location.y) for p in rear]
+        # 世界系偏移投到车体纵轴（左手系里 yaw 顺时针为正，投影公式不变）
+        along = [math.cos(yaw) * ex + math.sin(yaw) * ey for ex, ey in zip(dx, dy)]
+        offset = -0.5 * (along[0] + along[1])   # 后轮在原点之后 ⟹ 原点在后轴之前
+        if not (0.5 < offset < 3.0):
+            raise RuntimeError(f'原点→后轴偏移 {offset:.3f} m 不像一辆车 —— 轮位读数有问题')
+        return offset
 
     def _spawn_sensors(self):
         """按 vehicle_params 外参 spawn 原生通道传感器（S5 实测三条落地）.
@@ -302,8 +357,10 @@ class CarlaSidecarNode(Node):
             抢传感器 TF —— 一段两个发布者的老坑（CLAUDE.md §5 同类）。
 
         ⚠️ 安装位姿相对 **CARLA 车辆原点**（包围盒中心系），与 base_link
-        （后轴地面）差一个纵向偏移 —— S6 一致性表要量的项，先按
-        车长/2 − 后悬近似换算。
+        （后轴地面）差一个纵向偏移 —— 用 _spawn_ego 从物理轮位读出的
+        `_rear_axle_offset_m`（P9 窗口 4 之前按我们盒子车的「车长/2 − 后悬」
+        =1.35 近似，而 c3 实际是 1.41，且原点还被当成了 base_link 发出去，
+        两错叠加成整片点云前移 1.41 m，见 _spawn_ego 注释）。
         """
         params_path = self.get_parameter('vehicle_params_yaml').value
         if not params_path:
@@ -311,9 +368,8 @@ class CarlaSidecarNode(Node):
             return []
         with open(params_path, encoding='utf-8') as f:
             vehicle = yaml.safe_load(f)
-        geo = vehicle['geometry']
-        # base_link（后轴）→ CARLA 原点（近似包围盒中心）的纵向偏移
-        axle_to_center_m = 0.5 * geo['length_m'] - geo['rear_overhang_m']
+        # base_link（后轴）→ CARLA 原点的纵向偏移：物理轮位读数（_spawn_ego）
+        axle_to_center_m = self._rear_axle_offset_m
         library = self._world.get_blueprint_library()
         sensors = []
         specs = [
@@ -421,7 +477,15 @@ class CarlaSidecarNode(Node):
         按 horizontal_angle **回卷**聚合（不是数 tick —— 数 tick 在服务器
         偶尔丢帧时会错半圈，回卷判据对任何步长/转速组合都成立）。
         """
-        chunk = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4)
+        # ⚠️ **必须立刻 .copy()**（P9 窗口 4 铁案，2026-08-15）：`raw_data` 是
+        #    PyMemoryView_FromMemory 直接套在 libcarla 测量对象的内存上、**不持有
+        #    所有权**；回调返回后测量对象被回收、同一块内存复用给下一拍 —— 存起来
+        #    等第二拍再拼的第一块 chunk 于是「变成」第二拍的内容。症状：每一整帧
+        #    = 同一半圈 × 2（每通道 1800 点全挤在 [0°,180°)、另一半圈空空如也），
+        #    整个北侧世界从没进过点云 —— NPC 车 3.5–35 m 全程 0 点、行人 10 m 外
+        #    0 点、检测率表 0% 就是它。此前的「.copy() 放在 concatenate 之后」
+        #    对第一块无效。裸测尺子：scripts/p9_lidar_probe.py。
+        chunk = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4).copy()
         # ---- 按 tick 计数切帧（S5 实测终版）-------------------------------
         # horizontal_angle 实测**不回卷**（模 2π 也救不了 —— 前两版按它切帧
         # 一个点都发不出，兜底冲刷则攒出 5 圈半的巨包被 DDS UDP 分片静默
@@ -431,27 +495,35 @@ class CarlaSidecarNode(Node):
         if not hasattr(self, '_lidar_chunks'):
             self._lidar_chunks = []
             self._lidar_angle_logged = 0
-        if self._lidar_angle_logged < 4:
+        if self._lidar_angle_logged < 6:
             self._lidar_angle_logged += 1
+            # 每 tick 半圈（P9 裸测实锤：AngleDistanceOfTick = 10 Hz × 360° × 0.05 s
+            # = 180°，两拍交替左右半圈，horizontal_angle 是死字段读不出相位）——
+            # 留档 y<0 / y>0 的点数：一拍里两个数一大一小 = 半圈，两拍应当轮换。
+            # 若连续几拍都是同一侧，说明每隔一拍的数据丢了，拼出的整帧只有半个世界。
             self.get_logger().info(
                 f'lidar tick 角度留档 #{self._lidar_angle_logged}: '
-                f'horizontal_angle={data.horizontal_angle:.4f}, 点数={chunk.shape[0]}')
+                f'horizontal_angle={data.horizontal_angle:.4f}, 点数={chunk.shape[0]}, '
+                f'y<0 {int(np.count_nonzero(chunk[:, 1] < 0))} / y>0 '
+                f'{int(np.count_nonzero(chunk[:, 1] > 0))}, frame={data.frame}')
         self._lidar_chunks.append(chunk)
         if len(self._lidar_chunks) < 2:  # = round(1/(rotation_hz·fixed_delta))
             return
-        points = np.concatenate(self._lidar_chunks).copy()
+        points = np.concatenate(self._lidar_chunks)
         self._lidar_chunks = []
-        # ⚠️ **不翻 y**（P9-S1 镜像探针铁案，2026-08-15）：按「CARLA 左手系」
-        #    的教科书推理这里该 y 反号 —— 实测反了之后点云与真值成镜像
-        #    （npc 车 60 帧正窗 0 点、镜像窗 58054 点），即 0.9.16 的
-        #    LidarMeasurement 原始数据手性已与 ROS 约定一致，再翻一次 =
-        #    镜像世界。路与墙左右对称 + S04/行为判据全走真值，这个符号错
-        #    潜伏了三个租机窗口，直到 P5（点云第一个消费者）上线才炸 ——
-        #    「接第一个消费者 = 对上游再验收」的第 N 次执行。
-        #    回归守卫：scripts/p9_mirror_probe.py（非对称地标是唯一能抓
-        #    符号错误的证据 —— 对称世界里镜像与正确不可区分）。
-        #    ⚠️ IMU 中继的反号（_on_imu）与此同源存疑，P4-CARLA 上线前
-        #    必须用同类非对称实验重审，不要照抄本结论。
+        # ⚠️ **翻 y**（窗口 4 裸测定案，2026-08-15）：raw 点是 UE 左手系（x 前
+        #    y **右**），转 ROS（y 左）必须反号 —— 裸测 scripts/p9_lidar_probe.py
+        #    把真值算到传感器系（车在 y=−3.5）时，raw 点也落在 y=−3.5 的窗里，
+        #    行人在 +3.0 同理，正/镜像窗 300/0、315/0，没有二义。
+        #    ⚠️ 上一版这里写「不翻 y（P9-S1 镜像探针铁案：正窗 0 / 镜像窗
+        #    58054）」—— 那次实验的输入本身是坏的：上面 chunk 的内存别名 bug
+        #    让每帧只含**同一半圈**的世界，「0 对 58054」量到的是「哪半边世界
+        #    在帧里」而不是符号；结论错了，栈上跑出来的检测率 0% 才把它逼出来。
+        #    教训写进 CLAUDE 陷阱表：判符号的实验先确认输入两侧都有数据。
+        #    回归守卫：scripts/p9_mirror_probe.py（现在只数离地点）。
+        #    IMU 中继的反号（_on_imu）沿用教科书换算，与本结论方向一致；
+        #    P4-CARLA 上线前仍要用非对称实验复核。
+        points[:, 1] *= -1.0
         msg = PointCloud2()
         msg.header.stamp = self._sensor_stamp(data)
         msg.header.frame_id = 'lidar_link'
@@ -566,7 +638,7 @@ class CarlaSidecarNode(Node):
             if actor_cfg.get('classification') == 'pedestrian':
                 blueprint = library.filter('walker.pedestrian.*')[0]
             else:
-                blueprint = library.find('vehicle.nissan.micra')
+                blueprint = library.find(CARLA_NPC_VEHICLE_BLUEPRINT)
             cx, cy, _ = position_to_carla(x0, y0, 0.0)
             # ⚠️ 高空 spawn（P8-S6 实测：junction 三辆 NPC 在路面 spawn 直接
             #    「Spawn failed because of collision」）：Gazebo 道具无碰撞、
@@ -598,6 +670,17 @@ class CarlaSidecarNode(Node):
             # apply_control 的牵引力来自轮胎接地（P9-S2 闭环）。
             if is_walker:
                 actor.set_enable_gravity(False)
+            else:
+                # 真值尺寸对账（launch 给 obstacle_truth 的是 CARLA_NPC_VEHICLE_SIZE_M
+                # 常量）：蓝图换了 / CARLA 升级改了模型时，这里必须炸出来 ——
+                # 真值悄悄错 1.35 m 就是本窗口之前「检测率 44%」的一半账。
+                extent = actor.bounding_box.extent
+                actual = (2.0 * extent.x, 2.0 * extent.y, 2.0 * extent.z)
+                if any(abs(a - b) > 0.02 for a, b in zip(actual, CARLA_NPC_VEHICLE_SIZE_M)):
+                    raise RuntimeError(
+                        f'NPC 车 {CARLA_NPC_VEHICLE_BLUEPRINT} 实际包围盒 {actual} 与 '
+                        f'npc_kinematics.CARLA_NPC_VEHICLE_SIZE_M {CARLA_NPC_VEHICLE_SIZE_M} '
+                        f'不符 —— 真值尺寸会错，先更新常量再跑')
             npc = {
                 'actor': actor, 'pose': (x0, y0, yaw0), 'cmd': (0.0, 0.0, 0.0),
                 'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),
@@ -613,6 +696,16 @@ class CarlaSidecarNode(Node):
                 'server_alive': True,
                 'z_trace': [],
                 'spawn_z': float(transform.location.z),
+                # 行人瞬移落点的 root 高度：CARLA walker 的原点在**身体中心**
+                # （bbox center offset 0、extent z 0.93，落定后 root z=0.951 ——
+                # 窗口 4 裸测）。此前一律 z=0.2 = 把行人埋进路面 0.75 m：雷达只见
+                # 上半身 0.6–0.8 m 高 → 分类成 STATIC、行人判据全靠 STATIC 配对撑着。
+                # 与「刺激物校验」同款教训：真值 z 一直发 0，校验看不见埋地。
+                'root_z': float(actor.bounding_box.extent.z + 0.02) if is_walker else 0.2,
+                # 真值 z 报**物理底面**（原点 z + bbox 中心偏移 − 半高）：
+                # 贴地就是 ≈0，埋地为负、飞天为正 —— 记录器的离地校验才有牙。
+                'bottom_offset_z': float(
+                    actor.bounding_box.location.z - actor.bounding_box.extent.z),
             }
             self._npcs[name] = npc
             self.create_subscription(
@@ -669,7 +762,7 @@ class CarlaSidecarNode(Node):
             x, y, yaw = step_pose(*npc['pose'], *npc['cmd'], dt_s)
             npc['pose'] = (x, y, yaw)
             cx, cy, _ = position_to_carla(x, y, 0.0)
-            location = self._carla.Location(x=cx, y=cy, z=0.2)
+            location = self._carla.Location(x=cx, y=cy, z=npc['root_z'])
             # ⚠️ 瞬移走廊夹取（P9-S1 实锤）：航点约定允许「草地上空掉头」
             #    （P5 冻结基线），Gazebo 无碰撞道具没事；CARLA 物理开着
             #    （雷达可见性所需）时瞬移出路 = 穿墙 = PhysX 穿透解算把车
@@ -730,6 +823,12 @@ class CarlaSidecarNode(Node):
             gt.child_frame_id = f'{name}_base'
             gt.pose.pose.position.x = x
             gt.pose.pose.position.y = y
+            # z = 物理底面离地高（obstacle_truth 再加 height/2 得到框中心）
+            try:
+                gt.pose.pose.position.z = (
+                    float(npc['actor'].get_transform().location.z) + npc['bottom_offset_z'])
+            except Exception:  # noqa: B902 —— 读不到就报 0，不许把主环带崩
+                gt.pose.pose.position.z = 0.0
             qx, qy, qz, qw = yaw_to_quaternion(yaw)
             gt.pose.pose.orientation.x = qx
             gt.pose.pose.orientation.y = qy
@@ -810,6 +909,13 @@ class CarlaSidecarNode(Node):
             return
         self._last_good_xy = (x, y)
         yaw = yaw_to_ros(transform.rotation.yaw)
+        # actor 原点 → base_link（后轴）：沿车头退 _rear_axle_offset_m（见 _spawn_ego）。
+        # ⚠️ 速度不换算：刚体上后轴点的线速度 = 原点速度 + ω×r，低速园区 ω·r
+        #    ≈ 0.3 rad/s × 1.4 m = 0.4 m/s 量级横向分量 —— /odom 的 twist 是给
+        #    控制/定位用的**纵向**速度为主，横向那一项 Gazebo 侧（AckermannSteering
+        #    的轮速推算）同样不含，两环境保持同一近似。
+        x -= self._rear_axle_offset_m * math.cos(yaw)
+        y -= self._rear_axle_offset_m * math.sin(yaw)
         vx, vy, _ = (velocity.x, -velocity.y, velocity.z)
         yaw_rate = yaw_rate_to_ros(angular.z)
         stamp = self.get_clock().now().to_msg()

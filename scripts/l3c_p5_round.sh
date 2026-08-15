@@ -1,6 +1,10 @@
 #!/bin/bash
 # L3-C P5 感知复测轮（云端自足）：CP-P5-B 协议 —— 记录器早起 + goal_warm 37。
 # 用法：l3c_p5_round.sh [场景，默认 both]
+#   P9_INSTRUMENTS=1  随轮起两件 P9 仪器（栈就绪后起、记录器结束时收）：
+#     ${LOG}.actors.log     p9_actor_watch —— 独立客户端 actor 普查（消失时刻 + z）
+#     ${LOG}.timeline.csv   p9_capture_frame --timeline —— 检测 vs 确认逐帧时间线
+#     ${LOG}.cap.txt        同上的采样报告（挂高/剃刀门/邻域点数）
 set -u
 SCEN="${1:-both}"
 LOG=/workspace/.l3c_p5_${SCEN}
@@ -47,6 +51,19 @@ timeout 500 python3 /workspace/scripts/record_perception_run.py \
   --duration-s 72 --out ${LOG}.csv > ${LOG}.txt 2>&1 &
 REC=$!
 
+# P9 仪器（可选）：必须在 sidecar 载完世界之后起 —— 普查客户端连的是当前
+# episode，早起会连到默认 Town、随后每次查询都抛 expired episode。
+INSTR_PIDS=()
+if [ "${P9_INSTRUMENTS:-0}" = "1" ]; then
+  : > ${LOG}.actors.log
+  python3 /workspace/scripts/p9_actor_watch.py --period-s 5 --duration-s 600 \
+    --out ${LOG}.actors.log > /dev/null 2>&1 &
+  INSTR_PIDS+=($!)
+  python3 /workspace/scripts/p9_capture_frame.py --frames 20 --out-prefix ${LOG}.cap \
+    --timeline ${LOG}.timeline.csv --timeout-s 600 > ${LOG}.cap.txt 2>&1 &
+  INSTR_PIDS+=($!)
+fi
+
 python3 - <<'PYEOF' > ${LOG}.goal.log 2>&1 &
 import time, rclpy
 from rclpy.node import Node
@@ -74,6 +91,9 @@ while kill -0 $REC 2>/dev/null; do
   sleep 10
 done
 kill $GOAL_PID 2>/dev/null
+# 仪器收尾：TERM 让 p9_capture_frame 出报告再退（它装了信号钩子），等它写完
+for PID in "${INSTR_PIDS[@]:-}"; do [ -n "$PID" ] && kill -TERM $PID 2>/dev/null; done
+for PID in "${INSTR_PIDS[@]:-}"; do [ -n "$PID" ] && wait $PID 2>/dev/null; done
 if grep -q "❌\|FAIL" ${LOG}.txt; then echo "VERDICT=FAIL"
 elif grep -qE "✅|PASS" ${LOG}.txt; then echo "VERDICT=PASS"
 else echo "VERDICT=INCOMPLETE"

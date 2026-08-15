@@ -23,6 +23,16 @@ P9-S1 实测：翻错时 npc 车 60 帧正窗 0 点、镜像窗 58054 点。
 用法：CARLA 栈（dynamic:=both 或任何有 npc_car 的场景）旁边跑：
     python3 scripts/p9_mirror_probe.py
 判据：正窗点数 ≫ 镜像窗（比值 > 10）= PASS；反之 = 点云 y 反了。
+
+⚠️ 窗口 4（2026-08-15）两条修正：
+  1. **只数离地 > 0.3 m 的点**。两个窗都压在路面上，地面点一帧就上百，60 帧
+     几万 —— 车那几百点被淹没，比值永远到不了 10（实测 39257 vs 61226 判成
+     INCONCLUSIVE，而车明明在镜像窗里）。地面对镜像无差别，只有目标有差别。
+  2. 上一版「正窗 0 / 镜像窗 58054」的**铁案不成立**：那时 sidecar 的 chunk 拼帧
+     有内存别名 bug（见 _on_lidar），每帧只含同一半圈的世界 —— 「0 对 58054」量
+     的是「哪半边世界在帧里」，不是符号。符号的直接尺子是裸测
+     scripts/p9_lidar_probe.py（真值在传感器系里 y=−3.5 的车，raw 点也在 y=−3.5
+     ⟹ raw 是 UE 右手为正的约定 ⟹ 转 ROS **要翻 y**）。本探针是它的栈内回归。
 """
 
 import math
@@ -54,8 +64,8 @@ def main():
             return
         pts = []
         for i in range(0, len(msg.data) - msg.point_step + 1, msg.point_step):
-            x, y, _ = struct.unpack_from('<fff', msg.data, i)
-            if math.isfinite(x):
+            x, y, z = struct.unpack_from('<fff', msg.data, i)
+            if math.isfinite(x) and z > 0.3:   # 只要离地点：地面对镜像无差别
                 pts.append((x, y))
         plus = sum(1 for x, y in pts if math.hypot(x - body_x, y - body_y) < 3.0)
         minus = sum(1 for x, y in pts if math.hypot(x - body_x, y + body_y) < 3.0)

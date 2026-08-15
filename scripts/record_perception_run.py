@@ -493,9 +493,12 @@ class PerceptionScorer(Node):
                 self.false_positives_in_lane += 1
                 # 虚警必须**可回查**：只有计数的话，2 帧次的偶发虚警连
                 # "发生在什么时候、是什么东西"都不知道，没法定位。
+                # 高与类别一并记（P9-S2）：CARLA 接缝残留条要靠「薄且矮」两个
+                # 条件才认得出，只记长宽看不出二条件门有没有覆盖到它。
                 self.false_positive_log.append(
                     (t, obstacle.pose.position.x, obstacle.pose.position.y,
-                     obstacle.size_m.x, obstacle.size_m.y, obstacle.id))
+                     obstacle.size_m.x, obstacle.size_m.y, obstacle.id,
+                     obstacle.size_m.z, obstacle.classification))
             else:
                 self.false_positives_out_of_range += 1
 
@@ -515,7 +518,8 @@ class PerceptionScorer(Node):
         fp_path = (path[:-4] if path.endswith('.csv') else path) + '.fp.csv'
         with open(fp_path, 'w', newline='', encoding='utf-8') as handle:
             writer = csv.writer(handle)
-            writer.writerow(['t_s', 'x_m', 'y_m', 'length_m', 'width_m', 'id'])
+            writer.writerow(['t_s', 'x_m', 'y_m', 'length_m', 'width_m', 'id',
+                             'height_m', 'cls'])
             writer.writerows(self.false_positive_log)
 
     def score(self) -> bool:
@@ -707,9 +711,9 @@ class PerceptionScorer(Node):
         print(f'{"车道内虚警帧次":<34}{self.false_positives_in_lane:>10}   == 0        '
               f'{"PASS" if self.false_positives_in_lane == 0 else "FAIL"}'
               f'     (范围外另有 {self.false_positives_out_of_range})')
-        for t, x, y, length, width, pid in self.false_positive_log[:6]:
+        for t, x, y, length, width, pid, height, cls in self.false_positive_log[:6]:
             print(f'    虚警明细: t={t:.1f} map=({x:.1f},{y:.1f}) '
-                  f'{length:.2f}×{width:.2f} id={pid}')
+                  f'{length:.2f}×{width:.2f}×h{height:.2f} cls={cls} id={pid}')
         ok = ok and self.false_positives_in_lane == 0
 
         print('\n全部通过' if ok else '\n有判据未通过')

@@ -26,6 +26,13 @@
 
 点云同时落盘成 xyz csv（一帧），供本地离线复算。
 判据脚本不在这里 —— 这是**测量仪**，裁决写回 plan.md P9-S1。
+
+--timeline PATH（P9-S2 收官谜的仪器）：按 /perception/detections（跟踪器之前的
+逐帧检测框，perception_node 的旁路出口）逐帧写一行 —— 真值距离、离真值最近的
+**检测**框间距、离真值最近的**确认**航迹间距、检测/确认个数、最近一拍诊断的
+剃刀门键。四段流水线（分割/聚类/剃刀门/跟踪确认）在同一行里二分：
+  真值旁有检测、无确认 ⟹ 跟踪确认层；连检测都没有 ⟹ 更上游（看邻域点数）。
+给了 --timeline 就跑满 --timeout-s（不再采够 N 帧就退）。
 """
 
 import argparse
@@ -56,7 +63,7 @@ def cloud_points(msg):
 class CaptureNode(Node):
     """采样器：攒 N 帧，聚合后一次性打印报告."""
 
-    def __init__(self, frames_wanted, out_prefix):
+    def __init__(self, frames_wanted, out_prefix, timeline_path=None):
         super().__init__('p9_capture')
         self.set_parameters([rclpy.parameter.Parameter('use_sim_time', value=True)])
         self.frames_wanted = frames_wanted
@@ -68,6 +75,17 @@ class CaptureNode(Node):
         self.saved_raw = False
         self.raw_counts = []
         self.dyn_saved = 0
+        # 时间线（P9-S2 收官谜）：按检测帧写行，见模块 docstring
+        self.timeline = None
+        self.timeline_rows = 0
+        if timeline_path:
+            self.timeline = open(timeline_path, 'w', encoding='utf-8')
+            self.timeline.write(
+                't_s,ego_x,ego_y,n_det,n_conf,'
+                'npc_dist,npc_det_gap,npc_det_lw,npc_conf_gap,'
+                'ped_dist,ped_det_gap,ped_det_lw,ped_conf_gap,'
+                'non_ground,clusters,razor_dropped,razor_max_range,razor_max_top,'
+                'ground_found,ground_ratio\n')
 
         self.create_subscription(PointCloud2, '/lidar/points', self.on_cloud, 10)
         self.obstacles = []   # 最近一帧感知输出：[(x, y, vx, vy)] map 系
@@ -77,6 +95,8 @@ class CaptureNode(Node):
                 (o.pose.position.x, o.pose.position.y,
                  o.velocity_mps.x, o.velocity_mps.y)
                 for o in m.obstacles]), 10)
+        self.create_subscription(
+            ObstacleArray, '/perception/detections', self.on_detections, 10)
         self.create_subscription(PointCloud2, '/carla/lidar/points_raw', self.on_raw, 10)
         self.create_subscription(DiagnosticArray, '/perception/diagnostics', self.on_diag, 10)
         for name in ('npc_car', 'pedestrian'):
@@ -90,6 +110,40 @@ class CaptureNode(Node):
         q = msg.pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.ego = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw)
+
+    def on_detections(self, msg):
+        """时间线一行 = 一帧检测：真值 ↔ 最近检测框 / 最近确认航迹（map 系直接比）."""
+        if self.timeline is None or self.ego is None:
+            return
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        dets = [(o.pose.position.x, o.pose.position.y, o.size_m.x, o.size_m.y)
+                for o in msg.obstacles]
+        cols = [f'{t:.2f}', f'{self.ego[0]:.2f}', f'{self.ego[1]:.2f}',
+                str(len(dets)), str(len(self.obstacles))]
+        for name in ('npc_car', 'pedestrian'):
+            if name not in self.truth:
+                cols += ['', '', '', '']
+                continue
+            tx, ty = self.truth[name]
+            dist = math.hypot(tx - self.ego[0], ty - self.ego[1])
+            det_gap, det_lw = '', ''
+            if dets:
+                best = min(dets, key=lambda d: math.hypot(d[0] - tx, d[1] - ty))
+                det_gap = f'{math.hypot(best[0] - tx, best[1] - ty):.2f}'
+                det_lw = f'{best[2]:.2f}x{best[3]:.2f}'
+            conf_gap = ''
+            if self.obstacles:
+                best = min(self.obstacles, key=lambda o: math.hypot(o[0] - tx, o[1] - ty))
+                conf_gap = f'{math.hypot(best[0] - tx, best[1] - ty):.2f}'
+            cols += [f'{dist:.1f}', det_gap, det_lw, conf_gap]
+        diag = self.diag_rows[-1] if self.diag_rows else {}
+        cols += [f'{diag.get(k, float("nan")):.2f}' for k in (
+            'non_ground_points', 'clusters', 'razor_dropped', 'razor_max_range_m',
+            'razor_max_top_m', 'ground_found', 'ground_ratio')]
+        self.timeline.write(','.join(cols) + '\n')
+        self.timeline_rows += 1
+        if self.timeline_rows % 50 == 0:
+            self.timeline.flush()
 
     def on_raw(self, msg):
         # 栈内二分（P9-S2 终极）：raw 路的 npc 邻域逐帧计数。raw 有而
@@ -160,6 +214,8 @@ class CaptureNode(Node):
         return vals[len(vals) // 2] if vals else 0.0
 
     def done(self):
+        if self.timeline is not None:
+            return False   # 时间线模式跑满 --timeout-s
         return len(self.frames) >= self.frames_wanted and len(self.diag_rows) >= 3
 
     def report(self):
@@ -201,6 +257,19 @@ class CaptureNode(Node):
                     self._median_of(self.diag_rows, 'detections'),
                     self._median_of(self.diag_rows, 'confirmed_tracks'),
                     self._median_of(self.diag_rows, 'ground_held_count')))
+            # 剃刀门覆盖（P9-S2 二条件门对 CARLA 接缝条族的复扫）：被吞框的
+            # 簇顶离地 vs 门 razor_max_height_m —— 吞的都是矮条 = 门按物理
+            # 先验在收；max_top 逼近门 = 门与目标剖面在拉锯，要看是谁。
+            razored = [r for r in self.diag_rows if r.get('razor_dropped', 0.0) > 0]
+
+            def razor_max(key):
+                return max((r.get(key, 0.0) for r in razored), default=0.0)
+            lines.append(
+                f'剃刀门：{len(razored)}/{len(self.diag_rows)} 拍有吞框，'
+                f'每拍吞框中位 {self._median_of(razored, "razor_dropped"):.0f}，'
+                f'被吞框最远 {razor_max("razor_max_range_m"):.1f} m，'
+                f'簇顶离地最高 {razor_max("razor_max_top_m"):.2f} m，'
+                f'min(l,w) 最大 {razor_max("razor_min_extent_m"):.3f} m')
         # ③ walker：真值邻域点数 —— **逐帧配同拍真值**（异步教训见 on_cloud）
         names = sorted({n for f in self.frames for n in f['truth']})
         for name in names:
@@ -216,10 +285,14 @@ class CaptureNode(Node):
                 by = -dx * sin_yaw + dy * cos_yaw
                 near = sum(1 for x, y, _ in frame['points']
                            if math.hypot(x - bx, y - by) < 3.0)
-                per_frame.append((math.hypot(bx, by), near))
+                # 离地 >0.3 m 的那部分：地面点不算 —— 3 m 邻域里路面本身就有
+                # 上百点，只报总数分不出「打到了目标」和「只打到了它脚下的路」
+                above = sum(1 for x, y, z in frame['points']
+                            if z > 0.3 and math.hypot(x - bx, y - by) < 3.0)
+                per_frame.append((math.hypot(bx, by), near, above))
             if per_frame:
-                text = '  '.join(f'{d:.1f}m→{n}点' for d, n in per_frame)
-                lines.append(f'真值 {name} 逐帧（距离→3m 邻域点数）：{text}')
+                text = '  '.join(f'{d:.1f}m→{n}点/{a}高' for d, n, a in per_frame)
+                lines.append(f'真值 {name} 逐帧（距离→3m 邻域点数/其中离地>0.3m）：{text}')
             # 三分法第二层：感知输出里离真值最近的障碍物（map 系直接比）
             trichotomy = []
             for frame in self.frames:
@@ -262,15 +335,24 @@ def main():
     parser.add_argument('--frames', type=int, default=5)
     parser.add_argument('--out-prefix', default='/tmp/p9s1')
     parser.add_argument('--timeout-s', type=float, default=120.0)
+    parser.add_argument('--timeline', default=None,
+                        help='逐检测帧时间线 csv（见模块 docstring）；给了就跑满 --timeout-s')
     args = parser.parse_args()
 
     rclpy.init()
-    node = CaptureNode(args.frames, args.out_prefix)
+    node = CaptureNode(args.frames, args.out_prefix, args.timeline)
+    import signal
     import time
+    # 轮次脚本收尾时发 TERM：要的是报告不是尸体 —— 收到就退出循环、照常出报告
+    stop = {'now': False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
     start = time.monotonic()
-    while not node.done() and time.monotonic() - start < args.timeout_s:
+    while not node.done() and not stop['now'] and time.monotonic() - start < args.timeout_s:
         rclpy.spin_once(node, timeout_sec=0.2)
     node.report()
+    if node.timeline is not None:
+        node.timeline.close()
+        print(f'时间线 {node.timeline_rows} 行 → {args.timeline}', flush=True)
 
 
 if __name__ == '__main__':
