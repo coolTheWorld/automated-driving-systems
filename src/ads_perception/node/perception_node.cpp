@@ -126,6 +126,7 @@ public:
     // ---- L-Shape --------------------------------------------------------
     fit_params_.angle_step_rad = declare_parameter<double>("lshape.angle_step_rad", 0.01745);
     fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
+    min_extent_m_ = declare_parameter<double>("cluster.min_extent_m", 0.1);
 
     // ---- 跟踪 -----------------------------------------------------------
     tracker_params_.process_accel_stddev_mps2 =
@@ -299,6 +300,16 @@ private:
       }
       const ads_perception::LShapeBox box = ads_perception::FitLShape(cluster_points, fit_params_);
       if (!box.valid) {
+        continue;
+      }
+      // ---- 剃刀条门（P9-S2，物理先验准入）--------------------------------
+      // CARLA 生成路面的接缝/边线几何在 RANSAC 阈值上骑线，漏成 0.03 m 宽、
+      // 1–2.5 m 长的**单环弧段**簇（P5 实测 374 帧车道内虚警的主体），
+      // 并以短命航迹打碎跟踪器（ID 切换 47、速度误差 6.0 的上游）。
+      // ODD（SPEC §2）里不存在最小水平尺寸 < 0.1 m 的目标 —— 行人 0.4、
+      // 锥桶 0.5、车 1.8；这是按**物理**收的准入门，不是按场景调的补丁。
+      // Gazebo 侧全部合法目标远在门上，回归零劣化（CP-P5-B 抽轮验证）。
+      if (std::min(box.length_m, box.width_m) < min_extent_m_) {
         continue;
       }
 
@@ -533,6 +544,7 @@ private:
   std::string map_frame_;
   double max_cloud_age_s_{0.15};
   double diagnostics_period_s_{1.0};
+  double min_extent_m_{0.0};
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   std::int64_t last_diag_ns_{0};
   std::int64_t dropped_stale_clouds_{0};
