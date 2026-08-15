@@ -26,6 +26,12 @@ Vulkan 枚举完全正常（ctypes 三设备）—— 所以「验货时 vkEnume
 
 ## 1. 环境自检（照 p0b §2.1–2.3）
 
+> **一键版（窗口 4 起）**：`scripts/cloud_window_open.sh` 把 §0–§1 的全部步骤
+> 焊成一条幂等命令（宿主体检 → 掐 dpkg 锁 → carla 用户 → CARLA 下载/解包 →
+> compose 构建 → 容器内 pip+wheel → colcon → **服务端冒烟**），五个里程碑
+> 逐条打印，任一步 FATAL 指名原因（含 580-open 的降级命令）。用法在脚本头。
+> 下面的手工步骤保留作为它的说明书与失败排查依据。
+
 1. Vulkan 硬件设备可见（`vkEnumeratePhysicalDevices` 设备类型非 CPU）。
 2. CARLA 服务端：`./CarlaUE4.sh -RenderOffScreen -quality-level=Low`
    —— **不带 `--ros2`**（原生层已弃用，SPEC §9 D5：双斜杠话题 rclcpp
