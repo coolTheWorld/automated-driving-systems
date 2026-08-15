@@ -38,8 +38,11 @@ S3【CP-P9-A】→ S4【CP-P9-B】，三嫌疑待数据裁决：传感器挂载�
 mesh 非平面 / walker 点稀）。**S1 本地半区已完**：地面分割诊断计数器
 （pool/slope_rejected + L1 断言）、node 诊断五键（ground_height_m =
 挂载基准差直读）、p9_capture_frame.py 一键采样（z 分位/众数桶 + 诊断
-聚合 + 真值邻域点数 + 原始帧落盘）。**S1 云端半区等租机**：新实例到手后
-① 照 p8_carla_bringup 铺环境（驱动 ≤570 或降 550；容器装 carla wheel）
-② 起 perception:=true dynamic:=both 栈 ③ 跑 p9_capture_frame.py
-④ 按报告裁决三嫌疑 → S2 修复。
+聚合 + 真值邻域点数 + 原始帧落盘）。**窗口 3 战报（2026-08-15 凌晨，RTX 5090 —— 5090+580-open 能跑，
+Xid 32 案定性为宿主特异）**：S1 完成（五案裁决）+ S2 十刀（镜像 y /
+丢点 45% / 坡度门 0.12 / 一致性门 / 剃刀门 0.15 / blob / 墙退 6 m /
+真车闭环 / 副本航点 / RANSAC 300）。表：0-6%+3437 虚警 → 近场活+
+虚警 11+ID 稳。**S2 收官谜**：10 m 外双类全零（嫌疑=跟踪确认层，
+诊断法已写进 plan）。下一循环：① 录 diagnostics 时间线定层 ② 修
+③ 会车相位收近 ④ Gazebo 回归 ⑤ CP-P9-A 两轮。
 
