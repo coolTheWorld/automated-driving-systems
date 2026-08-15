@@ -66,6 +66,7 @@ class CaptureNode(Node):
         self.truth = {}           # name → (x, y) map 系
         self.ego = None           # (x, y, yaw) map 系
         self.saved_raw = False
+        self.raw_counts = []
 
         self.create_subscription(PointCloud2, '/lidar/points', self.on_cloud, 10)
         self.obstacles = []   # 最近一帧感知输出：[(x, y, vx, vy)] map 系
@@ -90,6 +91,19 @@ class CaptureNode(Node):
         self.ego = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw)
 
     def on_raw(self, msg):
+        # 栈内二分（P9-S2 终极）：raw 路的 npc 邻域逐帧计数。raw 有而
+        # processed 无 = 预处理器；raw 也无 = 栈的传感器/中继本身。
+        if 'npc_car' in self.truth and self.ego is not None and len(self.raw_counts) < 8:
+            ex, ey, eyaw = self.ego
+            tx, ty = self.truth['npc_car']
+            dx, dy = tx - ex, ty - ey
+            cos_yaw, sin_yaw = math.cos(eyaw), math.sin(eyaw)
+            bx = dx * cos_yaw + dy * sin_yaw
+            by = -dx * sin_yaw + dy * cos_yaw
+            pts = cloud_points(msg)
+            near = sum(1 for x, y, _ in pts
+                       if math.hypot(x - bx, y - by) < 3.5)
+            self.raw_counts.append((math.hypot(bx, by), near, len(pts)))
         if self.saved_raw:
             return
         self.saved_raw = True
@@ -215,6 +229,9 @@ class CaptureNode(Node):
             lines.append(
                 f'z∈[1.25,1.75] 带 {len(band)} 点：x∈[{xs2[0]:.1f},{xs2[-1]:.1f}] '
                 f'y∈[{ys2[0]:.1f},{ys2[-1]:.1f}]（自车系）')
+        if self.raw_counts:
+            lines.append('raw 路 npc 邻域逐帧（距离→点数/总点）：' + '  '.join(
+                f'{d:.1f}m→{n}/{t}' for d, n, t in self.raw_counts))
         report = '\n'.join(lines)
         with open(f'{self.out_prefix}_report.txt', 'w', encoding='utf-8') as f:
             f.write(report + '\n')
