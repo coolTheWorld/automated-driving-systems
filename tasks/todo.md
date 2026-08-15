@@ -5,6 +5,7 @@
 > 　　**P0b 方案 B 已实测**、**P4 已验收（复检修复后六轮全过）**、**P5 已验收（Gazebo 半）**、
 > 　　**P6 预测已验收（双层全过）**、**P7 行为决策已验收（CP-P7-A 7/7 + CP-P7-B，2026-08-13）**
 > 　　**P8 已完成（CP-P8-A + CP-P8-B，2026-08-14）—— 感知域移植挂 P9 首片**
+> 　　**P9-S1/S2 完成（2026-08-15 窗口 4，链路四刀）；S3 6/9，S3b/S3a 已拍板待修**
 > 更新：2026-08-15　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：**P3/P4/P5 与 2026-08-12 复检的进度都记在「🔖 下次从这里继续」里**
@@ -16,7 +17,10 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P8 租机窗口 1 已收官（2026-08-14，RTX 3090）**。
+**当前位置**：**P9-S2 收口（2026-08-15 窗口 4）—— CARLA 传感器/真值链路对齐完成，
+CP-P9-A 6/9；S3b（雷达挂高）→ S3a（远距聚类断裂）已拍板、待另开会话执行，冷启动
+命令在本节**末尾**，交接全文 plan.md P9-4。** 下面是按时间顺序的窗口战报（不重排）：
+P8 租机窗口 1 已收官（2026-08-14，RTX 3090）。
 S1–S4 ✅；S5 ✅（桥六项全绿、τ=0.140 复现、油门/刹车标定、七项会话加固）；
 **S6 大半达成**：S01_S02_S07 功能通过 + 4 条跟踪差异入表（拍板），
 S04 block **4/4 全绿**（停距 4.498），S04 avoid 8/9（间距 0.501/0.499 贴线往复），
@@ -63,10 +67,19 @@ get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常�
 1.03-1.07、ID 切换 4-6（三项同源：≥25 m micra 前脸断两簇 + 车顶自反射 60%）**。
 仪器入库：`p9_lidar_probe.py`（裸测尺子）、`/perception/detections`、
 `P9_INSTRUMENTS=1` 随轮起。台账：plan P9-S2/S3、bringup §6 #11-14、perception.md §8.3/§11。
-**下一步（需拍板）**：(a) 远距聚类断裂 —— 改共享感知（自适应容差/2D 投影聚类）+
-Gazebo 回归；(b) 车顶自反射 —— `mount_z_m` 1.6→≥2.2（vehicle_params 单一来源，
-两环境一起动，P5 Gazebo 基线重跑）或接受为差异。拍板后 ⑤ CP-P9-A 两轮 → ⑥ S4
-行为感知层三场景【CP-P9-B】。⚠️ 本地回归未跑：本窗口只动了 CARLA 侧
-（sidecar/launch）+ 感知加了个旁路发布器（L1/L3 全绿 1135）；改共享聚类前先跑
-`run_all_scenarios.sh gazebo S03`。
+**已拍板（2026-08-15）：两个根因都修，另开会话执行。顺序 S3b → S3a → CP-P9-A ×2 → S4。**
+交接全文在 plan.md **P9-4**（数据、推导、候选、守卫、影响面逐条），现场产物在 `.p9w4/`
+（不入库，README 有读法）。冷启动命令：
+  ① S3b：改 `config/vehicle_params.yaml` `sensors.lidar.mount_z_m` 1.6→拟 2.2 →
+    `python3 scripts/gen_vehicle_model.py`（+`--check`）→ 本地 `verify_ros_bridge.sh`
+    → CP-P5-B（`perception:=true dynamic:=both` + `record_perception_run.py --duration-s 72`，
+    对照 2026-08-15 Gazebo 基线：行人 100%/车 98.1%、近边 0.182、横向 0.305、虚警 0、
+    ID 切换 3）→ `run_all_scenarios.sh gazebo` → 同步改 vehicle_params 注释 /
+    CLAUDE 陷阱表两行 / perception.md §5 §8.2 → 云上 `p9_lidar_probe.py`（自反射≈0）。
+  ② S3a：`euclidean_cluster` 竖向各向异性 `cluster.z_scale`（拟 0.5，推导见 P9-4）+
+    L1 两条注入验红 → `run_all_scenarios.sh gazebo S03` → 全表 + CP-P5-B 抽轮 →
+    云上 `l3c_p5_round.sh both` ×2 全绿 =【CP-P9-A】。
+  ③ 云实例 82.68.63.172:41794（5090）收窗时仍在跑、容器无残留；重开窗口先
+    `cloud_window_open.sh`（幂等）+ rsync（用法在脚本头）。改共享感知/车辆参数的每一刀
+    **先本地 Gazebo 回归再上云**（记忆「每刀两环境回归」）。
 

@@ -43,3 +43,6 @@ __pycache__/
 .scenario_runs/
 .p8s2b/
 .p8s2c/
+
+# P9 窗口 4 云上产物（本地复算用，不入库）
+.p9w4/
