@@ -379,7 +379,9 @@ class CarlaSidecarNode(Node):
                 'points_per_second': str(
                     vehicle['sensors']['lidar']['channels'] *
                     vehicle['sensors']['lidar']['horizontal_samples'] * 10),
-                'range': '30.0',
+                # 量程从 vehicle_params 读（P9-S3b）：此前写死 30.0，与 Gazebo 的 50 不一致
+                # —— 单一来源的漏网之鱼。CARLA 的 ray_cast 没有 range_min，近裁剪那套账不适用。
+                'range': str(vehicle['sensors']['lidar']['range_max_m']),
                 'upper_fov': str(math.degrees(
                     vehicle['sensors']['lidar']['vertical_fov_max_rad'])),
                 'lower_fov': str(math.degrees(

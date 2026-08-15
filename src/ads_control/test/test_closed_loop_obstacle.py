@@ -75,6 +75,10 @@ from closed_loop_common import (  # noqa: E402,I100
 # 所以这里不再重算 —— 重算一遍就是第二份判据，而两份判据迟早分家。
 SCENARIO = 'avoid'
 
+# SPEC §8 S04 的判据常数（侧向间距 > 0.5 m）。与 record_obstacle_run.py 同一个数；
+# **不从 planning_params 的 safety.margin_m 读**（那是设计裕度，见断言处的注释）。
+SPEC_S04_MIN_CLEARANCE_M = 0.5
+
 
 def _scenario():
     """
@@ -377,17 +381,23 @@ class TestClosedLoopObstacle(unittest.TestCase):
             f'                实测最小间距 {self.min_clearance_m:.3f} m '
             f'@ 后轴 ({self.min_clearance_pose[0]:.2f}, {self.min_clearance_pose[1]:.2f})，'
             f'该处车道偏移 d = {self.min_clearance_pose[1] + 51.75:+.3f} m\n'
-            f'                **高出判据 {self.min_clearance_m - self.safety_margin_m:.3f} m** '
-            f'—— 这个数要盯：safety.margin_m 是**规划**约束，'
+            f'                **高出规划裕度 {self.min_clearance_m - self.safety_margin_m:+.3f} m**，'
+            f'高出 SPEC 判据 {self.min_clearance_m - SPEC_S04_MIN_CLEARANCE_M:+.3f} m '
+            f'—— 前者要盯：safety.margin_m 是**规划**约束，'
             f'而 SPEC §8 S04 的 0.5 m 是对**实际车**的判据，两者之间只隔着执行误差')
 
         # ---- ② SPEC §8 场景 S04 的判据：侧向间距 > 0.5 m ----
+        # ⚠️ 判据是 SPEC 的常数，**不挂规划裕度**（P8-S6 把 safety.margin_m 从 0.5 抬到 0.7
+        #    时 record_obstacle_run 已拆耦，这里漏了）：假车没有执行误差，规划器给多少裕度
+        #    它就贴多少走，实测最小间距 0.699–0.700 m 正好骑在 0.7 上，2026-08-15 一天
+        #    4 跑 3 红全是 0.001 m 的浮点噪声 —— 一条 CI 守卫红绿由噪声决定，比没有更糟。
+        #    裕度只打印（上面那行「高出规划裕度」），判据用 SPEC 常数。
         self.assertGreater(
             self.min_clearance_m, 0.0,
             f'车体与障碍物重叠了（间距 {self.min_clearance_m:.3f} m）')
         self.assertGreaterEqual(
-            self.min_clearance_m, self.safety_margin_m,
-            f'最小间距 {self.min_clearance_m:.3f} m < 判据 {self.safety_margin_m} m')
+            self.min_clearance_m, SPEC_S04_MIN_CLEARANCE_M,
+            f'最小间距 {self.min_clearance_m:.3f} m < SPEC §8 S04 判据 {SPEC_S04_MIN_CLEARANCE_M} m')
 
         # ---- ③ 绕完要回到中心线 ----
         # 不回中心线的症状很隐蔽：不报错、不压线、轨迹平滑，只是从此不走车道中心。

@@ -124,6 +124,8 @@ public:
     //    min_cluster_size 由 S1 的实测点数定（20–25 m 只有 7 点）。
     //    两个都是安全关键值，理由见 euclidean_cluster.hpp。
     cluster_params_.tolerance_m = declare_parameter<double>("cluster.tolerance_m", 0.5);
+    cluster_params_.vertical_tolerance_m =
+      declare_parameter<double>("cluster.vertical_tolerance_m", 1.0);
     cluster_params_.min_cluster_size = declare_parameter<int>("cluster.min_cluster_size", 5);
     cluster_params_.max_cluster_size = declare_parameter<int>("cluster.max_cluster_size", 20000);
 

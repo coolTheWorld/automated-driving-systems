@@ -98,6 +98,8 @@ std::vector<Cluster> ClusterEuclidean(
   const std::vector<Eigen::Vector3d> & points, const EuclideanClusterParams & params)
 {
   ads_common::RequireFinitePositive(params.tolerance_m, "EuclideanClusterParams", "tolerance_m");
+  ads_common::RequireFinitePositive(
+    params.vertical_tolerance_m, "EuclideanClusterParams", "vertical_tolerance_m");
   if (params.min_cluster_size <= 0) {
     throw std::invalid_argument(
       "EuclideanClusterParams::min_cluster_size 必须为正，收到 " +
@@ -122,12 +124,23 @@ std::vector<Cluster> ClusterEuclidean(
     }
   }
 
+  // ---- 竖向各向异性（P9-S3a）：z 按 tolerance/vertical_tolerance 缩放 --------
+  // 之后的一切（体素、距离）都在缩放坐标上做：半径 tolerance 的球在原坐标里
+  // 就是竖向半轴 vertical_tolerance 的椭球。簇的质心/包围盒仍用**原始点**算
+  // （scaled 只是索引用的影子数组，别把它当成输出）。
+  const double z_scale = params.tolerance_m / params.vertical_tolerance_m;
+  std::vector<Eigen::Vector3d> scaled;
+  scaled.reserve(points.size());
+  for (const Eigen::Vector3d & point : points) {
+    scaled.emplace_back(point.x(), point.y(), point.z() * z_scale);
+  }
+
   // ---- 建体素索引 -------------------------------------------------------
   // 边长恰好取 tolerance，这样半径 tolerance 的球必被 3×3×3 邻域包住。
   std::unordered_map<VoxelKey, std::vector<int>, VoxelKeyHash> grid;
   grid.reserve(points.size());
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    grid[ToVoxel(points[i], params.tolerance_m)].push_back(static_cast<int>(i));
+  for (std::size_t i = 0; i < scaled.size(); ++i) {
+    grid[ToVoxel(scaled[i], params.tolerance_m)].push_back(static_cast<int>(i));
   }
 
   const double tolerance_squared = params.tolerance_m * params.tolerance_m;
@@ -147,7 +160,7 @@ std::vector<Cluster> ClusterEuclidean(
     //    或随机漏点，且**只在簇比较大的时候**出现。
     for (std::size_t head = 0; head < queue.size(); ++head) {
       const int current = queue[head];
-      const VoxelKey center = ToVoxel(points[current], params.tolerance_m);
+      const VoxelKey center = ToVoxel(scaled[current], params.tolerance_m);
 
       for (std::int32_t dx = -1; dx <= 1; ++dx) {
         for (std::int32_t dy = -1; dy <= 1; ++dy) {
@@ -161,7 +174,7 @@ std::vector<Cluster> ClusterEuclidean(
                 continue;
               }
               // 比较平方距离，省一次 sqrt。tolerance 恒为正，平方不改变序。
-              if ((points[candidate] - points[current]).squaredNorm() <= tolerance_squared) {
+              if ((scaled[candidate] - scaled[current]).squaredNorm() <= tolerance_squared) {
                 visited[candidate] = 1U;
                 queue.push_back(candidate);
               }

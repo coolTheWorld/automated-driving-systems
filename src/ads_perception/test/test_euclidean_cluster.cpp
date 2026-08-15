@@ -197,12 +197,81 @@ TEST(EuclideanCluster, KeepsATargetWholeAcrossScanLinesUpToTwentyFiveMetres)
   //    如果调小也不拆，说明这个场景根本没有跨线连接的问题，
   //    那么上面那条用例就什么都没验。
   EuclideanClusterParams tight;
-  tight.tolerance_m = 0.30;  // < 0.493
+  tight.tolerance_m = 0.30;           // < 0.493
+  tight.vertical_tolerance_m = 0.30;  // 竖向也收到线间距以下（各向同性），否则拆不开
   tight.min_cluster_size = 1;
   const auto fragmented = ClusterEuclidean(points, tight);
   printf("[          ] tolerance 调到 0.30（< 线间距 0.493）→ %zu 个簇\n", fragmented.size());
   EXPECT_GT(fragmented.size(), 1U)
     << "tolerance 小于线间距却没拆簇 —— 那说明这个场景测不出跨线连接";
+}
+
+// ---------------------------------------------------------------------------
+//  ⚠️ 竖向容差（P9-S3a）：真车正面不是平板 —— 相邻两线之间还差一个进深台阶
+// ---------------------------------------------------------------------------
+
+/// 按真实角分辨率打一个「阶梯状正面」：三段竖直面（保险杠 / 格栅+引擎盖 / 挡风玻璃）
+/// 各退后一个进深台阶。这是 CARLA micra 正对驶来时雷达看到的东西 ——
+/// 每段只落一条扫描线时，相邻线的 3D 距离 = √(线间距² + 台阶²)。
+std::vector<Eigen::Vector3d> ScanSteppedFront(
+  double distance, const std::vector<std::pair<double, double>> & bands_z_and_setback, double width,
+  double noise_stddev)
+{
+  std::vector<Eigen::Vector3d> points;
+  std::mt19937 rng(42);
+  std::normal_distribution<double> noise(0.0, noise_stddev);
+  const double dz = distance * std::tan(kVerticalStepRad);
+  const double dy = distance * kHorizontalStepRad;
+  // 扫描线从地面往上按线间距排布，落在哪一段就用那一段的进深
+  for (double z = 0.5 * dz; z < 2.0; z += dz) {
+    for (const auto & [top_z, setback] : bands_z_and_setback) {
+      if (z <= top_z) {
+        for (double y = -width / 2.0; y <= width / 2.0; y += dy) {
+          points.emplace_back(distance + setback + noise(rng), y + noise(rng), z + noise(rng));
+        }
+        break;
+      }
+    }
+  }
+  return points;
+}
+
+TEST(EuclideanCluster, KeepsASteppedCarFrontWholeAtTwentyEightMetres)
+{
+  // 28 m：线间距 0.55 m。保险杠（0.6 m 以下，进深 0）→ 格栅/引擎盖（1.1 m 以下，
+  // 退后 0.35）→ 挡风玻璃（1.5 m 以下，退后 0.75，比引擎盖再退 0.40）。
+  // 相邻线的 3D 距离 √(0.55² + 0.35²) = 0.65 > 0.5：各向同性 0.5 必然拆成三截 ——
+  // CARLA 窗口 4 round 4 时间线里 23–33 m 处「车 = 2 个检测、ID 在两条之间摆」的实体。
+  // 竖向容差 1.0（z 缩 0.5）后同一对线的距离 √(0.35² + 0.275²) = 0.445 ≤ 0.5，连上。
+  const auto points = ScanSteppedFront(28.0, {{0.6, 0.0}, {1.1, 0.35}, {1.5, 0.75}}, 1.8, 0.01);
+  const auto whole = ClusterEuclidean(points, EuclideanClusterParams{});
+  printf(
+    "[          ] 28 m 阶梯正面：%zu 点 → 竖向容差 1.0 时 %zu 个簇\n", points.size(), whole.size());
+  EXPECT_EQ(whole.size(), 1U) << "阶梯正面被按扫描线拆开了 —— 竖向容差没生效？";
+
+  // 反向（有区分力的证明）：把竖向容差收回各向同性 0.5，必须能看到拆簇。
+  EuclideanClusterParams isotropic;
+  isotropic.vertical_tolerance_m = 0.5;
+  isotropic.min_cluster_size = 1;
+  const auto split = ClusterEuclidean(points, isotropic);
+  printf("[          ] 竖向容差退回 0.5（各向同性）→ %zu 个簇\n", split.size());
+  EXPECT_GT(split.size(), 1U) << "各向同性下也没拆 —— 这个场景测不出竖向容差的作用";
+}
+
+TEST(EuclideanCluster, VerticalToleranceDoesNotTouchHorizontalSeparation)
+{
+  // 竖向放宽不许换来水平上的并簇：两个阶梯正面并排、外廓相距 1.0 m，仍是两簇。
+  // （水平方向的坐标一个字没缩，1.0 m 判据的余量与 P5 验收时相同。）
+  auto left = ScanSteppedFront(28.0, {{0.6, 0.0}, {1.1, 0.35}, {1.5, 0.75}}, 1.8, 0.01);
+  auto right = ScanSteppedFront(28.0, {{0.6, 0.0}, {1.1, 0.35}, {1.5, 0.75}}, 1.8, 0.01);
+  for (auto & p : left) {
+    p.y() += 0.9 + 0.5;  // 外廓间距 = 中心距 − 两个半宽 = 2.8 − 1.8 = 1.0
+  }
+  for (auto & p : right) {
+    p.y() -= 0.9 + 0.5;
+  }
+  const auto clusters = ClusterEuclidean(Concat({left, right}), EuclideanClusterParams{});
+  EXPECT_EQ(clusters.size(), 2U) << "竖向容差把并排 1.0 m 的两个目标并成一簇了";
 }
 
 // ---------------------------------------------------------------------------

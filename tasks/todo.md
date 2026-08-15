@@ -17,9 +17,8 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P9-S2 收口（2026-08-15 窗口 4）—— CARLA 传感器/真值链路对齐完成，
-CP-P9-A 6/9；S3b（雷达挂高）→ S3a（远距聚类断裂）已拍板、待另开会话执行，冷启动
-命令在本节**末尾**，交接全文 plan.md P9-4。** 下面是按时间顺序的窗口战报（不重排）：
+**当前位置**：**P9-S3 本地半区完成（2026-08-15 下午）—— 雷达 2.2 m + 竖向容差 1.0 已落地、
+Gazebo 全表 9/9；下一步 CP-P9-A / CP-P9-B 需要云 GPU（命令在本节末尾），交接全文 plan.md P9-4。** 下面是按时间顺序的窗口战报（不重排）：
 P8 租机窗口 1 已收官（2026-08-14，RTX 3090）。
 S1–S4 ✅；S5 ✅（桥六项全绿、τ=0.140 复现、油门/刹车标定、七项会话加固）；
 **S6 大半达成**：S01_S02_S07 功能通过 + 4 条跟踪差异入表（拍板），
@@ -67,9 +66,20 @@ get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常�
 1.03-1.07、ID 切换 4-6（三项同源：≥25 m micra 前脸断两簇 + 车顶自反射 60%）**。
 仪器入库：`p9_lidar_probe.py`（裸测尺子）、`/perception/detections`、
 `P9_INSTRUMENTS=1` 随轮起。台账：plan P9-S2/S3、bringup §6 #11-14、perception.md §8.3/§11。
-**已拍板（2026-08-15）：两个根因都修，另开会话执行。顺序 S3b → S3a → CP-P9-A ×2 → S4。**
+**已拍板（2026-08-15）：两个根因都修。顺序 S3b → S3a → CP-P9-A ×2 → S4。**
+**S3b/S3a 本地半区已完成（2026-08-15 下午，零租金）**：雷达 2.2 m（SDF/URDF 重生成、
+sidecar 量程改读 yaml）+ `cluster.vertical_tolerance_m` 1.0（L1 +2 注入验红）；
+新脚本 `l3g_p5_round.sh`（Gazebo CP-P5-B 一轮一命令）；Gazebo 三轮：车/行人 25–30 m 档
+→ 100%、近边 0.14–0.17、横向 0.23–0.33、速度 0.39–0.91、虚警 2–7 帧（U 转鬼影 = §6.5
+遮挡滑行 × 重锚跳变，机理与候选修法在 plan P9-4 附记，判据不放宽，待拍板是否列 P9-S5）、
+ID 切换 3–6（近场贴边摆，P5 已知形态）；`run_all_scenarios.sh gazebo` 两遍 9/9；
+全仓 1137 tests 绿（顺手把 L3-G test_closed_loop_obstacle 的判据从 margin 0.7 拆耦回
+SPEC 0.5 —— 4 跑 3 红全是 0.001 m 浮点噪声）。
+**下一步需要云 GPU**：① `cloud_window_open.sh` → ② 裸测 `p9_lidar_probe.py`（自反射应 ≈0）
+→ ③ `l3c_p5_round.sh both` ×2 =【CP-P9-A】（看 micra 23–33 m 是否一簇、ID 切换/近边/速度）
+→ ④ S4：`l3c_behavior_round.sh` 感知层三场景【CP-P9-B】。
 交接全文在 plan.md **P9-4**（数据、推导、候选、守卫、影响面逐条），现场产物在 `.p9w4/`
-（不入库，README 有读法）。冷启动命令：
+（不入库，README 有读法）。原冷启动命令（已执行 ①②，留作记录）：
   ① S3b：改 `config/vehicle_params.yaml` `sensors.lidar.mount_z_m` 1.6→拟 2.2 →
     `python3 scripts/gen_vehicle_model.py`（+`--check`）→ 本地 `verify_ros_bridge.sh`
     → CP-P5-B（`perception:=true dynamic:=both` + `record_perception_run.py --duration-s 72`，

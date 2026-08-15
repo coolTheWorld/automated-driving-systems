@@ -54,7 +54,7 @@
            =================================================================== -->
 
       <sensor name="lidar" type="gpu_lidar">
-        <pose>1.3500 0.0000 1.6000 0 0 0</pose>
+        <pose>1.3500 0.0000 2.2000 0 0 0</pose>
         <topic>/model/ego_vehicle/lidar</topic>
         <gz_frame_id>lidar_link</gz_frame_id>
         <update_rate>10.0</update_rate>

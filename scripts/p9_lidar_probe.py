@@ -58,7 +58,7 @@ def build_lidar_attrs(vehicle_yaml: str, rotation_hz: float, dropoff: bool) -> d
         'rotation_frequency': str(rotation_hz),
         # 点率按 sidecar 同一公式：channels × horizontal_samples × 10（sidecar 写死 10）
         'points_per_second': str(lidar['channels'] * lidar['horizontal_samples'] * 10),
-        'range': '30.0',
+        'range': str(lidar['range_max_m']),   # 与 sidecar 同源（P9-S3b 起读 yaml）
         'upper_fov': str(math.degrees(lidar['vertical_fov_max_rad'])),
         'lower_fov': str(math.degrees(lidar['vertical_fov_min_rad'])),
         'noise_stddev': '0.01',
@@ -86,7 +86,7 @@ def to_sensor_frame(sensor_tf, world_loc):
             world_loc.z - sensor_tf.location.z)
 
 
-def describe(points: np.ndarray, targets: dict) -> str:
+def describe(points: np.ndarray, targets: dict, lidar_z: float = 1.6) -> str:
     """一 tick 的点云画像：方位角 8 扇区、俯仰覆盖、近处自反射、真值邻域."""
     if points.shape[0] == 0:
         return '  （0 点）'
@@ -105,7 +105,7 @@ def describe(points: np.ndarray, targets: dict) -> str:
         # 正窗里**离地 >0.3 m** 的点的质心相对真值的偏差（沿视线 / 横向）：
         # 判「感知看到的目标在不在真值说的地方」——窗口 4 行人真值系统性落后 1.1 m
         # 的案子就靠它在裸测里复现/排除
-        body = far & (z > 0.3 - 1.6)   # 传感器系 z：地面在 −1.6 附近
+        body = far & (z > 0.3 - lidar_z)   # 传感器系 z：地面在 −lidar_z 附近
         centroid = ''
         if body.sum() >= 5:
             cx, cy = float(x[body].mean()), float(y[body].mean())
@@ -279,7 +279,7 @@ def main() -> int:
                             x=walker_pose[0], y=walker_pose[1], z=walker_pose[2]))
             print(f'tick {tick} frame {frame_id}: horizontal_angle={hangle:.4f}  '
                   f'点数 {points.shape[0]}')
-            print(describe(points, targets))
+            print(describe(points, targets, lidar_z))
         # 参考：真值到传感器的距离与方位（用来读上面的表）
         for name, actor in (('npc_car', npc), ('walker', walker)):
             if actor is None:
