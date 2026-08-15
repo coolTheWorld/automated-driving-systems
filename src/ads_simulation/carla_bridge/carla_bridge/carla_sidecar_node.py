@@ -509,7 +509,11 @@ class CarlaSidecarNode(Node):
             cx, cy, _ = position_to_carla(x, y, 0.0)
             actor = self._world.spawn_actor(
                 bp, self._carla.Transform(self._carla.Location(x=cx, y=cy, z=0.05)))
-            actor.set_simulate_physics(False)
+            # ⚠️ 物理必须开着（P9-S1 实锤）：set_simulate_physics(False) 把
+            #    actor 从物理场景摘除，gpu-lidar 的 raycast **打不到它** ——
+            #    迎面车 6 m 处三帧 0 回波，而同距离路面回波正常。
+            #    关重力替代关物理：不下坠、不施力，碰撞体留在场景里。
+            actor.set_enable_gravity(False)
             self.get_logger().info(f'障碍物已 spawn：#{i} @ ENU({x:.2f}, {y:.2f})')
 
     def _spawn_npcs(self, actors_yaml_path, scenario):
@@ -538,8 +542,11 @@ class CarlaSidecarNode(Node):
             transform = self._carla.Transform(
                 self._carla.Location(x=cx, y=cy, z=spawn_z))
             actor = self._world.spawn_actor(blueprint, transform)
-            # 位姿全归脚本：物理开着会与 set_transform 抢位姿（道具抖动）。
-            actor.set_simulate_physics(False)
+            # 位姿仍全归脚本（每 tick set_transform 覆盖一切），但物理**开着**：
+            # 关物理 = 从物理场景摘除 = gpu-lidar raycast 打不到（P9-S1 实锤，
+            # 行为场景没暴露是因为判据全走 pose_gt —— 第一个雷达消费者才验出）。
+            # 关重力防「teleport 与下坠抢位姿」的抖动；无重力+无指令 = 不施力。
+            actor.set_enable_gravity(False)
             npc = {
                 'actor': actor, 'pose': (x0, y0, 0.0), 'cmd': (0.0, 0.0, 0.0),
                 'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),

@@ -196,7 +196,10 @@ def generate_launch_description():
         'ego_box.y_min': -geo['width_m'] / 2.0,
         'ego_box.y_max': geo['width_m'] / 2.0,
         'ego_box.z_min': 0.0,
-        'ego_box.z_max': geo['height_m'],
+        # +0.5 头顶余量（P9-S1 实测）：c3 传感器旁结构的自反射点在 z 1.25–1.75，
+        # 只裁到车高 1.5 时 z>1.5 的半个 blob 漏网 —— 占全云 27.5%，是常驻的
+        # 车内幻影源。Gazebo 模型 1.5 以上没有任何东西，所以从没暴露。
+        'ego_box.z_max': geo['height_m'] + 0.5,
     }
 
     # URDF 与 gazebo 侧完全同一份（车辆单一来源，SPEC §4.1 表格那两行）。
