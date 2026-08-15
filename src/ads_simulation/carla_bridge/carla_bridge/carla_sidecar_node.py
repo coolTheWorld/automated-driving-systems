@@ -550,8 +550,16 @@ class CarlaSidecarNode(Node):
         library = self._world.get_blueprint_library()
         for name in scenario_actor_names(cfg, scenario):
             actor_cfg = cfg['actors'][name]
-            first_wp = actor_cfg.get('carla_waypoints', actor_cfg['waypoints'])[0]
+            route = actor_cfg.get('carla_waypoints', actor_cfg['waypoints'])
+            first_wp = route[0]
             x0, y0 = float(first_wp[0]), float(first_wp[1])
+            # 车头朝第二个航点（gazebo launch 的既有约定，sidecar 曾漏抄）：
+            # kinematic 道具能原地掉头，真车面错方向出生 = 三米后怼墙卡死
+            # （P9-S2 实测：环线副本首段向南、车默认面东，整场停在 66 m 外）。
+            yaw0 = 0.0
+            if len(route) > 1:
+                yaw0 = math.atan2(
+                    float(route[1][1]) - y0, float(route[1][0]) - x0)
             # 车用与 ego 不同的蓝图（道具不需要对齐动力学 —— 位姿由脚本管）；
             # 行人用 walker。⚠️ 生成器的机械校验（外廓/航点在界内）依旧由
             # gen_dynamic_actors --check 守着 —— 这里不重复校验，单一来源。
@@ -576,7 +584,8 @@ class CarlaSidecarNode(Node):
                 # 才退回高空——那说明场景摆错了，宁可它掉下来砸出红判据）。
                 spawn_z = 0.5
             transform = self._carla.Transform(
-                self._carla.Location(x=cx, y=cy, z=spawn_z))
+                self._carla.Location(x=cx, y=cy, z=spawn_z),
+                self._carla.Rotation(yaw=yaw_to_carla(yaw0)))
             try:
                 actor = self._world.spawn_actor(blueprint, transform)
             except RuntimeError:
@@ -590,8 +599,9 @@ class CarlaSidecarNode(Node):
             if is_walker:
                 actor.set_enable_gravity(False)
             npc = {
-                'actor': actor, 'pose': (x0, y0, 0.0), 'cmd': (0.0, 0.0, 0.0),
+                'actor': actor, 'pose': (x0, y0, yaw0), 'cmd': (0.0, 0.0, 0.0),
                 'pub': self.create_publisher(Odometry, f'/model/{name}/pose_gt', 10),
+                'yaw0': yaw0,
                 # 车辆与行人走不同的物理驱动（见 _tick_npcs 的实测注释）
                 'is_walker': is_walker,
             }
