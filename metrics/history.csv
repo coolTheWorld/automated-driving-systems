@@ -286,3 +286,13 @@ utc,git_sha,scenario,layer,criterion,value,limit,passed
 2026-08-15T13:22:39Z,84ff0e5,junction,perception,⑦ 对车流的真值最小间距,2.08 m @t=96.8 vs cross_car_c,> 1.5 m,PASS
 2026-08-15T13:22:39Z,84ff0e5,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
 2026-08-15T13:22:39Z,84ff0e5,junction,perception,⑧ 零碰撞（真值最小间距）,2.08 m,> 0.3 m,PASS
+2026-08-16T03:11:59Z,0903b29,follow,truth,① TTC 最小值（v_rel≥1.5）,2.40 s @t=47.74,> 2 s,PASS
+2026-08-16T03:11:59Z,0903b29,follow,truth,② 跟停稳态间距,4.50 m（500 拍）,"[4, 10] m",PASS
+2026-08-16T03:11:59Z,0903b29,follow,truth,③ 驶离后恢复,0.66 s,≤ 3 s,PASS
+2026-08-16T03:11:59Z,0903b29,follow,truth,⑧ 零碰撞（真值最小间距）,4.50 m,> 0.3 m,PASS
+2026-08-16T03:11:59Z,0903b29,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-16T03:13:50Z,0903b29,follow,perception,① TTC 最小值（v_rel≥1.5）,2.38 s @t=48.14,> 2 s,PASS
+2026-08-16T03:13:50Z,0903b29,follow,perception,② 跟停稳态间距,4.37 m（499 拍）,"[4, 10] m",PASS
+2026-08-16T03:13:50Z,0903b29,follow,perception,③ 驶离后恢复,0.82 s,≤ 3 s,PASS
+2026-08-16T03:13:50Z,0903b29,follow,perception,⑧ 零碰撞（真值最小间距）,4.37 m,> 0.3 m,PASS
+2026-08-16T03:13:50Z,0903b29,follow,perception,⑨ 行为状态切换次数,3（FOLLOW→CRUISE→YIELD→CRUISE）,≤ 4 次,PASS
