@@ -5,7 +5,7 @@
 > 　　**P0b 方案 B 已实测**、**P4 已验收（复检修复后六轮全过）**、**P5 已验收（Gazebo 半）**、
 > 　　**P6 预测已验收（双层全过）**、**P7 行为决策已验收（CP-P7-A 7/7 + CP-P7-B，2026-08-13）**
 > 　　**P8 已完成（CP-P8-A + CP-P8-B，2026-08-14）—— 感知域移植挂 P9 首片**
-> 　　**P9 感知域移植 S1–S4 完成（2026-08-16：CP-P9-A 9/9 ×2、CP-P9-B 6/6）；S5 性能/鲁棒待拆**
+> 　　**P9 感知域移植 S1–S4 完成（2026-08-16：CP-P9-A 9/9 ×2、CP-P9-B 6/6）；S5 拆四片，S5b 异常注入 ✅【CP-P9-D】**
 > 更新：2026-08-16　|　技术栈：**Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic**（官方组合）
 >
 > 本文件按阶段分段：**P3/P4/P5 与 2026-08-12 复检的进度都记在「🔖 下次从这里继续」里**
@@ -19,7 +19,7 @@
 
 **当前位置**：**P9-S5 进行中（2026-08-16 本地）—— S5 拆成 S5a–S5d（plan P9-5）；S5a RANSAC 100 A/B
 落地（Gazebo 零劣化、ground_ms 8.1→3.1）、耗时表待拍板「WSL2 感知 p95 24 ms 要不要移出回调」；
-S5b 异常注入清单立表 + 两条新守卫（感知静默链路、仿真钟停走）注入验红，余六条缺口按表 §2 顺序补。
+S5b **✅ 完成【CP-P9-D 达成】**（15 行全有自动化红绿，八条新守卫各注入验红，1164 tests 绿）。
 云实例已销毁；S5a-② 的 CARLA 复核与 S5c/S5d 需要下一个云窗口。** 下面是按时间顺序的窗口战报（不重排）：
 P8 租机窗口 1 已收官（2026-08-14，RTX 3090）。
 S1–S4 ✅；S5 ✅（桥六项全绿、τ=0.140 复现、油门/刹车标定、七项会话加固）；
@@ -88,9 +88,12 @@ CP-P9-B 六轮 6/6（junction truth 首轮红 —— 车队 b/c 高空回退带�
 **2026-08-16 本地续**：文档补齐（README 阶段、bringup §5 了结、perception §1/§11、CLAUDE 命令表）；
 plan P9-5 拆片；S5a-② RANSAC 100（Gazebo ×3 零劣化，ground_ms 3.1）；S5b `docs/fault_injection.md`
 + `test_perception_silence.py` + 桥墙钟守卫 `test_vehicle_cmd_bridge_clock_stall.py`（各注入验红）；
-1147 tests 绿。**待拍板**：S5a-③（WSL2 感知 p95 24 ms，SPEC §7 字面要求挪线程 vs 10 Hz 下功能无碍）。
-**接着做**：S5b 余六条缺口（#7 #6 #11 #13 #15 #9，各一条 L3-G）→【CP-P9-D】→ S5c 跟踪鲁棒
-（U 转鬼影/贴边摆，本地 Gazebo 先）→ 下个云窗口：S5a-② CARLA 复核 + CP-P9-A 复测 + S5d 评估。
+**S5b 余六条缺口同日补齐**（#7 陈旧点云段 / #6 `test_prediction_silence` / #9 看门狗停发案 /
+#11 `test_localization_sensor_timeout`（假传感器 `fault.*_stop_after_s` 开关）/ #13+#15 `test_route_faults`），
+每条注入验红；**1164 tests 绿，CP-P9-D 达成**。**待拍板**：S5a-③（WSL2 感知 p95 24 ms，SPEC §7 字面要求挪线程
+vs 10 Hz 下功能无碍）。
+**接着做**：S5c 跟踪鲁棒（U 转鬼影/贴边摆，本地 Gazebo 先，L1 注入 + CP-P5-B ×3）→ 下个云窗口：
+S5a-② CARLA 复核 + CP-P9-A 复测【CP-P9-E】+ S5d 评估。
 交接全文在 plan.md **P9-4**（数据、推导、候选、守卫、影响面逐条），现场产物在 `.p9w4/`
 （不入库，README 有读法）。原冷启动命令（已执行 ①②，留作记录）：
   ① S3b：改 `config/vehicle_params.yaml` `sensors.lidar.mount_z_m` 1.6→拟 2.2 →

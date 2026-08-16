@@ -215,6 +215,20 @@ if(BUILD_TESTING)
       FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
       ROS_DOMAIN_ID=50)
 
+  # 预测静默链路（清单 #6）：同一段过期检查的另一分支（behavior.prediction_timeout_s）。
+  add_launch_test(test/test_prediction_silence.py
+    TIMEOUT 120
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=52)
+
+  # 路由层故障（清单 #13 无 TF / #15 无路由）：上游给不出路 ⟹ 车不动；修好 ⟹ 恢复。
+  add_launch_test(test/test_route_faults.py
+    TIMEOUT 150
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=53)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——

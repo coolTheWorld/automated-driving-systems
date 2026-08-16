@@ -161,9 +161,19 @@ if(BUILD_TESTING)
       #    的两个闭环同时在跑，默认 domain 0 下话题和 TF 全是共享的。
       #    实测：不隔离时本测试的「/tf_static 上不许有 map→odom」会读到
       #    ads_control 那个测试起的 static_transform_publisher，两边一起红。
-      #    分配表：ads_control 41/42/46/48/49，ads_localization 43，
+      #    分配表：ads_control 41/42/46/48/49/50/52/53，ads_localization 43/54，
       #    ads_perception 44，gazebo_bridge 45，ads_prediction 47。
       ROS_DOMAIN_ID=43)
+
+  # 传感器超时降级（清单 #11）：雷达断流 ⟹ 降出 NDT_AIDED；GNSS 也断 ⟹ DEAD_RECKONING；
+  # 全程 map→odom 不许冻住。假传感器的 fault.*_stop_after_s 开关注入。
+  add_launch_test(test/test_localization_sensor_timeout.py
+    TIMEOUT 180
+    ENV
+      FAKE_SENSORS_EXECUTABLE=$<TARGET_FILE:fake_sensors>
+      ADS_CAMPUS_CLOUD_PCD=${CMAKE_CURRENT_SOURCE_DIR}/../../maps/campus_cloud.pcd
+      ADS_CAMPUS_MAP_YAML=${CMAKE_CURRENT_SOURCE_DIR}/../../config/campus_map.yaml
+      ROS_DOMAIN_ID=54)
 
   # 机械校验：libads_localization.so 的 DT_NEEDED 里不许有 ROS 库。
   # 做成 CTest 而不是 shell 脚本，是因为要人记得去跑的检查等于没有检查。

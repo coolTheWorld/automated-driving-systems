@@ -189,14 +189,16 @@ class TestPerceptionClosedLoop(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
-    def _publish_frame(self, sim_time_s):
+    def _publish_frame(self, sim_time_s, cloud_lag_s=0.0):
         clock = Clock()
         clock.clock.sec = int(sim_time_s)
         clock.clock.nanosec = int((sim_time_s - int(sim_time_s)) * 1e9)
         self.clock_pub.publish(clock)
 
         header = Header()
-        header.stamp = clock.clock
+        stamp_s = sim_time_s - cloud_lag_s   # cloud_lag_s > 0：注入陈旧点云（清单 #7）
+        header.stamp.sec = int(stamp_s)
+        header.stamp.nanosec = int((stamp_s - int(stamp_s)) * 1e9)
         header.frame_id = 'base_link'
         self.cloud_pub.publish(point_cloud2.create_cloud_xyz32(header, self.points))
 
@@ -274,6 +276,35 @@ class TestPerceptionClosedLoop(unittest.TestCase):
         worst = max(float(v) for v in totals)
         print(f'[test] 单帧耗时最大 {worst:.2f} ms（判据 100，点数只有真实的 6%）')
         self.assertLess(worst, 100.0)
+
+        # ---- 异常注入清单 #7：陈旧点云必须丢弃并计数（P9-S5b） ----------------
+        # 钟照走、点云的 stamp 落后 1.0 s（> max_cloud_age_s 0.15）：这段里不许有
+        # 任何 ObstacleArray 出来（用旧帧算出来的位置对应的是过去的时刻，下游会当成
+        # 现在的），dropped_stale_clouds 要涨够 10；随后正常帧一到立刻恢复输出。
+        n_before = len(self.obstacles)
+        for _ in range(10):
+            self._publish_frame(sim_time_s, cloud_lag_s=1.0)
+            sim_time_s += 0.1
+            deadline = self.node.get_clock().now().nanoseconds + int(0.15e9)
+            while self.node.get_clock().now().nanoseconds < deadline:
+                rclpy.spin_once(self.node, timeout_sec=0.02)
+        n_during_stale = len(self.obstacles) - n_before
+        for _ in range(5):
+            self._publish_frame(sim_time_s)
+            sim_time_s += 0.1
+            deadline = self.node.get_clock().now().nanoseconds + int(0.15e9)
+            while self.node.get_clock().now().nanoseconds < deadline:
+                rclpy.spin_once(self.node, timeout_sec=0.02)
+        dropped = [
+            float(value.value) for msg in self.diagnostics for status in msg.status
+            for value in status.values if value.key == 'dropped_stale_clouds']
+        print(f'[test] 陈旧点云 10 帧：期间输出 {n_during_stale} 条，'
+              f'dropped_stale_clouds 计数 {max(dropped) if dropped else None}，'
+              f'恢复后又收到 {len(self.obstacles) - n_before - n_during_stale} 条')
+        self.assertEqual(n_during_stale, 0, '陈旧点云被当成现在的算了 —— max_cloud_age_s 没生效')
+        self.assertTrue(dropped and max(dropped) >= 10.0, '丢弃计数没涨 —— 诊断没记录陈旧帧')
+        self.assertGreater(len(self.obstacles) - n_before - n_during_stale, 0,
+                           '正常帧恢复后没有输出 —— 陈旧守卫把流水线卡死了')
 
 
 @launch_testing.post_shutdown_test()

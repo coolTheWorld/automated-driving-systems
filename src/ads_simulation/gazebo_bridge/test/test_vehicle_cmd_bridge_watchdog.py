@@ -134,6 +134,28 @@ class TestWatchdogVsNanStream(unittest.TestCase):
             f'持续 NaN 流 1.4 s 后速度设定值仍为 {final_speed:.2f} —— '
             '被丢弃的指令在喂狗，看门狗永不触发（正是 2026-08-12 确认的缺陷）')
 
+    def test_command_silence_triggers_watchdog_brake(self):
+        """Valid drive → no commands at all → the bridge must brake to zero (清单 #9)."""
+        # 与 NaN 流那条是同一只看门狗的两张脸：那条守「坏指令不算指令」，
+        # 这条守「没有指令」本身 —— teleop 崩了 / ssh 断了 / 控制节点死了的形态。
+        # verify_teleop.sh 在真 Gazebo 上量过（6.3 s 后 8.33→0），这里让它进 CI。
+        self._drive(1.2, accel=1.5)
+        self.assertTrue(self.outputs, '桥没有任何输出 —— 节点起来了吗？')
+        speed_before = self.outputs[-1].linear.x
+        self.assertGreater(speed_before, 0.5, '有效指令没把速度设定值抬起来，测试前提不成立')
+
+        # 静默：只 spin，不发任何指令
+        self.outputs.clear()
+        deadline = time.monotonic() + 1.4
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.assertTrue(self.outputs, '静默期间桥停止了输出 —— 应当继续发（刹车）指令')
+        final_speed = self.outputs[-1].linear.x
+        print(f'[test] 阶段一末速 {speed_before:.2f} → 指令静默 1.4 s 后 {final_speed:.2f} m/s')
+        self.assertLess(
+            final_speed, 0.05,
+            f'指令静默 1.4 s 后速度设定值仍为 {final_speed:.2f} —— 看门狗没有刹车')
+
 
 @launch_testing.post_shutdown_test()
 class TestBridgeExitsCleanly(unittest.TestCase):

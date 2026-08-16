@@ -172,6 +172,15 @@ public:
     lidar_fov_max_rad_ = declare_parameter<double>("lidar.vertical_fov_max_rad", 0.1745);
     lidar_stride_ = std::max<int>(1, declare_parameter<int>("lidar.stride", 1));
 
+    // ---- 故障注入开关（docs/fault_injection.md #11）----
+    // 到了这个仿真时刻就**停发**对应传感器（<0 = 永不停）。用来验状态机的超时
+    // 降级：雷达断流 ⟹ 1.0 s 内降出 NDT_AIDED；GNSS 也断 ⟹ 2.0 s 内进 DEAD_RECKONING。
+    // 只停发布、不停真值和 IMU/轮速 —— 真车上传感器坏了车照样在动，滤波器
+    // 必须继续在航位推算上出位姿而不是冻住（与 vehicle_cmd_bridge 那条「钟停走
+    // 时冻住而不是降级」同一个道理）。
+    lidar_stop_after_s_ = declare_parameter<double>("fault.lidar_stop_after_s", -1.0);
+    gnss_stop_after_s_ = declare_parameter<double>("fault.gnss_stop_after_s", -1.0);
+
     // ---- 先验点云。**扫描就是从它里面抠的** ----
     // 这一点在文件头写清楚了：世界与地图同源，没有任何模型失配。
     const std::string map_path = declare_parameter<std::string>("map_pcd_path", "");
@@ -256,8 +265,12 @@ private:
       PublishOdomAndTf();
     }
     if (tick_ % 10 == 0) {
-      PublishGnss();
-      PublishCloud();
+      if (gnss_stop_after_s_ < 0.0 || sim_time_s_ < gnss_stop_after_s_) {
+        PublishGnss();
+      }
+      if (lidar_stop_after_s_ < 0.0 || sim_time_s_ < lidar_stop_after_s_) {
+        PublishCloud();
+      }
       PublishTruth();
     }
   }
@@ -520,6 +533,8 @@ private:
   double lidar_fov_min_rad_{-0.4363};
   double lidar_fov_max_rad_{0.1745};
   int lidar_stride_{1};
+  double lidar_stop_after_s_{-1.0};
+  double gnss_stop_after_s_{-1.0};
 
   double x_m_{0.0};
   double y_m_{0.0};

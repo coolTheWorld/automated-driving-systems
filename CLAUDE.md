@@ -373,7 +373,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 732 tests，约 35 s）
+colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 1164 tests，约 3 min）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
@@ -789,7 +789,10 @@ L4 回归。
 
 场景测试必须有**可量化的通过判据**。「没崩溃」不等于「对了」。
 **异常注入清单**在 [docs/fault_injection.md](docs/fault_injection.md)（P9-S5b）：改任何守卫/超时/看门狗前先查那张表，
-补守卫时把新行加进去；`test_perception_silence.py`（感知断流 → 规划停发 → 控制刹停）是它的第一条跨模块用例。
+补守卫时把新行加进去。15 行全有自动化红绿（2026-08-16）；跨模块用例：`test_perception_silence` /
+`test_prediction_silence` / `test_route_faults`（ads_control）、`test_localization_sensor_timeout`
+（假传感器 `fault.lidar_stop_after_s` / `fault.gnss_stop_after_s` 开关）、`test_vehicle_cmd_bridge_clock_stall`。
+写新用例的纪律：**注入没红先查注入是不是有效刺激**（#15 第一次注入点在草地上本身无路由，照样绿）。
 
 ---
 
