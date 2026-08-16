@@ -43,18 +43,22 @@ import math
 # ---- CARLA 侧 NPC 车的蓝图与真值尺寸（launch 与 sidecar 共用一处）-------------
 # Gazebo 的 NPC 车模型是从 vehicle_params 生成的 4.4×1.8×1.5 盒子、原点在后轴，
 # 所以 Gazebo launch 给真值发布器的是 length=4.4、offset_x=+1.35（后轴→中心）。
-# CARLA 侧道具是 nissan.micra —— 它的真值必须描述**它自己**：
-#   bounding_box.extent = (1.817, 0.923, 0.751) ⟹ 3.634 × 1.846 × 1.502
-#   bounding_box.location = (0.000, 0.001, 0.781) ⟹ actor 原点就在包围盒 xy 中心，
-#   offset_x = 0（2026-08-15 窗口 4 裸测读数，scripts/p9_lidar_probe.py 会打印）。
-# 之前 CARLA launch 照抄 Gazebo 的 4.4/+1.35：真值框中心比物理车中心**前移
-# 1.35 m**、还长 0.77 m —— CP-P5-B 的近边/横向误差与「检测率 44%」（配对半径
-# 2.5 m 被这 1.35 m 吃掉一半）有相当一部分是**刺激物的账**，不是感知的。
+# CARLA 侧道具要**尽量贴这份几何**（P9-S3 收口，2026-08-16 拍板换蓝图）：
+#   感知的车辆形状先验（tracker.vehicle_prior_length_m = 4.4，ODD 车长）会把观测框
+#   的长度垫到 4.4 —— 道具比 4.4 短多少，框就往两头各多出一半：nissan.micra 3.633
+#   时近边恒偏近 (4.4−3.4)/2 ≈ 0.5 m，CP-P5-B 近边 p95 0.60/0.60 只差这一项红。
+#   33 个四轮蓝图里离 4.4×1.8×1.5 最近的是 seat.leon（bbox_survey 2026-08-16）：
+#     bounding_box.extent = (2.097, 0.908, 0.737) ⟹ 4.193 × 1.816 × 1.474（Δ 0.25）
+#     bounding_box.location x = 0.000 ⟹ actor 原点就在包围盒 xy 中心，offset_x = 0
+#   （micra 是 P8-S4b 随手挑的，当时只考虑「道具不需要对齐动力学」，没考虑几何。）
+#   ⚠️ 这一换也遮住了先验的一个真实偏置：现实里 3.6 m 的车会被垫到 4.4，近边偏近
+#      ~0.4 m —— 方向保守（障碍物看起来更近），记在 perception.md §11。
+# 之前 CARLA launch 照抄 Gazebo 的 4.4/+1.35：真值框中心比物理车中心**前移 1.35 m**，
 # 教训同「判据只量被测对象不量刺激物」那条：真值也是刺激物的一部分。
 # sidecar spawn 后会拿实际 bounding_box 与这里对账，差 >2 cm 报错（蓝图换了
 # 或 CARLA 升级改了模型时，真值不能悄悄跟着错）。
-CARLA_NPC_VEHICLE_BLUEPRINT = 'vehicle.nissan.micra'
-CARLA_NPC_VEHICLE_SIZE_M = (3.634, 1.846, 1.502)   # (长, 宽, 高)
+CARLA_NPC_VEHICLE_BLUEPRINT = 'vehicle.seat.leon'
+CARLA_NPC_VEHICLE_SIZE_M = (4.193, 1.816, 1.474)   # (长, 宽, 高)
 
 
 def step_pose(

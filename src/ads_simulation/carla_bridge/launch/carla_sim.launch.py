@@ -77,8 +77,8 @@ def _dynamic_specs(context):
             (float(x), float(y))
             for x, y in actor.get('carla_waypoints', actor['waypoints'])]
         if actor['classification'] == 'vehicle':
-            # CARLA 侧道具是 nissan.micra，真值按**它的**包围盒给、原点即中心
-            # （P9 窗口 4 定案，推导见 npc_kinematics.CARLA_NPC_VEHICLE_SIZE_M）。
+            # CARLA 侧道具是 npc_kinematics.CARLA_NPC_VEHICLE_BLUEPRINT（seat.leon，贴 ODD
+            # 几何），真值按**它的**包围盒给、原点即中心（推导见那个常量的注释）。
             # Gazebo launch 那套「vehicle_params 的 4.4 + 后轴偏移 1.35」在这里
             # 是错的刺激物：真值框比物理车前移 1.35 m、长 0.77 m。
             length, width, height = CARLA_NPC_VEHICLE_SIZE_M

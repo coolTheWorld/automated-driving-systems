@@ -219,7 +219,7 @@ def main() -> int:
         # 静止目标：NPC 车（sidecar 同款蓝图）+ 行人，物理开、重力开，落在路面上
         npc = walker = None
         if not args.no_targets:
-            npc_bp = library.find('vehicle.nissan.micra')
+            npc_bp = library.find('vehicle.seat.leon')   # 与 npc_kinematics 同一蓝图
             npc = world.spawn_actor(npc_bp, carla.Transform(
                 carla.Location(x=args.ego_x + args.npc_ahead, y=-args.ego_y - args.npc_lateral,
                                z=0.3),

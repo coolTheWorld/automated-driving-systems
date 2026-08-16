@@ -660,19 +660,34 @@ class CarlaSidecarNode(Node):
             transform = self._carla.Transform(
                 self._carla.Location(x=cx, y=cy, z=spawn_z),
                 self._carla.Rotation(yaw=yaw_to_carla(yaw0)))
+            sky_parked = False
             try:
                 actor = self._world.spawn_actor(blueprint, transform)
             except RuntimeError:
                 transform.location.z = 30.0 + 3.0 * len(self._npcs)
                 actor = self._world.spawn_actor(blueprint, transform)
+                # 车辆的高空回退 = **天上停车场**（P9-S3 收口，junction 车队实锤）：
+                # 三辆 cross_car 共用同一个首航点（Gazebo 无碰撞可以叠着停，
+                # 相位全靠 dwell），CARLA 的 spawn 碰撞检查只放第一辆上路。真车化
+                # （apply_control + 重力开）之后回退到高空的 b/c 会当场从 33/36 m
+                # 摔下来砸在 a 身上 —— 车队散架、路口没有车流、自车不用让行、
+                # ⑦b「让行停车 False」（2026-08-16 窗口 5 junction truth 层）。
+                # 处置：关重力挂在天上按兵不动，等 npc_controller 到相位发出第一条
+                # 非零 cmd_vel 时再瞬移到首航点落地（那时前车已经开走 6 s / 24 m）。
+                # 等待期间 pose_gt 报剧本位姿（首航点、z=0）：这是相位语义（车在
+                # 出生点等出发），不是物理事实 —— 见 _tick_npcs 里的注释。
+                sky_parked = not is_walker
                 self.get_logger().warn(
-                    f'NPC {name} 路面 spawn 碰撞，退高空 —— 查场景首航点摆放')
+                    f'NPC {name} 路面 spawn 碰撞，退高空'
+                    + ('（车队：挂在天上等出发相位，出发时落到首航点）' if sky_parked
+                       else ' —— 查场景首航点摆放'))
             # 物理必须开（关物理 = 从物理场景摘除 = lidar 打不到，P9-S1 实锤）。
             # walker 关重力（瞬移驱动防下坠抢位姿）；车辆重力**开**——
-            # apply_control 的牵引力来自轮胎接地（P9-S2 闭环）。
-            if is_walker:
+            # apply_control 的牵引力来自轮胎接地（P9-S2 闭环）；天上停车场的车
+            # 先关重力，落地时再开。
+            if is_walker or sky_parked:
                 actor.set_enable_gravity(False)
-            else:
+            if not is_walker:
                 # 真值尺寸对账（launch 给 obstacle_truth 的是 CARLA_NPC_VEHICLE_SIZE_M
                 # 常量）：蓝图换了 / CARLA 升级改了模型时，这里必须炸出来 ——
                 # 真值悄悄错 1.35 m 就是本窗口之前「检测率 44%」的一半账。
@@ -704,6 +719,9 @@ class CarlaSidecarNode(Node):
                 # 上半身 0.6–0.8 m 高 → 分类成 STATIC、行人判据全靠 STATIC 配对撑着。
                 # 与「刺激物校验」同款教训：真值 z 一直发 0，校验看不见埋地。
                 'root_z': float(actor.bounding_box.extent.z + 0.02) if is_walker else 0.2,
+                # 天上停车场（见 spawn 回退处）：True 期间不驱动、真值报剧本位姿
+                'sky_parked': sky_parked,
+                'spawn_pose': (x0, y0, yaw0),
                 # 真值 z 报**物理底面**（原点 z + bbox 中心偏移 − 半高）：
                 # 贴地就是 ≈0，埋地为负、飞天为正 —— 记录器的离地校验才有牙。
                 'bottom_offset_z': float(
@@ -761,6 +779,27 @@ class CarlaSidecarNode(Node):
                 del npc['z_trace'][:-60]
             if not npc['server_alive']:
                 continue  # 已死的 actor 不再驱动/不再发真值（发原点会把判据带偏）
+            if npc['sky_parked']:
+                if abs(npc['cmd'][0]) > 0.05:
+                    # 出发相位到了：落到首航点，开重力，从此走物理闭环
+                    sx, sy, syaw = npc['spawn_pose']
+                    scx, scy, _ = position_to_carla(sx, sy, 0.0)
+                    npc['actor'].set_transform(self._carla.Transform(
+                        self._carla.Location(x=scx, y=scy, z=0.5),
+                        self._carla.Rotation(yaw=yaw_to_carla(syaw))))
+                    npc['actor'].set_enable_gravity(True)
+                    npc['sky_parked'] = False
+                    npc['pose'] = (sx, sy, syaw)
+                    self.get_logger().info(
+                        f'NPC {name} 出发相位到：从天上停车场落到首航点 ({sx:.1f}, {sy:.1f})')
+                else:
+                    # 等待期间：真值 = 剧本位姿（首航点、贴地），不驱动。npc_controller
+                    # 由此把它当「已到达航点 #0 正在停留」计相位 —— 与 Gazebo 叠着停
+                    # 的三辆车语义相同。⚠️ 这一段真值不是物理事实：落地若失败，
+                    # 普查 z 序列（30+ m）与「让行 False」会一起红，不会静默。
+                    sx, sy, syaw = npc['spawn_pose']
+                    self._publish_npc_truth(name, npc, stamp, sx, sy, syaw, 0.0)
+                    continue
             x, y, yaw = step_pose(*npc['pose'], *npc['cmd'], dt_s)
             npc['pose'] = (x, y, yaw)
             cx, cy, _ = position_to_carla(x, y, 0.0)
@@ -819,30 +858,34 @@ class CarlaSidecarNode(Node):
                 x, y, _ = position_to_ros(actual.location.x, actual.location.y, 0.0)
                 yaw = yaw_to_ros(actual.rotation.yaw)
                 npc['pose'] = (x, y, yaw)
-            gt = Odometry()
-            gt.header.stamp = stamp
-            gt.header.frame_id = 'map'
-            gt.child_frame_id = f'{name}_base'
-            gt.pose.pose.position.x = x
-            gt.pose.pose.position.y = y
             # z = 物理底面离地高（obstacle_truth 再加 height/2 得到框中心）
             try:
-                gt.pose.pose.position.z = (
-                    float(npc['actor'].get_transform().location.z) + npc['bottom_offset_z'])
+                bottom_z = float(npc['actor'].get_transform().location.z) + npc['bottom_offset_z']
             except Exception:  # noqa: B902 —— 读不到就报 0，不许把主环带崩
-                gt.pose.pose.position.z = 0.0
-            qx, qy, qz, qw = yaw_to_quaternion(yaw)
-            gt.pose.pose.orientation.x = qx
-            gt.pose.pose.orientation.y = qy
-            gt.pose.pose.orientation.z = qz
-            gt.pose.pose.orientation.w = qw
-            # twist 必须填（P8-S6 实测：漏填时判据读到 lead_v 恒 0，
-            # 「前车驶离」永远判不出来）。语义与 gz 桥的 Odometry 一致：
-            # child_frame（体系）下的速度 —— cmd 本来就是体系 twist，直传。
-            gt.twist.twist.linear.x = npc['cmd'][0]
-            gt.twist.twist.linear.y = npc['cmd'][1]
-            gt.twist.twist.angular.z = npc['cmd'][2]
-            npc['pub'].publish(gt)
+                bottom_z = 0.0
+            self._publish_npc_truth(name, npc, stamp, x, y, yaw, bottom_z)
+
+    def _publish_npc_truth(self, name, npc, stamp, x, y, yaw, bottom_z):
+        """发一拍 /model/<name>/pose_gt（map 系；z = 物理底面离地高）."""
+        gt = Odometry()
+        gt.header.stamp = stamp
+        gt.header.frame_id = 'map'
+        gt.child_frame_id = f'{name}_base'
+        gt.pose.pose.position.x = x
+        gt.pose.pose.position.y = y
+        gt.pose.pose.position.z = bottom_z
+        qx, qy, qz, qw = yaw_to_quaternion(yaw)
+        gt.pose.pose.orientation.x = qx
+        gt.pose.pose.orientation.y = qy
+        gt.pose.pose.orientation.z = qz
+        gt.pose.pose.orientation.w = qw
+        # twist 必须填（P8-S6 实测：漏填时判据读到 lead_v 恒 0，
+        # 「前车驶离」永远判不出来）。语义与 gz 桥的 Odometry 一致：
+        # child_frame（体系）下的速度 —— cmd 本来就是体系 twist，直传。
+        gt.twist.twist.linear.x = npc['cmd'][0]
+        gt.twist.twist.linear.y = npc['cmd'][1]
+        gt.twist.twist.angular.z = npc['cmd'][2]
+        npc['pub'].publish(gt)
 
     # ------------------------------------------------------------------
     #  控制反向通道
