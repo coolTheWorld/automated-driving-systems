@@ -310,8 +310,12 @@ jobs:
                 echo "✓ sim:=${sim_value} 按预期失败，且报错信息正确"
               }
 
-              # 已规划未实现 → 应当告诉用户去看路线图
-              assert_launch_fails carla 尚未实现
+              # 已规划未实现 → 应当告诉用户去看路线图。
+              # ⚠️ 这里曾写 carla：P8-S4 起 carla 已实现（sidecar 起来后连不上 :2000 才报错），
+              #    于是这一步在 CI 里等 120 s 超时后以「不是期望的原因」红了两天（2026-08-16 发版复审）。
+              #    改用注册表里仍在 PLANNED_SOURCES 的 bag —— 哪天 bag 也实现了，把这行改成新的
+              #    "planned" 值或删掉这条断言（保留拼写错误那条）。
+              assert_launch_fails bag 尚未实现
               # 拼写错误 → 应当告诉用户这个值根本不认识，别去翻路线图
               assert_launch_fails gazbo 未知的
             '
