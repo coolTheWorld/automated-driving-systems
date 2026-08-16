@@ -722,6 +722,9 @@ double compute_steering(double cross_track_error_m,
 每次提交跑 L1+L2；每次合并跑 **L3-G** 全场景；阶段验收跑 **L3-C**。
 记录关键指标随时间的变化曲线。
 
+**异常注入清单**（P9-S5b 起）见 [docs/fault_injection.md](docs/fault_injection.md)：
+故障 × 期望行为 × 守卫（哪个测试）× 缺口，逐行可验红验绿；「异常处理完备」以它为准。
+
 > **本地 Gazebo 能进 CI，是双环境方案最被低估的收益。** CARLA 永远进不了 CI
 > （要 GPU、要 20 GB 镜像、跑不确定），意味着如果只有 CARLA，你的 L3 层
 > 就只能靠人工手动跑——而人工跑的测试，三个月后一定没人跑。

@@ -207,6 +207,14 @@ if(BUILD_TESTING)
       FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
       ROS_DOMAIN_ID=49)
 
+  # 感知静默链路（P9-S5b 异常注入清单）：障碍物流中途断掉 → 规划过期检查停发
+  # → 控制轨迹静默刹停。两段守卫各有各的测试，这条守它们**接得上**。
+  add_launch_test(test/test_perception_silence.py
+    TIMEOUT 120
+    ENV
+      FAKE_VEHICLE_EXECUTABLE=$<TARGET_FILE:fake_vehicle>
+      ROS_DOMAIN_ID=50)
+
   # 机械校验：libads_control.so 不许链接任何 ROS 库（SPEC §3.3）。
   #
   # 做成 CTest 而不是 shell 脚本，因为**一个要人记得去执行的检查等于没有检查** ——

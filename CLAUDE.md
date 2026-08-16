@@ -155,7 +155,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | 杀掉 `static_transform_publisher` 想测「TF 没了」 | `lookupTransform` 照样成功，什么都测不出来 | 静态变换走 `/tf_static`，**tf2 的 buffer 对它永不过期**。要测「拿不到 TF」只能**一开始就不发**（这也正是真实场景：节点起来了、仿真还没起） |
 | **Gazebo 的转向执行机构慢得离谱**（已修） | 控制器在 L1 上完美收敛（1.6 cm），一上 Gazebo 弯道横向误差就在 ±0.8 m 之间震荡 | 开环实测：转角阶跃的 **63% 上升时间 1.20 s**，比 Stanley 自己的闭环时间常数 `1/k_e`=1.0 s 还大 —— 被控对象比控制器慢，这是震荡配方。稳态是**准的**（99.7–100.3%），只是慢，所以**定转角测转弯半径完全看不出问题，只有阶跃响应才量得到**。转向**关节**与横摆角速度的上升时间只差 0.04 s → 滞后全部来自执行机构，不是车身动力学。根子是 `AckermannSteering` 的转向 P 增益 SDF 里从没设过。修法：`vehicle_params.yaml` 加 `actuator.steer_response_time_s`，`gen_vehicle_model.py` 推导出 `<steer_p_gain> = 1/τ`（**不让人直接填增益** —— 增益换个仿真器没有对应物）。实测 1.198 → **0.294 s**，横向误差 0.801 → **0.063 m**。用 `scripts/probe_steering_response.py` 量，**P0b 对齐 CARLA 时要拿同一把尺子再量一遍** |
 | **插件的转向响应有约 0.24 s 的地板** | 把 `steer_response_time_s` 从 0.050 调到 0.020（增益 20→50），实测只从 0.294 s 到 0.255 s | 关节速度环自身的滞后，P 增益动不了它。所以**那个参数不等于实测响应时间**，要知道实际多快只能跑脚本量。取 0.050 是因为它拿到了可改进量的绝大部分而增益还只有 20 —— 再往上是在跟地板较劲，代价是大误差时向关节下发上百 rad/s 的速度指令 |
-| **仿真钟停走时控制器"冻住"而不是降级** | 杀掉 `parameter_bridge` 想测里程计超时的降级路径，结果**什么日志都没有** | 那个进程同时也是 `/clock` 的来源。`use_sim_time=true` 下 `now()` 不再前进 → `dt = 0` → 控制回调直接 return，"里程计过期"永远判不出来；bridge 的看门狗同样用仿真钟，也冻住 → **车保持最后一条指令**。真车上墙钟不会停，所以这是仿真特有的。要补得用**墙钟做健康检查**（那不算算法时序，不违反 SPEC §5） |
+| **仿真钟停走时控制器"冻住"而不是降级** | 杀掉 `parameter_bridge` 想测里程计超时的降级路径，结果**什么日志都没有** | 那个进程同时也是 `/clock` 的来源。`use_sim_time=true` 下 `now()` 不再前进 → `dt = 0` → 控制回调直接 return，"里程计过期"永远判不出来；bridge 的看门狗同样用仿真钟，也冻住 → **车保持最后一条指令**。真车上墙钟不会停，所以这是仿真特有的。要补得用**墙钟做健康检查**（那不算算法时序，不违反 SPEC §5）。**P9-S5b 已补**：`vehicle_cmd_bridge` 加 wall timer 守卫（`clock_stall_s` 1.0）—— 仿真钟没走就发零速直到恢复，`test_vehicle_cmd_bridge_clock_stall.py` 守着；CARLA 侧钟与世界 tick 同线程，钟停世界也停，无此洞 |
 | **横向加速度超标 ≠ 横向跟得不好** | 修好转向执行机构后横向误差降了 12.7 倍，**最大横向加速度一个数都没变**（2.113） | `a_lat = v²·κ` 里有**两个**因子，横向误差不影响 κ，**只有速度会**。实测峰值处横向误差只有 −0.027 m，而车速比剖面高 +0.85 m/s；按剖面速度过那个弯 `a_lat` 恰好是 1.5002 = 限值。**看到横向加速度超标就去调横向增益，方向从一开始就是错的**。⚠️ **P3-S5 补充**：当时那个「一个数都没变」还有第二层原因 —— 判据算的是 `v²·κ_path`，量的是**路**不是车（见上面「判据量的是「路」不是「车」」那条）。结论方向没变，但根因比这里写的更深一层 |
 | **拿 `path_remaining_m` 判「停得准不准」** | 冲过终点 4 m 和恰好停住给出**一模一样**的数 | 投影越过路径末点后被**夹到端点**，`s_m` 和剩余距离都不再变化。这条 `reference_line.hpp`（P3-S1 前叫 `ads_control/path_tracking.hpp`）早就写明并交给 S4 了，**照样踩了**。要判到达/冲过终点必须另算前轴到路径末点的**直线距离**（`control_node` 的 `goal_distance_m`） |
 | **纯 P 速度环跟不上剖面的斜坡** | 车总是"入弯偏快、终点冲过头"，而稳态巡航时速度跟得很准 | 「纯 P 对常值目标无稳态误差」只对**常值**成立。速度剖面在入弯前和终点前是**斜坡**，一阶系统跟踪斜坡的稳态误差 = 斜率/`K_p` = 3.0/1.0 = **3.0 m/s**。解法是加速度前馈 `a = v·dv/ds + K_p·(v_ref − v)`，**不是调大 K_p** |
@@ -224,8 +224,8 @@ prediction 链接 libads_map 读静态先验（SPEC §3.3 注解），不要据�
 CP-P6-B 是**双层协议**：`--layer truth` 全过再跑 `--layer perception` 两轮
 （层 2 红层 1 绿 = 感知输入的传播，去查感知不改预测）。
 
-`ads_perception`（**P5，CP-P5-B 已达成**）有六个 lib：`ground_segmentation`（RANSAC +
-坡度校验）、`euclidean_cluster`（体素哈希 + BFS）、`lshape_fit`（closeness 准则，
+`ads_perception`（**P5，CP-P5-B 已达成；P9 起同一张表在 CARLA 也 9/9**）有六个 lib：`ground_segmentation`（RANSAC +
+坡度校验）、`euclidean_cluster`（体素哈希 + BFS，**P9-S3a 起竖向容差 1.0** —— 线间距顶的是竖向、1 m 分辨力守的是水平）、`lshape_fit`（closeness 准则，
 给的是**轴向**不是朝向）、`size_classifier`、`hungarian`（O(n³)，**禁用配对要用
 有限大数不能用 inf** —— `inf−inf=NaN` 会死循环）、`tracker`（恒速 KF + 匈牙利关联 +
 航迹生命周期 + **包围盒补全/重锚/去重**）。
@@ -441,6 +441,10 @@ python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/ctrl.csv
 ros2 launch ads_bringup stack.launch.py gui:=false rviz:=false perception:=true dynamic:=both
 python3 scripts/record_perception_run.py --duration-s 72 --out /tmp/p5.csv   # 早起！
 python3 scripts/record_control_run.py --goal 91.75 20.0 --out /tmp/p5_ctrl.csv
+# 一键版（P9-S3 起，与云端 l3c_p5_round.sh 同一协议：记录器早起 + goal 37）：
+./scripts/l3g_p5_round.sh --rounds 3           # 产物 .scenario_runs/p5_<时间戳>/，改感知/传感器几何时当基线
+# 四模块每拍耗时（perception/prediction/planning/control 的 diagnostics，两环境同一把尺子）：
+python3 scripts/p9_timing_probe.py --duration-s 200 --out /tmp/timing.csv   # 在任何一轮旁边跑
 # CP-P6-B：预测验收，**双层协议**（决策七）。层 1（真值输入）全过再跑层 2 两轮。
 #   记录器等仿真钟 ≥10 起；目标点要在 sim≈37–41 生效 —— ⚠️ record_control_run
 #   的启动链在高负载下会把目标点拖后 ~20 s（rclpy 冷启动 + 内部延迟），
@@ -784,6 +788,8 @@ L4 回归。
 20 GB 镜像、跑不确定），只有 CARLA 的话 L3 层就只能人工跑，而人工跑的测试三个月后一定没人跑。
 
 场景测试必须有**可量化的通过判据**。「没崩溃」不等于「对了」。
+**异常注入清单**在 [docs/fault_injection.md](docs/fault_injection.md)（P9-S5b）：改任何守卫/超时/看门狗前先查那张表，
+补守卫时把新行加进去；`test_perception_silence.py`（感知断流 → 规划停发 → 控制刹停）是它的第一条跨模块用例。
 
 ---
 

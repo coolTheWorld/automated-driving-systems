@@ -1,0 +1,10 @@
+topic                      key                 n      p50      p95      max
+/perception/diagnostics    total_ms          227     6.86    23.84    30.91
+/perception/diagnostics    ground_ms         227     3.13     4.27     6.73
+/perception/diagnostics    cluster_ms        227     2.08    17.39    22.77
+/perception/diagnostics    fit_ms            227     1.06     2.96     3.66
+/perception/diagnostics    track_ms          227     0.07     0.20     0.58
+/prediction/diagnostics    total_ms            0      —        —        —（没收到）
+/planning/diagnostics      cycle_ms         2295     0.03    19.35    33.02
+/control/diagnostics       cycle_time_ms   11461     0.00     0.00     5.00
+原值 14891 行 → /workspace/.timing_gz_r100.csv

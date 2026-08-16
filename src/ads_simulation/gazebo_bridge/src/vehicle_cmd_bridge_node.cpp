@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 #include <ads_msgs/msg/vehicle_cmd.hpp>
@@ -81,6 +82,20 @@ public:
     // 调小：更安全，但指令发布频率稍有波动就会被误判为失联。
     // 0.5 s 对应 teleop 的 20 Hz 发布率有 10 帧余量。
     cmd_timeout_s_ = declare_parameter<double>("cmd_timeout_s", 0.5);
+    // 仿真钟停走的守卫（P9-S5b 异常注入清单 #14，2026-08-16）：**墙钟**计时。
+    //
+    // 上面那只看门狗与本节点的积分定时器都跑在仿真钟上 —— /clock 一停
+    // （parameter_bridge 死了、话题断了）它们就一起冻住：既判不出失联，也发不出
+    // 刹车，Gazebo 的插件带着**最后一条速度指令一直开**（陷阱表「仿真钟停走时
+    // 控制器冻住而不降级」，实测过：想测里程计超时杀掉 parameter_bridge，结果
+    // 什么都没发生 —— 那个进程恰是 /clock 的来源）。真车的墙钟不会停，这是
+    // 仿真特有的洞，堵它只能用墙钟：仿真钟连续 clock_stall_s（墙钟秒）没走 ⟹
+    // 发零速。这不是算法时序（SPEC §5 禁的是拿 now() 做控制律的 dt），是健康检查
+    // —— 与 sidecar 的墙钟节拍线程同一豁免。仿真被人为暂停时物理也停着，多发一条
+    // 零速无害；只有「物理在跑、钟没了」这一种情况它才真起作用，而那正是要防的。
+    // 取 1.0 s：/clock 标称 100 Hz（Gazebo 侧 gz→ROS 桥）的 100 拍，RTF 抖动够不着；
+    // 调小 → 仿真卡顿（大世界加载）就误刹；调大 → 失控时间等比变长。
+    clock_stall_s_ = declare_parameter<double>("clock_stall_s", 1.0);
 
     // 速度设定值允许超前实测速度多少。这是积分器的抗饱和（anti-windup）。
     //
@@ -112,6 +127,10 @@ public:
     timer_ = rclcpp::create_timer(
       this, get_clock(), rclcpp::Duration::from_seconds(1.0 / rate_hz),
       std::bind(&VehicleCmdBridge::on_timer, this));
+    // 墙钟守卫单独一只 wall timer —— 它必须在仿真钟冻住时照样跑，
+    // 所以**不能**与上面的积分定时器共用节点时钟。
+    stall_timer_ = create_wall_timer(
+      std::chrono::milliseconds(200), std::bind(&VehicleCmdBridge::on_stall_check, this));
 
     RCLCPP_INFO(
       get_logger(),
@@ -237,6 +256,44 @@ private:
     pub_->publish(twist);
   }
 
+  void on_stall_check()
+  {
+    // 仿真钟走没走：只看节点时钟读数有没有变（不看 dt 的值 —— 值属于积分定时器）。
+    const rclcpp::Time sim_now = now();
+    const auto wall_now = std::chrono::steady_clock::now();
+    if (sim_now.nanoseconds() != last_seen_sim_ns_) {
+      last_seen_sim_ns_ = sim_now.nanoseconds();
+      last_sim_progress_wall_ = wall_now;
+      clock_armed_ = clock_armed_ || sim_now.nanoseconds() > 0;
+      if (stalled_) {
+        stalled_ = false;
+        RCLCPP_WARN(get_logger(), "仿真钟恢复走动，解除零速保持");
+      }
+      return;
+    }
+    // 还没见过仿真钟走过（刚起、还没收到 /clock）—— 不算停走，别在启动阶段误报
+    if (!clock_armed_) {
+      return;
+    }
+    const double stalled_s =
+      std::chrono::duration<double>(wall_now - last_sim_progress_wall_).count();
+    if (stalled_s < clock_stall_s_) {
+      return;
+    }
+    if (!stalled_) {
+      stalled_ = true;
+      RCLCPP_ERROR(
+        get_logger(),
+        "仿真钟已 %.1f s（墙钟）没有走动 —— /clock 断了？物理若还在跑，车会带着最后一条"
+        "指令一直开。改发零速直到钟恢复。",
+        stalled_s);
+    }
+    // 每 200 ms 重发零速：VelocityControl 不发就保持旧速度，「停」必须一直说。
+    speed_setpoint_mps_ = 0.0;
+    geometry_msgs::msg::Twist stop;
+    pub_->publish(stop);
+  }
+
   double wheelbase_m_{0.0};
   double max_steer_rad_{0.0};
   double max_speed_mps_{0.0};
@@ -244,7 +301,13 @@ private:
   double max_decel_{0.0};
   double emergency_decel_{0.0};
   double cmd_timeout_s_{0.5};
+  double clock_stall_s_{1.0};
   double setpoint_lead_mps_{1.0};
+  // 仿真钟停走守卫的状态（墙钟）
+  std::int64_t last_seen_sim_ns_{-1};
+  std::chrono::steady_clock::time_point last_sim_progress_wall_{std::chrono::steady_clock::now()};
+  bool clock_armed_{false};
+  bool stalled_{false};
 
   // 最近一条（已限幅的）指令
   double steer_rad_{0.0};
@@ -259,6 +322,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr stall_timer_;
 };
 
 }  // namespace ads_simulation

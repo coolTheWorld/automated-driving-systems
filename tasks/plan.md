@@ -3223,7 +3223,7 @@ S5 性能优化与鲁棒性（P9 后半，S3 后另拆）
 | S3b | **雷达挂高**（vehicle_params 单一来源，两环境一起动）✅ **本地半区完成（2026-08-15）**：`mount_z_m` 1.6 → **2.2**，SDF/URDF 重生成 `--check` 过；`verify_ros_bridge.sh` 6/6（Δz=2.2）；sidecar 量程改读 yaml（此前写死 30 vs Gazebo 50，单一来源漏网）；文档同步（vehicle_params 推导按 Δz=0.7 重写、CLAUDE 两行、perception.md §5/§8.2、check_cloud_frames）。**Gazebo 基线（新脚本 `l3g_p5_round.sh`，同日同机）**：1.6 → 车 98.1%/行人 100%/近边 0.189/横向 0.327/速度 0.62/ID 4/虚警 0；2.2 ×3 → 车 98.1-99.1%/行人 100%/近边 0.14-0.18/横向 0.29-0.30/速度 0.41-0.93/ID 4·3·7/**虚警 3·3·3 帧**（U 转处旧航迹被新航迹「遮挡」按 §6.5 滑行 0.3–0.7 s，y 越过车道带边 1–50 cm —— 1.6 时同一鬼影落在带外；机理见 P9-4 附记，属 P5 已知形态「贴边摆」的姊妹，判据不放宽，待拍板）；`run_all_scenarios.sh gazebo` **9/9 全过**。CARLA 半区（裸测自反射≈0、CP-P9-A）待云机 | Gazebo：CP-P5-B 与 P8 基线同量级（检测率/近边/横向/虚警零劣化，允许 ID 切换 ≤ 基线）；CARLA：裸测 `p9_lidar_probe.py` 自反射 ≈0、`l3c_p5_round` 3-10 m 车速度 p95 从 1.64 回落 |
 | S3a | **远距聚类断裂**（共享感知代码）✅ **本地半区完成（2026-08-15）**：`euclidean_cluster` 竖向各向异性 —— 参数取名 `cluster.vertical_tolerance_m`（1.0，聚类前 z × tolerance/vertical，椭球邻域），推导入 euclidean_cluster.hpp / perception.md §2 / yaml；L1 +2（28 m 阶梯正面 1 簇 vs 各向同性 3 簇 —— 注入验红；并排 1.0 m 仍两簇）+ 老用例的反向注入补竖向同收；`colcon test` 绿。**Gazebo 三轮（2.2 + 竖向 1.0）**：车 25–30 m 档 91.9/100/90.0 → **100/100/100%**、行人 25–30 m 96.9/100/90.5 → **100/100/100%**、近边 0.14–0.17、横向 0.23–0.33、速度 0.39–0.91；ID 切换 6/6/3（未改善 —— 逐条看全在 U 转 9–10 m、过身 12–20 m、再入 29.7 m，是近场贴边摆不是远距断簇）、虚警 7/2/4（同 S3b 那只 U 转鬼影）。CARLA 半区（micra 正对 23–33 m 是否并成一簇、ID 切换、CP-P9-A ×2）待云机 | ID 切换 ≤2、近边 p95 <0.5、速度 p95 <1.0（CP-P5-B 原判据）；Gazebo 侧零劣化 |
 | S4 | 行为×3 感知层【CP-P9-B】✅ **已达成（2026-08-16，窗口 5）**：follow truth 5/5（跟停 6.15）+ perception 5/5（跟停 5.82、TTC 2.46、恢复 2.10）；crossing truth 5/5 + perception 5/5（停距 5.90、最近 1.66、恢复 1.30、切换 3）；junction truth 4/4 + perception 4/4（对车流 4.02/5.51、让行-通过、切换 3）；照印条款 ⑨ 三场景感知层均 ≤3。**途中钉死一案**：junction 三辆 cross_car 共用首航点，CARLA spawn 碰撞检查只放第一辆上路，P9-S2 真车化后回退高空的 b/c 带重力**摔在 a 身上**（首轮 truth 层让行 False、车流最近 15.8 m —— 根本没有车流）；修为「天上停车场」：关重力挂着等出发相位，npc_controller 发第一条非零 cmd 时落到首航点（前车已走 6 s/24 m），等待期真值报剧本位姿。全部 CARLA 侧，Gazebo 无影响 | behavior perception 层三场景 + P8 遗留照印条款；真值层回归零劣化 |
-| S5 | 性能与鲁棒（按实测另拆：模块耗时表、异常注入清单、S01 跟踪根治评估、**U 转鬼影**（§6.5 遮挡滑行 × 重锚跳变，P9-4 附记）、ID 近场贴边摆、车辆先验对短车的偏置） | 占位 —— 拆片前先跑一遍两环境全表拿耗时/异常基线。**耗时基线已采（2026-08-16，`p9_timing_probe.py`，follow 感知层，p50/p95/max ms）**：perception total CARLA 7.5/8.2/11.7 · Gazebo 11.3/21.3/32.5（ground_ms 占大头 6.9–8.1 —— RANSAC 300 是 S5 头号优化候选；cluster 竖向容差后 Gazebo p95 9.8）；prediction 0.06/0.55/0.87 · 0.19/0.74/1.65；planning cycle 0.03/2.4/4.3 · 0.05/14.5/29.1；control 0/0/0 · 0/0/4。Gazebo 数字是 WSL2 笔记本（780M/8 核）与 gz 同机跑出来的，绝对值不可比、分布形状可比。产物 `.p9w4/timing_*` |
+| S5 | 性能与鲁棒 —— **2026-08-16 按 S3/S4 实测拆成 S5a–S5d（见 P9-5）**；耗时基线已采（`p9_timing_probe.py`，follow 感知层，p50/p95/max ms）：perception total CARLA 7.5/8.2/11.7 · Gazebo(WSL2) 11.3/21.3/32.5（ground_ms 占大头 6.9–8.1 —— RANSAC 300 是 S5a 头号候选；cluster 竖向容差后 Gazebo p95 9.8）；prediction 0.06/0.55/0.87 · 0.19/0.74/1.65；planning cycle 0.03/2.4/4.3 · 0.05/14.5/29.1；control 0/0/0 · 0/0/4。Gazebo 数字是 WSL2 笔记本（780M/8 核）与 gz 同机跑出来的，绝对值不可比、分布形状可比。产物 `.p9w4/timing_*` | S5a【CP-P9-C】/ S5b【CP-P9-D】/ S5c【CP-P9-E】出口见 P9-5 |
 
 ## P9-2. 检查点判据（初值）
 
@@ -3309,3 +3309,21 @@ L-Shape 轴向翻转 + 车辆先验锚定让框中心一步跳 ~2 m → 关联�
   滑行按普通 miss 计数（0.5 s 内消失），不给 3 s。要带 L1 注入 + P5 遮挡窗口回归。
 · CARLA 真车不原地掉头（副本航点直道进出），CP-P9-A 不受此影响；Gazebo 侧这条
   判据的 3–7 帧红是**已知形态**，与 ID 切换 2–7 同列，判据不放宽。
+
+## P9-5. P9-S5 拆片（2026-08-16，按 S3/S4 实测拆；每片有亲眼可验的出口）
+
+```
+S5a 耗时账【CP-P9-C】──▶ S5b 异常注入清单【CP-P9-D】──▶ S5c 跟踪鲁棒【CP-P9-E】──▶ S5d S01 跟踪根治评估（需云机，评估后再决定做不做）
+```
+
+| 片 | 内容 | 出口（亲眼可验） |
+|---|---|---|
+| S5a | **耗时账** 🔶 **②✅ ①部分**（2026-08-16）：② `ground.max_iterations` 300→**100**（撤墙后 CARLA slope_rejected 中位 1）—— Gazebo CP-P5-B ×3 全表同量级（车 98.1–98.6%/行人 100%/近边 0.13–0.15/横向 0.28–0.29/速度 0.34–0.68/ID 4–5/虚警 2·11·4 = U 转鬼影 + 过身贴边摆两种已知形态）、`ground_ms` p50 8.1 → **3.1 ms**、perception total p50 11.3 → **6.9**；CARLA 半区下窗口复核（概率账 100 次 1−1.4e-6 与 slope_rejected 1 都说安全）。① 预算表：WSL2 上 perception p95 仍 23.8 ms（**cluster_ms p95 17.4**：50 m 量程内 Gazebo 建筑/杆件的大簇 BFS，p50 才 2.1）、planning p95 19.4；云机 15 核上分别 8.2 / 2.4 —— 本地开发机不是目标硬件。③「移出回调」= 线程模型改动，**待用户拍板**（10 Hz 周期 100 ms 下 p95 24 ms 不影响功能，SPEC §7 字面 >10 ms 要挪线程；候选：worker 线程 + 最新帧丢旧，或先做 cluster 的体素下采样/BFS 优化再看） | 两环境耗时表全在预算内（或超预算项有拍板记录）；A/B 表入 perception.md |
+| S5b | **异常注入清单** 🔶（2026-08-16）：表已立 —— [docs/fault_injection.md](../docs/fault_injection.md)（15 行：故障 × 期望 × 守卫 × 缺口，SPEC §8 与 CLAUDE 已链）；新增两条跨模块守卫并注入验红：**#4 感知静默链路** `ads_control/test/test_perception_silence.py`（障碍物流中途断 → 规划 `obstacle_timeout` ERROR 1.06 s → 控制 STALE 1.48 s → 停；注入 timeout=1e9 → 车开到头验红）、**#14 仿真钟停走** `vehicle_cmd_bridge` 墙钟守卫 `clock_stall_s` 1.0 + `gazebo_bridge/test/test_vehicle_cmd_bridge_clock_stall.py`（停钟 1.38 s 后零速、恢复后回 1.0 m/s；注入「不建 stall_timer」验红 —— 停钟后桥再无输出，正是被守的洞）。剩余缺口按表 §2 顺序：#7 点云陈旧、#6 预测断流、#11 定位超时降级、#13 TF 一开始就不发、#15 无路由、#9 控制静默 CI 用例。全仓 1147 tests 绿 | 表里每行有自动化红绿或写明「抓不到 + 为什么」；新增用例注入验红 |
+| S5c | **跟踪鲁棒**：① U 转鬼影（§6.5 遮挡滑行 × 重锚跳变：遮挡者若是刚出生 ≤0.3 s、≤ anchor_shift_max 的航迹按重锚不按遮挡，见 P9-4 附记）；② 近场 ID 贴边摆（Gazebo 3–7 / CARLA 已 0）；③ 车辆先验对短车的保守偏置（记录即可，改先验要动 P8-S2b 锚定链路，先不动） | L1 注入验红 + Gazebo CP-P5-B ×3：ID 切换 ≤2、虚警 0（本阶段第一次把这两条也变绿）；CARLA CP-P9-A 复测 9/9（需云机） |
+| S5d | S01 跟踪根治评估（CARLA 弯道油门映射超调，P8 入表放行的四条）：中速段标定戏 | 评估报告 + 拍板；需云机 |
+
+**CP-P9-C（S5a 出口）**：两环境 `p9_timing_probe` 表全在预算内；RANSAC A/B 两环境判据表零劣化。
+**CP-P9-D（S5b 出口）**：异常注入表每行有自动化红绿，新增用例进 CI。
+**CP-P9-E（S5c 出口）**：Gazebo CP-P5-B 九条全绿三轮 + CARLA CP-P9-A 复测。
+

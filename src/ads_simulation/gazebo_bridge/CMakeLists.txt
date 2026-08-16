@@ -124,8 +124,15 @@ if(BUILD_TESTING)
     ENV
       # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，
       #    分配表：ads_control 41/42/46/48/49、ads_localization 43、
-      #    ads_perception 44、gazebo_bridge 45、ads_prediction 47。
+      #    ads_perception 44、gazebo_bridge 45/51、ads_prediction 47、ads_control 50（感知静默）。
       ROS_DOMAIN_ID=45)
+
+  # 仿真钟停走守卫（P9-S5b，异常注入清单 #14）：/clock 停了桥必须发零速 ——
+  # 看门狗与积分定时器都在仿真钟上，只有墙钟守卫能在钟冻住时接管。测试自己发钟。
+  add_launch_test(test/test_vehicle_cmd_bridge_clock_stall.py
+    TIMEOUT 60
+    ENV
+      ROS_DOMAIN_ID=51)
 endif()
 
 ament_package()

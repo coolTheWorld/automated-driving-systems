@@ -77,15 +77,14 @@ BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
 4. **NDT 卡方地板/门限**：世界与地图不同源，散布分布会变 ——
    拿 `.p8s2c/collect_d2.py` 同一把尺子重量（localization.md §10.6b）。
 
-## 5. S4 遗留的两个决策点（上机前找用户拍板）
+## 5. S4 遗留的两个决策点（已了结，留作记录）
 
-1. **红绿灯消息**：S06 需要灯态 + 停止线话题 —— 新增 `ads_msgs/TrafficLight`
-   属于「修改 ads_msgs 接口」（CLAUDE.md 先问后做）。最小闭环拍板过深度，
-   消息形态没拍。
-2. **NPC 编排**：L3-C 的 S03/S05/junction 需要 CARLA 侧 NPC。方案 a：sidecar
-   读 dynamic_actors.yaml spawn CARLA actor + set_target_velocity 复刻航点驱动
-   （与 Gazebo 同一份 YAML，单一来源）；方案 b：CARLA Traffic Manager 自动驾驶
-   （省事但行为不可复刻，判据窗口对不上）。倾向 a。
+1. **红绿灯消息** ✅（P8-S6）：`ads_msgs/TrafficLight`（灯态 + 停止线），由 sidecar 侧的
+   `traffic_light_node` 相位机发 `/traffic_light/state`；S06 净环境 2/2。
+2. **NPC 编排** ✅ 方案 a（P8-S4b 拍板）：sidecar 读同一份 dynamic_actors.yaml spawn，
+   复用 gazebo_bridge 的 npc_controller；驱动方式几经实测演化 —— 瞬移（P8）→ 车辆
+   apply_control 物理闭环（P9-S2，「近瞬移期隐形」理论后来作废但物理驱动留下了）→
+   共用首航点的车队「天上停车场」（P9 窗口 5）。见 §6 #7 与 `carla_sidecar_node._spawn_npcs`。
 
 ## 6. 两环境一致性差异表（CP-P8-B ③，2026-08-14 收口）
 
@@ -106,7 +105,7 @@ BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
 | 9 | **感知域差距（P5 复测结论）** | 检测率 0-6%（行人 0%）、3437 帧车道内虚警（6.0×3.2 板块 = 路面被聚成障碍物）—— 地面分割/聚类的参数域绑定 Gazebo 世界（平面地板 z=0、无墙、盒型行人） | **复测条款完成（量化+定性）**；P9 窗口 4 定案：病根**四条全在 sidecar 传感器/真值链路**（raw_data 内存别名 → 每帧只有半个世界；y 不翻；actor 原点当 base_link → 点云前移 1.41 m；行人瞬移 z=0.2 埋地），感知算法一行没改，表从 0% 到车/行人检测率 100%、横向 0.26、虚警 0（round 4/5）；余下近边 0.68 / 速度 1.07 / ID 切换 6 见 P9-S2 台账 | l3c_p5_round ×5 |
 | 10 | 驱动栈 | 580-open × UE4.26 = Xid 32 秒崩；550 专有版正常 | 上机自检第 0 步查驱动版本；降级流程入 §0。⚠️ 窗口 3（5090）与窗口 5（**另一台 4090**）580-open 都能跑 —— 「4090 × 580-open 必崩」不成立，是宿主特异；开场脚本以服务端冒烟为准 | 窗口 2；窗口 3/5 反例 |
 | 11 | **雷达 raw 点手性与拼帧** | CARLA `LidarMeasurement` 点是 UE 左手系（y 右为正）；同步 20 FPS × 10 Hz 转速 = **每 tick 半圈交替**（horizontal_angle 是死字段读不出相位）；`raw_data` 的 memoryview 不持有内存 | sidecar：回调里立刻 `.copy()`、两拍拼整圈、**翻 y**。裸测尺子 `p9_lidar_probe.py`（真值算到传感器系逐 tick 对表），栈内回归 `p9_mirror_probe.py`（只数离地点） | 窗口 4 round 1→2：车检测率 0%→44%（再修 base_link 后 100%） |
-| 12 | **base_link 基准与传感器挂点** | CARLA actor 原点 = 包围盒 xy 中心（c3 后轴在原点后 1.410、micra 1.317），Gazebo 模型原点 = 后轴 | sidecar 从物理轮位读偏移：spawn 把后轴放到 spawn 点、/ego_pose_gt·/odom·TF 报后轴、传感器按 mount − 偏移挂；NPC 真值用 micra 实际包围盒（3.634×1.846×1.502，offset 0，spawn 时对账差 >2 cm 报错）；walker root z=extent+0.02、真值 z 报物理底面 | round 3→4：横向 1.26→0.26、近边 1.52→0.68、行人类别 STATIC→PEDESTRIAN |
+| 12 | **base_link 基准与传感器挂点** | CARLA actor 原点 = 包围盒 xy 中心（c3 后轴在原点后 1.410、micra 1.317），Gazebo 模型原点 = 后轴 | sidecar 从物理轮位读偏移：spawn 把后轴放到 spawn 点、/ego_pose_gt·/odom·TF 报后轴、传感器按 mount − 偏移挂；NPC 真值用道具实际包围盒（`npc_kinematics.CARLA_NPC_VEHICLE_SIZE_M`，现 seat.leon 4.193×1.816×1.474，offset 0，spawn 时对账差 >2 cm 报错）；walker root z=extent+0.02、真值 z 报物理底面 | round 3→4：横向 1.26→0.26、近边 1.52→0.68、行人类别 STATIC→PEDESTRIAN |
 | 13 | **雷达自反射（车顶）** | c3 车顶顶点 1.571 m，雷达 mount_z 1.6 → 相差 2.9 cm，**60% 射线打自己车顶**（每 tick 11k/18k），后左扇区连 −5° 通道都被挡；CARLA 无 `range_min` 近裁剪，Gazebo 的透顶技巧不存在。裸测：1.9 剩 4%，2.2 归零 | **已修（P9-S3b，2026-08-15，本地半区）** —— `mount_z_m` 1.6 → **2.2**（vehicle_params 单一来源，SDF/URDF 重生成；sidecar 量程也改读 yaml，此前写死 30 vs 50）。Gazebo 回归：CP-P5-B 三轮同量级 + run_all 9/9（细节 plan P9-S3b）。CARLA 半区待云机：裸测自反射应 ≈0，round 4 车 3-10 m 速度误差 p95 1.64 应回落 | `p9_lidar_probe.py --lidar-z` |
 | 14 | **远距聚类断裂（32 线 × 0.5 m 容差）** | ≥25 m 处相邻通道在竖直面上间距 ≈0.49 m ≈ 聚类容差 0.5：Gazebo 盒子车平面正对面勉强连通，micra 保险杠/引擎盖前后错开就断成 2 簇（1.2–1.7 × 0.1–1.0 的条），跟踪器在两条之间摆 → ID 切换、近边 ±1 m、速度 p95 3.08（20-25 m） | **已修（P9-S3a，2026-08-15，本地半区）** —— `cluster.vertical_tolerance_m` 1.0（竖向各向异性，聚类前 z × 0.5；推导 euclidean_cluster.hpp）；L1 +2 注入验红；Gazebo 车/行人 25–30 m 档 → 100%。CARLA 半区待云机：micra 正对 23–33 m 应并成一簇、ID 切换/近边/速度三项复测 | round 4 时间线 t=17-19.6 |
 
