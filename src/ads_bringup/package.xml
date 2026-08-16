@@ -29,6 +29,16 @@
        就是为了在测试期抓住它，本次它确实抓住了。 -->
   <exec_depend>ads_control</exec_depend>
   <exec_depend>ads_planning</exec_depend>
+  <!-- P8-S4：sim:=carla 时 include carla_bridge 的 launch；stack.launch 里 sim 源注册表指着它。
+       ⚠️ 漏了这一行 CI 就红（2026-08-14 起整整两天没人看 CI）：colcon test 只把 package.xml
+       里声明的依赖放进 AMENT_PREFIX_PATH，test_sim_source 在 CI 里 PackageNotFoundError，
+       而本地 shell 早就 source 了整份 install/setup.bash 所以从不复现 —— 「本地绿 CI 红」的
+       经典形态，2026-08-16 发版复审才抓到。 -->
+  <exec_depend>carla_bridge</exec_depend>
+  <exec_depend>ads_perception</exec_depend>
+  <exec_depend>ads_prediction</exec_depend>
+  <exec_depend>ads_localization</exec_depend>
+  <exec_depend>ads_visualization</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

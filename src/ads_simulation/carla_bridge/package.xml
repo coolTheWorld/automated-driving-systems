@@ -25,6 +25,9 @@
   <exec_depend>ads_visualization</exec_depend>
   <exec_depend>gazebo_bridge</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
+  <!-- launch 里读 ads_planning 的 share（vehicle_params.yaml）—— 漏声明的话本地绿、CI 红
+       （colcon test 只给声明过的依赖设 AMENT_PREFIX_PATH；2026-08-16 发版复审抓到）。 -->
+  <exec_depend>ads_planning</exec_depend>
 
   <!-- ⚠️ 没有 carla 的 rosdep 依赖：PythonAPI wheel 只装在云机上。
        sidecar 对 carla 的 import 是**惰性**的（进 main 才 import），
