@@ -72,7 +72,10 @@ cd "$REPO"
 
 guard_residual() {
   local n
-  n=$(ps -eo comm,stat | awk '$2 !~ /^Z/' \
+  # ⚠️ awk 必须只打印进程名那一列：`awk '$2 !~ /^Z/'` 输出的是整行（"control_node S"），
+  #    接 grep -x 精确匹配进程名就**永远匹配不上**，守卫成空操作 —— 2026-08-16 复审实测
+  #    （起一个 comm=control_node 的进程，旧管道 n=0）。「残留检查本身写错比没有更糟」。
+  n=$(ps -eo comm,stat | awk '$2 !~ /^Z/ {print $1}' \
       | grep -cx -E 'ruby|control_node|planning_node|perception_node|prediction_node|localization_node' || true)
   if [ "${n:-0}" -gt 0 ]; then
     echo "❌ 有 ${n} 个残留仿真进程，先收干净（按 PGID，别用 pkill -f）"

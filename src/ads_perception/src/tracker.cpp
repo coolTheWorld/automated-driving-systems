@@ -370,7 +370,7 @@ void Tracker::ApplyUpdate(
     }
   }
   // 先验档的车头朝向跟速度走（停住后保持最近有效值，见 hpp）。
-  if (track->vehicle_prior_anchored && track->velocity().norm() > 0.5) {
+  if (track->vehicle_prior_anchored && track->velocity().norm() > params_.heading_min_speed_mps) {
     track->prior_heading_rad = std::atan2(track->velocity().y(), track->velocity().x());
   }
 
@@ -685,6 +685,26 @@ void Tracker::Update(
     }
   }
 
+  // 重锚候选快照：**已确认、本帧未配上、且不会在下面被删**的航迹（id + 预测位置）。
+  // ⚠️ 必须在 erase 之前、按 assignment 的下标取（两者同长）：erase 之后 tracks_ 左移，
+  //    再拿 assignment[t] 就是**别人的**配对结果 —— 2026-08-16 复审两位审阅者各自用探针
+  //    坐实：同帧有航迹到期删除时，一条本帧命中的确认航迹会被记成新检测的重锚候选、
+  //    两帧后被错误 superseded（前车从发布里消失 0.5 s）；反向则让 U 转鬼影漏网。
+  //    此前那版只把上界收成 n_existing（修了越界那一半），语义错位这一半仍在。
+  struct ReanchorCandidate
+  {
+    std::uint32_t id;
+    Eigen::Vector2d position;
+  };
+  std::vector<ReanchorCandidate> reanchor_candidates;
+  for (std::size_t t = 0; t < tracks_.size(); ++t) {
+    if (
+      tracks_[t].confirmed && assignment[t] < 0 &&
+      tracks_[t].consecutive_misses < params_.max_misses) {
+      reanchor_candidates.push_back({tracks_[t].id, tracks_[t].position()});
+    }
+  }
+
   // 删除连续未命中太久的航迹。
   tracks_.erase(
     std::remove_if(
@@ -693,11 +713,6 @@ void Tracker::Update(
     tracks_.end());
 
   // 没配上的检测各起一条新航迹（未确认）。
-  // ⚠️ 下面的重锚候选扫描只许看**本帧已存在**的航迹：assignment 的长度就是这一帧
-  //    Predict 时的航迹数，而循环里每建一条新航迹 tracks_ 就长一格 —— 拿 tracks_.size()
-  //    做上界会在 confirm_hits ≤ 1（新航迹出生即确认）时越界读 assignment（2026-08-16 复审
-  //    发现的潜伏越界；默认 confirm_hits=3 时被 `!confirmed` 短路掩住）。
-  const std::size_t n_existing = tracks_.size();
   for (std::size_t d = 0; d < detections.size(); ++d) {
     if (detection_used[d] != 0) {
       continue;
@@ -727,16 +742,16 @@ void Tracker::Update(
     // ≤ anchor_shift_max（同一目标换个框能造成的最大中心位移）**。这一帧只记
     // 候选，兑现放在新航迹**确认**那一帧（噪点簇活不到确认，不许它替别人判死刑）。
     double nearest_m = params_.anchor_shift_max_m;
-    for (std::size_t t = 0; t < n_existing; ++t) {
-      if (!tracks_[t].confirmed || assignment[t] >= 0) {
-        continue;
-      }
-      const double dist_m = (tracks_[t].position() - detections[d].position).norm();
+    for (const ReanchorCandidate & candidate : reanchor_candidates) {
+      const double dist_m = (candidate.position - detections[d].position).norm();
       if (dist_m <= nearest_m) {
         nearest_m = dist_m;
-        track.reanchor_of_id = tracks_[t].id;
+        track.reanchor_of_id = candidate.id;
       }
     }
+    // 出生即写最近观测位置：confirm_hits ≤ 1 时年轻航迹的第一个未命中帧就会按
+    // published_position() 发它 —— 不写就是发 map 原点 (0,0)（复审探针坐实）。
+    track.last_observed_position = detections[d].position;
     tracks_.push_back(track);
   }
 

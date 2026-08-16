@@ -76,6 +76,8 @@ services:
 
       # 单机开发用固定 DOMAIN_ID，避免和局域网内其他 ROS 2 实例串话
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+      # DDS 发现只在本机（与云端 compose 同一条理由，2026-08-16 安全复审）：全部节点同容器。
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
 
       # Gazebo 的资源搜索路径，两个用途：
       #

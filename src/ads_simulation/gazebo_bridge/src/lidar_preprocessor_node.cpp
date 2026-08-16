@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -158,8 +159,49 @@ public:
   }
 
 private:
+  /// PointCloud2 结构校验 —— 与 perception_node.cpp 的 CloudLayoutOk 是**同一份**（改一处改两处）。
+  /// 迭代器按 point_step 步进、指针不等判 end：data.size() 不是整数倍时越界读，
+  /// point_step == 0 死循环；这里的 filter_in_place 还会按 total 逐点 memcpy。
+  static bool cloud_layout_ok(const sensor_msgs::msg::PointCloud2 & cloud, std::string * why)
+  {
+    if (cloud.point_step == 0) {
+      *why = "point_step == 0";
+      return false;
+    }
+    const std::uint64_t n = static_cast<std::uint64_t>(cloud.width) * cloud.height;
+    if (cloud.data.size() != n * cloud.point_step) {
+      *why = "data.size() != width*height*point_step";
+      return false;
+    }
+    if (cloud.height > 1 && cloud.row_step != cloud.width * cloud.point_step) {
+      *why = "row_step != width*point_step";
+      return false;
+    }
+    for (const char * name : {"x", "y", "z"}) {
+      const sensor_msgs::msg::PointField * field = nullptr;
+      for (const auto & candidate : cloud.fields) {
+        if (candidate.name == name) {
+          field = &candidate;
+        }
+      }
+      if (
+        field == nullptr || field->datatype != sensor_msgs::msg::PointField::FLOAT32 ||
+        field->offset + sizeof(float) > cloud.point_step) {
+        *why = std::string("字段 ") + name + " 缺失/非 FLOAT32/越出 point_step";
+        return false;
+      }
+    }
+    return true;
+  }
+
   void on_cloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
   {
+    std::string why;
+    if (!cloud_layout_ok(*msg, &why)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "点云结构非法（%s），丢弃本帧", why.c_str());
+      return;
+    }
     geometry_msgs::msg::TransformStamped tf;
     try {
       tf = tf_buffer_->lookupTransform(

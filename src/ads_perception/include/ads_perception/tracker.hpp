@@ -483,18 +483,19 @@ public:
   ///
   /// 看不见的那部分**一定藏在背离传感器的一侧**（雷达只打得到朝向自己的面），
   /// 所以沿盒子自身的两个轴，各朝背离传感器的方向挪半个缺口。
+  /// 车辆形状先验：沿**车头方向**把观测框补成 4.4 × 1.8 先验盒的位移。空 = 不适用。
+  /// 推导与门控见 .cpp 实现的注释（P8-S2b 立，P9-S5c 改沿车头）。
+  std::optional<Eigen::Vector2d> VehiclePriorPush(
+    const Detection & detection, const Track & track,
+    const Eigen::Vector2d & sensor_position) const;
+
+  /// 把检测中心补全成「整个目标的中心」（先验优先，其次按记忆沿轴补缺）。
   /// 轴向不一致或没有缺口时原样返回。
   ///
   /// @param detection       本帧检测
   /// @param track           提供已知尺寸的航迹
   /// @param sensor_position 传感器位置，与 detection 同系
   /// @return 补全后的中心
-  /// 车辆形状先验的沿视线补全量（正对/背对情形）。空 = 不适用。
-  /// 推导与三层门控见 .cpp 实现的注释（P8-S2b）。
-  std::optional<Eigen::Vector2d> VehiclePriorPush(
-    const Detection & detection, const Track & track,
-    const Eigen::Vector2d & sensor_position) const;
-
   Eigen::Vector2d CompletedCenter(
     const Detection & detection, const Track & track,
     const Eigen::Vector2d & sensor_position) const;
@@ -522,7 +523,7 @@ private:
 
   /// 航迹的预测位置是否被**另一条已确认航迹**挡住了视线。
   ///
-  /// 公开是为了测试能直接验几何（线段-OBB 相交，slab 法精确解）。
+  /// 线段-OBB 相交（slab 法精确解）；被取代的旧航迹与未确认航迹都不算遮挡者。
   ///
   /// @param track           被查的航迹
   /// @param sensor_position 传感器位置，与航迹同系

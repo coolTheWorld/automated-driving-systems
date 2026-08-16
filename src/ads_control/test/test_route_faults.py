@@ -189,11 +189,16 @@ class TestRouteFaultsKeepTheCarParked(unittest.TestCase):
         # ---- ③ 无路由目标：空 Path 被忽略、没有新路线，车不动 ----
         # 等它到达/停稳后再注入，否则「不动」量的是上一条路线。GOAL_REACHED 且速度归零即算稳。
         deadline = time.monotonic() + 40.0
+        settled = False
         while time.monotonic() < deadline:
             self._spin(0.5)
             if self.control_samples and self.control_samples[-1][0] == 'GOAL_REACHED' \
                     and abs(self.control_samples[-1][1]) < 0.05:
+                settled = True
                 break
+        # 前提必须显式断言（复审）：超时没停稳就注入，③ 会以「车却在跟踪」误导性变红。
+        last = self.control_samples[-1] if self.control_samples else None
+        self.assertTrue(settled, f'40 s 内车没有到达并停稳，③ 的前提不成立；末拍 {last}')
         self._send_goal(500.0, 500.0)
         self._assert_parked(4.0, '目标点 (500,500) 无路由')
 

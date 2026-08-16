@@ -43,9 +43,14 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
       DISPLAY: ":99"                     # Xvfb / x11vnc，P0b 补
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+      # DDS 发现只在本机（Jazzy 默认 SUBNET = 组播 + 单播）：host 网络下否则同网段任何对端都能
+      # 订阅全部话题、发布 /vehicle_cmd /goal_pose 与畸形点云 —— 整套 ROS 图无鉴权
+      # （2026-08-16 安全复审 Medium）。全部节点同机同容器，LOCALHOST 足够；launch 测试按域隔离不受影响。
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
 
-    ports:
-      - "6080:6080"                      # noVNC
+    # ⚠️ 不再声明 ports：下面是 network_mode: host，ports 无效（死配置）；而且任何可视化端口
+    #    （CARLA 画面 carla_view.py 8080）都只绑回环、经 ssh -L 隧道访问 —— 公网无鉴权端口不做
+    #    （2026-08-16 安全复审）。
 
     shm_size: "2gb"
     ipc: host

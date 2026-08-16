@@ -56,6 +56,11 @@ double required_double(const XMLElement * elem, const char * name, const std::st
   if (elem->QueryDoubleAttribute(name, &value) != tinyxml2::XML_SUCCESS) {
     fail(where, std::string("属性 ") + name + " 缺失或不是数字");
   }
+  // strtod 接受 "inf"/"nan"（2026-08-16 安全复审 Low）：非有限的曲率/长度会沿几何求值
+  // 无声传播（NaN 比较恒假，见 CLAUDE.md 陷阱表）—— 在门口拦。
+  if (!std::isfinite(value)) {
+    fail(where, std::string("属性 ") + name + " 不是有限数");
+  }
   return value;
 }
 
@@ -72,6 +77,9 @@ double optional_double(const XMLElement * elem, const char * name, double fallba
 {
   double value = fallback;
   elem->QueryDoubleAttribute(name, &value);  // 失败时保持 fallback，符合语义
+  if (!std::isfinite(value)) {
+    fail(std::string("属性 ") + name, "不是有限数（inf/nan 会被 strtod 接受）");
+  }
   return value;
 }
 

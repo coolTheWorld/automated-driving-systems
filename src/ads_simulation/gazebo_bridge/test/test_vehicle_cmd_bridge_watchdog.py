@@ -93,10 +93,16 @@ class TestWatchdogVsNanStream(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
-    def _drive(self, duration_s, accel, steer=0.0):
-        """Publish commands at 50 Hz for duration_s while spinning."""
-        deadline = time.monotonic() + duration_s
-        while time.monotonic() < deadline:
+    def _drive(self, duration_s, accel, steer=0.0, until_speed_above=None, timeout_s=8.0):
+        """
+        Publish commands at 50 Hz while spinning.
+
+        无 until_speed_above：发 duration_s（墙钟）就停。给了 until_speed_above：先发到输出速度
+        超过该值（前提建立）再多发 duration_s —— 前提用**轮询**而不是固定窗口：第二个用例
+        setUp 新建 tester 节点后要重新经历 DDS 发现，1.2 s 固定窗口里前一大半指令根本没到桥，
+        全量 colcon test 并行时实测报「0.300 not greater than 0.5」（2026-08-16 复审 flake）。
+        """
+        def publish_once():
             cmd = VehicleCmd()
             cmd.header.stamp = self.node.get_clock().now().to_msg()
             cmd.steer_angle_rad = steer
@@ -104,12 +110,22 @@ class TestWatchdogVsNanStream(unittest.TestCase):
             self.cmd_pub.publish(cmd)
             rclpy.spin_once(self.node, timeout_sec=0.02)
 
+        if until_speed_above is not None:
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                publish_once()
+                if self.outputs and self.outputs[-1].linear.x > until_speed_above:
+                    break
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            publish_once()
+
     def test_nan_stream_triggers_watchdog_brake(self):
         """Valid drive → continuous NaN stream → the bridge must brake to zero."""
         # ---- 阶段一：有效指令，把速度设定值抬起来 --------------------------
         # 没有 /odom ⟹ measured=0 ⟹ 设定值被 lead cap 钳在 1.0 m/s —— 正好，
         # 一个确定的非零值便于断言。
-        self._drive(1.2, accel=1.5)
+        self._drive(0.4, accel=1.5, until_speed_above=0.5)
         self.assertTrue(self.outputs, '桥没有任何输出 —— 节点起来了吗？')
         speed_before = self.outputs[-1].linear.x
         self.assertGreater(speed_before, 0.5, '有效指令没把速度设定值抬起来，测试前提不成立')
@@ -139,7 +155,7 @@ class TestWatchdogVsNanStream(unittest.TestCase):
         # 与 NaN 流那条是同一只看门狗的两张脸：那条守「坏指令不算指令」，
         # 这条守「没有指令」本身 —— teleop 崩了 / ssh 断了 / 控制节点死了的形态。
         # verify_teleop.sh 在真 Gazebo 上量过（6.3 s 后 8.33→0），这里让它进 CI。
-        self._drive(1.2, accel=1.5)
+        self._drive(0.4, accel=1.5, until_speed_above=0.5)
         self.assertTrue(self.outputs, '桥没有任何输出 —— 节点起来了吗？')
         speed_before = self.outputs[-1].linear.x
         self.assertGreater(speed_before, 0.5, '有效指令没把速度设定值抬起来，测试前提不成立')

@@ -98,8 +98,19 @@ class TestClockStallStopsTheCar(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
-    def _run(self, duration_s, tick_clock, accel=1.5):
-        """Spin for duration_s (wall): cmd at 50 Hz, and /clock at 100 Hz if tick_clock."""
+    def _run(self, duration_s, tick_clock, accel=1.5, until_speed_above=None):
+        """
+        Spin for duration_s (wall): cmd at 50 Hz, and /clock at 100 Hz if tick_clock.
+
+        until_speed_above：先跑到输出速度超过它（前提建立，轮询而不是固定窗口 —— DDS 发现
+        期不算在窗口里，见 watchdog 用例同一条复审记录），再多跑 duration_s。
+        """
+        if until_speed_above is not None:
+            premise_deadline = time.monotonic() + 8.0
+            while time.monotonic() < premise_deadline:
+                self._run(0.1, tick_clock, accel)
+                if self.outputs and self.outputs[-1][1] > until_speed_above:
+                    break
         deadline = time.monotonic() + duration_s
         next_clock = 0.0
         while time.monotonic() < deadline:
@@ -119,7 +130,7 @@ class TestClockStallStopsTheCar(unittest.TestCase):
 
     def test_clock_stall_forces_zero_speed_then_recovers(self):
         # ---- 阶段一：钟正常，指令有效，速度设定值抬起来（无 /odom ⟹ 钳在 1.0） ----
-        self._run(2.0, tick_clock=True)
+        self._run(0.5, tick_clock=True, until_speed_above=0.5)
         self.assertTrue(self.outputs, '桥没有任何输出 —— 节点起来了吗？/clock 有没有到？')
         speed_before = self.outputs[-1][1]
         self.assertGreater(speed_before, 0.5, '钟正常时速度设定值没抬起来，测试前提不成立')
@@ -137,9 +148,12 @@ class TestClockStallStopsTheCar(unittest.TestCase):
             zeros,
             f'停钟 {CLOCK_STALL_S + 1.5:.1f} s（墙钟）内桥从未发出零速；末拍 {self.outputs[-1][1]:.2f}')
         latency_s = zeros[0][0] - t_stall_wall
+        # 余量 1.0：守卫定时器粒度 0.2 + 单次调度抖动，实测 1.38 s（0.5 余量只剩 0.12，
+        # 全量并行时会越线 —— 复审）。被守的缺陷形态是「停钟后**完全没有**输出/永不归零」，
+        # 放到 1.0 不失区分力。
         self.assertLess(
-            latency_s, CLOCK_STALL_S + 0.5,
-            f'零速来得太慢：停钟后 {latency_s:.2f} s（阈值 {CLOCK_STALL_S} + 余量 0.5）')
+            latency_s, CLOCK_STALL_S + 1.0,
+            f'零速来得太慢：停钟后 {latency_s:.2f} s（阈值 {CLOCK_STALL_S} + 余量 1.0）')
         self.assertLess(abs(self.outputs[-1][1]), 1e-6, '零速没有保持到停钟阶段末尾')
 
         # ---- 阶段三：钟恢复，车应当重新跟指令 -------------------------------------

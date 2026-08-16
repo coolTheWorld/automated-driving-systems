@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -133,6 +134,35 @@ private:
     int count_cv = 0;
     int count_lane = 0;
     for (const ads_msgs::msg::Obstacle & obstacle : msg->obstacles) {
+      // ---- 逐目标校验非有限值（2026-08-16 安全复审 Low）------------------------
+      // lib 对 NaN/inf 抛 invalid_argument 是对的（算法层不吞坏数据），但节点这一层要在
+      // **单个目标**上接住：此前唯一的 catch 在 main 的 spin 外面，一条 NaN 速度的
+      // ObstacleArray 就能让整个 prediction_node FATAL 退出（下游 expect_prediction 刹停，
+      // 安全方向，但那是 DoS）。丢这一个目标、计数、继续。与 control_node 对轨迹/里程计
+      // 的做法对齐（RequireFinite 纪律的节点侧一半）。
+      const double fields[] = {
+        obstacle.pose.position.x,
+        obstacle.pose.position.y,
+        obstacle.pose.orientation.x,
+        obstacle.pose.orientation.y,
+        obstacle.pose.orientation.z,
+        obstacle.pose.orientation.w,
+        obstacle.velocity_mps.x,
+        obstacle.velocity_mps.y,
+        obstacle.size_m.x,
+        obstacle.size_m.y,
+        obstacle.size_m.z};
+      bool finite = true;
+      for (const double value : fields) {
+        finite = finite && std::isfinite(value);
+      }
+      if (!finite) {
+        ++dropped_nonfinite_targets_;
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 3000, "障碍物 id=%u 含非有限值，跳过该目标（累计 %ld）",
+          obstacle.id, dropped_nonfinite_targets_);
+        continue;
+      }
       ads_prediction::TargetSnapshot target;
       target.id = obstacle.id;
       target.position = {obstacle.pose.position.x, obstacle.pose.position.y};
@@ -331,6 +361,7 @@ private:
     add("targets_static", count_static);
     add("targets_constant_velocity", count_cv);
     add("targets_lane_follow", count_lane);
+    add("dropped_nonfinite_targets", static_cast<double>(dropped_nonfinite_targets_));
     array.status.push_back(status);
     diag_pub_->publish(array);
   }
@@ -357,6 +388,7 @@ private:
   rclcpp::Publisher<ads_msgs::msg::PredictedTrajectoryArray>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
+  std::int64_t dropped_nonfinite_targets_{0};  // 含非有限值而被跳过的目标数（诊断键）
 };
 
 int main(int argc, char ** argv)

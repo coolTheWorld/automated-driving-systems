@@ -146,7 +146,7 @@ P0b 的 `carla_bridge` 要用它**原样验收**，只换 `LAUNCH_PKG` / `LAUNCH
 | **`setsid cmd &` 之后用 `$!` 取进程组** | 清理命令**静默地什么都没做**，仿真进程留下来继续跑 | `$!` 是 **setsid 自己**的 PID，它 fork 出新进程组后立刻退出，于是 `ps -o pgid= -p $!` 返回**空**，`kill -INT -- -` 变成空操作、还不报错。要按**进程名**查：`ps -eo pgid,args \| grep "gz sim"`。上面那条「用 `kill -INT -- -<PGID>`」是对的，坑在 PGID 怎么取到 |
 | headless `gz sim -s` 收 SIGINT 不退 | 发了 INT、等 3 s 仍在 | 实测需升级到 TERM/KILL。**也可能只是它退得比 3 s 慢，两种解释没分辨开 —— 别当定论** |
 | **脚本里 `pgrep -f <名字>` 查残留** | 报「已经有 1 个在跑」然后拒绝启动，实际一个都没有 | 与 `pkill -f "gz sim"` 同源：`-f` 匹配**完整命令行**，而执行脚本的那条命令行里只要出现过这几个字（比如 `clang-format -i src/ads_map/node/map_node.cpp && verify_map.sh`）就会自己匹配自己。用 **`pgrep -x <进程名>`** 按进程名精确匹配 |
-| **`pgrep -x gz` 查 Gazebo 残留** | **恒返回 0**，残留检查形同虚设，于是带着两套仿真跑测量 | `gz sim` 的真实进程名是 **`ruby`**（`gz` 是个 Ruby 包装脚本，`exec` 之后 comm 就变了）。查法：`ps -eo comm \| grep -cx -E 'ruby\|control_node\|planning_node'`。⚠️ 还要排掉**僵尸**：`gz` 退出后常留一个 `[ruby] <defunct>`（PPID=1，容器里 PID 1 不 reap），`comm` 照样显示 `ruby`，于是"残留 1"是假的。加 `-o stat` 滤掉 `Z` |
+| **`pgrep -x gz` 查 Gazebo 残留** | **恒返回 0**，残留检查形同虚设，于是带着两套仿真跑测量 | `gz sim` 的真实进程名是 **`ruby`**（`gz` 是个 Ruby 包装脚本，`exec` 之后 comm 就变了）。查法：`ps -eo comm,stat \| awk '$2 !~ /^Z/ {print $1}' \| grep -cx -E 'ruby\|control_node\|planning_node'`。⚠️ 还要排掉**僵尸**：`gz` 退出后常留一个 `[ruby] <defunct>`（PPID=1，容器里 PID 1 不 reap），`comm` 照样显示 `ruby`，于是"残留 1"是假的。加 `-o stat` 滤掉 `Z` —— **但 awk 要 `{print $1}` 只留进程名**：不加的话输出是整行、`grep -x` 永远匹配不上，守卫成空操作（2026-08-16 复审实测，run_all/l3g_p5_round 就这么空转过） |
 | **`pgrep -xc <名字> \|\| echo 0`** | 输出是 `"0\n0"`，之后任何数值比较都是语法错或恒假 | 没匹配到时 `pgrep -c` **既打印 `0` 又返回非零退出码**，于是 `\|\| echo 0` 又追一个 0。用 `$(... \|\| true)` 而不是 `\|\| echo 0` |
 | **「实测超限」先怀疑分母** | 转向速率判据连报 FAIL（0.5556 / 0.5750），去查限幅器却查不出毛病 | 同一个量换三个分母给三个数：① 诊断消息**时间戳之差**（发布抖动，`cycle_time_ms` 是变的）→ 0.5556；② 标称周期中位数 → 0.5750（控制器本来就按**那一拍实际的 dt** 缩放限幅，晚到的一拍允许转更多）；③ 控制器**自己那一拍的 `dt`**（现在诊断里直接发 `dt_s`）→ **0.5000 恰好贴限**。判据要量的是"控制器有没有守住自己的预算"，**只有第三个分母在回答这个问题** |
 | **判据量的是「路」不是「车」** | 修好一个问题后横向误差改善 **12.7 倍**，而「最大横向加速度」**一个数都没变** | `a_lat` 有三种算法，量的不是一回事：`v²·κ_path`（**参考路径**的，2.687）、`v²·tanδ/L`（按转角推的，2.376）、`\|v·ω\|`（**车实际受的**，横摆角速度来自 `/odom`，2.329）。原来算的是第一种 —— 路的曲率跟控制器好不好完全无关。现在 `control_node` 直接发布 `lateral_accel_mps2 = \|v·ω\|`。**这比"代码写错了"更危险：代码错了会红，判据错了红绿都不可信** |
@@ -380,7 +380,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 1170 tests，约 3 min）
+colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 1202 tests，约 3 min）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解

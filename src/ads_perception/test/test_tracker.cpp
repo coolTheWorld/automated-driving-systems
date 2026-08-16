@@ -865,7 +865,8 @@ TEST(Tracker, OcclusionCoastingHasACap)
 //
 //  | 注入 | 结果 |
 //  |---|---|
-//  | 去掉重锚判定（superseded 恒 false） | 见文件尾记录 |
+//  | 去掉重锚判定（superseded 恒 false） | 红：掉头 0.8 s 后确认航迹 2 条，旧航迹还在
+//    @x≈13.4（真值 ≈8.6）；其余 30 条含三条遮挡用例绿 |
 // ---------------------------------------------------------------------------
 TEST(Tracker, DoesNotCoastAGhostBehindItsOwnReanchoredTrack)
 {
@@ -915,7 +916,8 @@ TEST(Tracker, DoesNotCoastAGhostBehindItsOwnReanchoredTrack)
 //
 //  | 注入 | 结果 |
 //  |---|---|
-//  | 已锚定的航迹也按「观测深度 ≥ 1.0 不推」（复原旧版的跳变） | 见文件尾记录 |
+//  | 已锚定的航迹也按「观测深度 ≥ 1.0 不推」（复原旧版的跳变） | 红：ID 集合 3
+//    （8→30→31 同实测）；基线 1 个 ID、中心误差最大 0.184 m |
 // ---------------------------------------------------------------------------
 TEST(Tracker, KeepsTheIdWhenTheSideOfAnApproachingCarComesIntoView)
 {
@@ -1111,6 +1113,96 @@ TEST(Tracker, ConfirmHitsOfOneDoesNotBreakTheReanchorScan)
       kSensor);
   }
   EXPECT_EQ(tracker.ConfirmedTracks().size(), 2U);
+}
+
+TEST(Tracker, ReanchorScanIgnoresTracksErasedThisFrame)
+{
+  // 复审（2026-08-16）两位审阅者各自用探针坐实的下标错位：删除到期航迹之后 tracks_ 左移，
+  // 重锚候选扫描却仍按 erase 前的 assignment[t] 读 —— 一条**本帧命中**的确认航迹会被
+  // 记成新检测的重锚候选，随后它闪烁两帧、新航迹确认 ⟹ 它被错误 superseded、从发布里消失。
+  // 夹具：噪声航迹 E 先出生（下标 0），随后连丢 5 帧、恰在第 5 帧被删；同一帧正主 C 命中，
+  // 旁边 1.5 m 处出生一个碎片检测。
+  Tracker tracker;
+  tracker.Update({MakeDetection(100.0, 50.0)}, kDt, kSensor);  // E
+  for (int frame = 0; frame < 4; ++frame) {
+    tracker.Update({MakeDetection(20.0, 0.0)}, kDt, kSensor);  // C 命中，E 丢 1–4
+  }
+  // 第 5 帧：E 到期删除；C 命中；碎片 F 出生在 C 旁 1.5 m。
+  tracker.Update({MakeDetection(20.0, 0.0), MakePartial(20.0, 1.5, 0.6, 0.4)}, kDt, kSensor);
+  ASSERT_EQ(tracker.tracks().size(), 2U) << "E 该在这一帧被删";
+  std::uint32_t c_id = 0;
+  for (const Track & track : tracker.tracks()) {
+    if (track.width_m > 1.0) {
+      c_id = track.id;
+    } else {
+      EXPECT_EQ(track.reanchor_of_id, 0U)
+        << "碎片把本帧**命中**的 C 记成了重锚候选 —— assignment 下标在 erase 后错位";
+    }
+  }
+  ASSERT_NE(c_id, 0U);
+  // C 闪烁两帧、碎片连续命中确认：C 必须一直在发布里（它没丢过 —— 它是正主）。
+  for (int frame = 0; frame < 3; ++frame) {
+    tracker.Update({MakePartial(20.0, 1.5, 0.6, 0.4)}, kDt, kSensor);
+    const std::vector<Track> published = tracker.ConfirmedTracks();
+    EXPECT_NE(FindById(published, c_id), nullptr) << "第 " << frame << " 帧 C 从发布里消失了";
+  }
+}
+
+TEST(Tracker, UTurnGhostIsStillCaughtWhenAnUnrelatedTrackDiesThatFrame)
+{
+  // 同一处错位的另一个方向：U 转帧恰有一条无关航迹到期删除、且旧车前面还有一条本帧命中的
+  // 航迹 ⟹ 新航迹读到别人的配对结果、reanchor_of_id 落空 ⟹ 旧车不被取代、鬼影回来。
+  // 几何照抄 DoesNotCoastAGhostBehindItsOwnReanchoredTrack，另加：静止目标 S（先出生、恒命中）、
+  // 无关碎片 E（U 转帧恰好被删）。
+  Tracker tracker;
+  auto car = [](double x) { return MakeDetection(x, 0.0); };
+  const Detection still = MakePartial(5.0, 8.0, 0.5, 0.5);  // S：始终命中，排在旧车前面
+  // 下标顺序是本用例的要害：E 必须排在 S 前面（E 删除后 S/车整体左移一格，车读到 S 的配对）。
+  tracker.Update({MakePartial(60.0, -30.0, 0.5, 0.5)}, kDt, kSensor);  // E 出生（下标 0）
+  tracker.Update({MakePartial(60.0, -30.0, 0.5, 0.5), still}, kDt, kSensor);  // S 出生（下标 1）
+  double x = 10.0;
+  // 车要养到成熟（hits ≥ mature_hits 10），否则它根本没资格滑行、用例测不到鬼影。
+  for (int frame = 0; frame < 8; ++frame, x += 0.2) {
+    tracker.Update({MakePartial(60.0, -30.0, 0.5, 0.5), still, car(x)}, kDt, kSensor);
+  }
+  for (int frame = 0; frame < 4; ++frame, x += 0.2) {  // E 丢 1–4（车 hits 到 12）
+    tracker.Update({still, car(x)}, kDt, kSensor);
+  }
+  std::uint32_t old_id = 0;
+  for (const Track & track : tracker.ConfirmedTracks()) {
+    if (track.length_m > 4.0) {
+      old_id = track.id;
+    }
+  }
+  ASSERT_NE(old_id, 0U);
+  // 掉头帧：E 恰在此帧到期删除；车框跳 2.0 m 回来。
+  x -= 2.0;
+  for (int frame = 0; frame < 8; ++frame, x -= 0.2) {
+    tracker.Update({still, car(x)}, kDt, kSensor);
+  }
+  const std::vector<Track> published = tracker.ConfirmedTracks();
+  const Track * ghost = FindById(published, old_id);
+  printf(
+    "[          ] 同帧删除 + 前置命中航迹：掉头 0.8 s 后旧车航迹 %s\n",
+    ghost ? "还在发布（鬼影）" : "已消失");
+  EXPECT_EQ(ghost, nullptr) << "U 转鬼影漏网 —— 新航迹的重锚候选被下标错位吃掉了";
+}
+
+TEST(Tracker, OneHitConfirmedTrackNeverPublishesTheOrigin)
+{
+  // 复审探针：confirm_hits=1、mature_hits 默认 10 —— 年轻航迹第一个未命中帧按
+  // published_position() 发 last_observed_position，而它出生时没被写 ⟹ 发 map 原点 (0,0)。
+  TrackerParams params;
+  params.confirm_hits = 1;
+  Tracker tracker(params);
+  tracker.Update({MakeDetection(15.0, 3.0)}, kDt, kSensor);
+  tracker.Update({}, kDt, kSensor);
+  const std::vector<Track> published = tracker.ConfirmedTracks();
+  ASSERT_EQ(published.size(), 1U);
+  const Eigen::Vector2d pos = published[0].published_position(params.mature_hits);
+  printf("[          ] 出生即确认的航迹丢一帧后发布位置 (%.2f, %.2f)\n", pos.x(), pos.y());
+  EXPECT_LT((pos - Eigen::Vector2d(15.0, 3.0)).norm(), 1.0)
+    << "发到原点去了 —— 出生时没写最近观测位置";
 }
 
 TEST(Tracker, RejectsMatureHitsBelowConfirmHits)

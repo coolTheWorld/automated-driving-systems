@@ -148,6 +148,7 @@ if(BUILD_TESTING)
       #    ads_localization 加进来那次就是这么同时变红的（见 CLAUDE.md）。
       #    分配表：ads_control 41/42/46/48/49，ads_localization 43，
       #    ads_perception 44，gazebo_bridge 45，ads_prediction 47。
+      # 分配表见 ads_control/CMakeLists.txt（与 ads_localization 那份同步）：ads_perception 44。
       ROS_DOMAIN_ID=44)
 
   # 机械校验：libads_perception.so 的 DT_NEEDED 里不许有 ROS 库。

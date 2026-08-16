@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # runner 的 UID/GID 要传进镜像。容器内的 dev 用户必须和 runner 同 UID，
       # 否则挂载进去的 workspace 写不了，colcon build 会以权限错误失败。
@@ -57,12 +57,12 @@ jobs:
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
 
       - name: 设置 Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       # cache-from/to type=gha 把镜像层存进 GitHub Actions 缓存。
       # 只要 Dockerfile 和它依赖的 apt 源没变，后续跑就是秒级命中。
       - name: 构建开发镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/Dockerfile
@@ -336,7 +336,7 @@ jobs:
       # 失败时把测试结果捞出来，省得靠日志一行行翻。
       - name: 上传测试结果
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-results
           path: build/*/test_results/**/*.xml

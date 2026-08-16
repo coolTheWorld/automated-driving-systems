@@ -31,7 +31,7 @@ carla_sidecar:
       # 变好，但低速起步/蠕动死区（th 0.10 从静止只给 ≈0 加速）让车停在目标前 3.96 m、
       # 弯道 a_lat 未改善 —— 「静态准≠闭环好」第二次应验，闭环还差蠕动偏置 / 制动-滑行
       # 配平 / PI 复调三件事，是一个独立的标定战役（plan P9-S5d 评估报告），待拍板。
-      # 打开时把下面 control 的常数换成 0.222 / 0.06。
+      # 打开时 sidecar **自动**改用下面 control.aligned_* 那两条常数（不必手改两处）。
       align_drivetrain: false
       flat_torque_nm: 350.0
 
@@ -52,13 +52,16 @@ carla_sidecar:
       # 主导项（20 FPS 下 PI 降频 + 档位/换挡动态才是），闭环表现优先。
       # 五点数据留档：0.45→0.029 / 0.55→0.293 / 0.65→1.112 /
       # 0.75→1.894 / 0.85→2.667。
-      # ---- P9-S5d 评估留档（2026-08-16，传动系拉平后重标，5090 / Town10 / c3）----
-      # align_drivetrain: true 时的常数：拉平后 a(th) 各速度箱（2–5 m/s）斜率 4.49–4.67 m/s²
-      # 每单位油门 ⟹ k ≈ 1/4.5 = 0.222；偏置 th 0.10 → a 0.11–0.29 ⟹ bias ≈ 0.06。
-      # 现值仍是原车两点粗标（0.113 / 0.54，上面那段的推导）—— 与 align_drivetrain: false 配套。
+      # 原车两点粗标（0.113 / 0.54，上面那段的推导）—— align_drivetrain: false 时用。
       throttle_per_mps2: 0.113
       brake_per_mps2: 0.185
       throttle_bias: 0.54
       idle_below_mps2: 0.05
+      # ---- 拉平传动系那一档（P9-S5d 评估留档，2026-08-16，5090 / Town10 / c3）----
+      # align_drivetrain: true 时 sidecar 自动选用：拉平后 a(th) 各速度箱（2–5 m/s）斜率
+      # 4.49–4.67 m/s² 每单位油门 ⟹ k ≈ 1/4.5 = 0.222；偏置 th 0.10 → a 0.11–0.29 ⟹ bias ≈ 0.06。
+      # ⚠️ 首轮闭环 S01 只赢 Δv、蠕动死区停在目标前 3.96 m —— 这一档还没完成闭环调校（ADR-0002）。
+      aligned_throttle_per_mps2: 0.222
+      aligned_throttle_bias: 0.06
 
     tick_hz: 50.0

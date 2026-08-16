@@ -125,6 +125,7 @@ if(BUILD_TESTING)
       # ⚠️ 独占一个 ROS_DOMAIN_ID。colcon 按**包**并行跑测试，
       #    分配表：ads_control 41/42/46/48/49、ads_localization 43、
       #    ads_perception 44、gazebo_bridge 45/51、ads_prediction 47、ads_control 50（感知静默）。
+      # 分配表见 ads_control/CMakeLists.txt（与 ads_localization 那份同步）：gazebo_bridge 45/51。
       ROS_DOMAIN_ID=45)
 
   # 仿真钟停走守卫（P9-S5b，异常注入清单 #14）：/clock 停了桥必须发零速 ——

@@ -151,8 +151,11 @@ class TestPerceptionSilenceStopsTheCar(unittest.TestCase):
             rclpy.spin_once(self.node, timeout_sec=0.01)
 
     def test_silence_propagates_to_a_stop(self):
-        # ---- 前提：两个诊断流都在（节点活着），且链路"存在"（障碍物流已到达）----
-        self._spin(4.0, publish_obstacles=True)
+        # ---- 阶段 0（清单 #5）：感知**从未到达** —— expect_perception=true 而话题空 -------
+        # 「链路存在但断了」（过期检查）与「链路本来就没接上」是两条不同的守卫（清单 #4/#5）；
+        # 此前 #5 只是「顺带被走到」没有断言（复审）。这里先不发任何障碍物、直接给目标：
+        # 规划器必须指名报错不发轨迹，车恒 NO_PATH 不动；随后流一到，车动起来（恢复）。
+        self._spin(3.0, publish_obstacles=False)
         self.assertGreater(len(self.control_samples), 0, '没收到 /control/diagnostics')
         self.assertGreater(len(self.planning_samples), 0, '没收到 /planning/diagnostics')
 
@@ -161,6 +164,20 @@ class TestPerceptionSilenceStopsTheCar(unittest.TestCase):
         goal.pose.position.x = GOAL_X_M
         goal.pose.position.y = GOAL_Y_M
         goal.pose.orientation.w = 1.0
+        self.goal_pub.publish(goal)
+        n0 = len(self.control_samples)
+        self._spin(3.0, publish_obstacles=False)
+        never_arrived = [p for p in self.planning_samples if '从未到达' in p[2]]
+        states = {s[1] for s in self.control_samples[n0:]}
+        vmax = max((abs(s[2]) for s in self.control_samples[n0:]), default=0.0)
+        print(f'[test] 阶段 0：感知从未到达 + 合法目标 3 s —— 规划「从未到达」{len(never_arrived)} 拍，'
+              f'控制状态 {sorted(states)}，最大车速 {vmax:.3f}')
+        self.assertTrue(never_arrived, 'expect_perception=true 且话题空，规划器没有指名报「从未到达」')
+        self.assertNotIn('TRACKING', states, '感知从未到达，车却开始跟踪了 —— 链路缺席被放行')
+        self.assertLess(vmax, 0.05, '感知从未到达，车却动了')
+
+        # ---- 前提：流到达（链路"存在"），车动起来 —— 否则后面的"停住"不是被测行为 ----
+        self._spin(1.0, publish_obstacles=True)
         self.goal_pub.publish(goal)
 
         # ---- 车真的跑起来（TRACKING 且有速度）——否则"停住"不是被测行为 ----

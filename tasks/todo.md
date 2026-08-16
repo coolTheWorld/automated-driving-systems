@@ -64,7 +64,7 @@ get_actors 消失**（spawn 日志在）——不是隐形是生命周期异常�
 形态列 S5）；全仓 1135 tests 绿。**云窗口弹药全部备好**：`cloud_window_open.sh`
 一键开场（五里程碑）、actor 消失案仪器（sidecar `_npc_census` +
 `p9_actor_watch.py`）、l3c_p5_round / l3c_behavior_round 照旧。
-**窗口 4 战报（2026-08-15，同一台 5090，实例 82.68.63.172:41794 —— 收窗前记得销毁）**：
+**窗口 4 战报（2026-08-15，同一台 5090，实例 <host>:<port> —— 收窗前记得销毁）**：
 ①② 完成 —— **三案定谳**：actor 消失 = 新客户端首查为空的读数幻影（两条线全程在）；
 「10 m 外双类全零」= sidecar `np.frombuffer(raw_data)` 悬空视图 → 每帧半个世界；
 「不翻 y」= 坏输入上的实验，raw 是 UE 右正要翻。**四刀落袋（全在 sidecar/launch，
@@ -83,7 +83,7 @@ sidecar 量程改读 yaml）+ `cluster.vertical_tolerance_m` 1.0（L1 +2 注入�
 ID 切换 3–6（近场贴边摆，P5 已知形态）；`run_all_scenarios.sh gazebo` 两遍 9/9；
 全仓 1137 tests 绿（顺手把 L3-G test_closed_loop_obstacle 的判据从 margin 0.7 拆耦回
 SPEC 0.5 —— 4 跑 3 红全是 0.001 m 浮点噪声）。
-**窗口 5 战报（2026-08-16，新实例 120.88.119.115:30869，4090 + 580-open —— 冒烟过、全程没崩，
+**窗口 5 战报（2026-08-16，新实例 <host>:<port>，4090 + 580-open —— 冒烟过、全程没崩，
 Xid 32 案再添一票「宿主特异」）**：开场一键 37 min（CARLA 下载 17 min + 镜像 18 min）；
 裸测自反射 0（1.6 时 11k）；CP-P9-A 第一对 8/9（近边 0.60：micra 3.63 比先验 4.4 短、框两头各垫
 0.4–0.5）→ 道具换 seat.leon（33 蓝图普查最近 4.19×1.82×1.47）→ **round 3/4 连续 9/9**
@@ -119,7 +119,7 @@ run_all 的 CI 长程统计（P4 那 14.3% 间歇失败的统计学收口）。
   ② S3a：`euclidean_cluster` 竖向各向异性 `cluster.z_scale`（拟 0.5，推导见 P9-4）+
     L1 两条注入验红 → `run_all_scenarios.sh gazebo S03` → 全表 + CP-P5-B 抽轮 →
     云上 `l3c_p5_round.sh both` ×2 全绿 =【CP-P9-A】。
-  ③ 云实例 82.68.63.172:41794（5090）收窗时仍在跑、容器无残留；重开窗口先
+  ③ 云实例 <host>:<port>（5090）收窗时仍在跑、容器无残留；重开窗口先
     `cloud_window_open.sh`（幂等）+ rsync（用法在脚本头）。改共享感知/车辆参数的每一刀
     **先本地 Gazebo 回归再上云**（记忆「每刀两环境回归」）。
 

@@ -338,8 +338,74 @@ class TestPerceptionClosedLoop(unittest.TestCase):
               f'恢复后又收到 {len(self.obstacles) - n_before - n_during_stale} 条')
         self.assertEqual(n_during_stale, 0, '陈旧点云被当成现在的算了 —— max_cloud_age_s 没生效')
         self.assertTrue(dropped and max(dropped) >= 10.0, '丢弃计数没涨 —— 诊断没记录陈旧帧')
-        self.assertGreater(len(self.obstacles) - n_before - n_during_stale, 0,
-                           '正常帧恢复后没有输出 —— 陈旧守卫把流水线卡死了')
+        # 恢复要数**非空**的 ObstacleArray（复审：数含空数组的消息数会把「流水线卡死但还在发空帧」放过）。
+        recovered = [m for m in self.obstacles[n_before + n_during_stale:] if m.obstacles]
+        self.assertGreater(len(recovered), 0, '正常帧恢复后没有非空输出 —— 陈旧守卫把流水线卡死了')
+
+        # ---- 异常注入清单 #16：畸形 PointCloud2 必须被结构校验丢掉，节点不能挂死/崩溃 -------
+        # sensor_msgs 迭代器按 point_step 步进、指针不等判 end：point_step=0 会原地死循环，
+        # data 长度不是 point_step 整数倍会越界读。三种畸形各一帧，随后正常帧必须恢复输出。
+        n_before_malformed = len(self.obstacles)
+        for malformed in (self._malformed_cloud('zero_step'), self._malformed_cloud('short_data'),
+                          self._malformed_cloud('no_z_field')):
+            clock = Clock()
+            clock.clock.sec = int(sim_time_s)
+            clock.clock.nanosec = int((sim_time_s - int(sim_time_s)) * 1e9)
+            self.clock_pub.publish(clock)
+            malformed.header.stamp.sec = clock.clock.sec
+            malformed.header.stamp.nanosec = clock.clock.nanosec
+            malformed.header.frame_id = 'base_link'
+            self.cloud_pub.publish(malformed)
+            sim_time_s += 0.1
+            deadline = self.node.get_clock().now().nanoseconds + int(0.3e9)
+            while self.node.get_clock().now().nanoseconds < deadline:
+                rclpy.spin_once(self.node, timeout_sec=0.02)
+        for _ in range(5):
+            self._publish_frame(sim_time_s)
+            sim_time_s += 0.1
+            deadline = self.node.get_clock().now().nanoseconds + int(0.15e9)
+            while self.node.get_clock().now().nanoseconds < deadline:
+                rclpy.spin_once(self.node, timeout_sec=0.02)
+        malformed_dropped = [
+            float(value.value) for msg in self.diagnostics for status in msg.status
+            for value in status.values if value.key == 'dropped_malformed_clouds']
+        after_malformed = [m for m in self.obstacles[n_before_malformed:] if m.obstacles]
+        malformed_count = max(malformed_dropped) if malformed_dropped else None
+        print(f'[test] 畸形点云 3 帧：dropped_malformed_clouds {malformed_count}，'
+              f'之后正常帧非空输出 {len(after_malformed)} 条')
+        self.assertTrue(malformed_dropped and max(malformed_dropped) >= 3.0,
+                        '畸形点云没被结构校验丢掉（计数没涨）—— 迭代器会在这种消息上越界/死循环')
+        self.assertGreater(len(after_malformed), 0, '畸形点云之后节点没恢复输出 —— 挂死了？')
+
+    @staticmethod
+    def _malformed_cloud(kind):
+        """Build a structurally invalid PointCloud2 of the given kind."""
+        from sensor_msgs.msg import PointField
+        cloud = PointCloud2()
+        cloud.height = 1
+        cloud.width = 5
+        cloud.is_bigendian = False
+        cloud.is_dense = True
+        fields = [PointField(name=n, offset=o, datatype=PointField.FLOAT32, count=1)
+                  for n, o in (('x', 0), ('y', 4), ('z', 8))]
+        if kind == 'zero_step':
+            cloud.fields = fields
+            cloud.point_step = 0
+            cloud.row_step = 0
+            cloud.data = b''
+        elif kind == 'short_data':
+            cloud.fields = fields
+            cloud.point_step = 12
+            cloud.row_step = 60
+            cloud.data = bytes(12 * 5 - 4)   # 少 4 字节：不是 point_step 的整数倍
+        elif kind == 'no_z_field':
+            cloud.fields = fields[:2]
+            cloud.point_step = 8
+            cloud.row_step = 40
+            cloud.data = bytes(8 * 5)
+        else:
+            raise ValueError(kind)
+        return cloud
 
 
 @launch_testing.post_shutdown_test()

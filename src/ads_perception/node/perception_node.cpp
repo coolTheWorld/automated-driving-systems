@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -163,6 +164,8 @@ public:
       declare_parameter<double>("tracker.anchor_shift_max_m", 2.2);
     tracker_params_.coast_max_speed_mps =
       declare_parameter<double>("tracker.coast_max_speed_mps", 8.33);
+    // 成熟门槛（P9-S5c）：三条只信成熟航迹速度的规则共用，推导见 tracker.hpp。
+    tracker_params_.mature_hits = declare_parameter<int>("tracker.mature_hits", 10);
     tracker_ = std::make_unique<ads_perception::Tracker>(tracker_params_);
     max_misses_ = tracker_params_.max_misses;
 
@@ -205,10 +208,59 @@ public:
   }
 
 private:
+  /// PointCloud2 的**结构**校验（2026-08-16 安全复审 Medium）：先验结构，再验数值。
+  ///
+  /// sensor_msgs 的迭代器按 point_step 步进、用指针不等判 end —— data.size() 不是
+  /// point_step 的整数倍时**永远到不了 end**（越界读到段错误），point_step == 0 时原地
+  /// 死循环；width×height 相乘可到 96 GB 让 reserve 抛 bad_alloc。同域任何对端一条畸形
+  /// 消息就能让本节点挂死。与 lidar_preprocessor_node 里的同名检查是**同一份**（那边
+  /// 也要过一遍 —— 改一处改两处，两个包之间没有可放 ROS 依赖代码的共享位置）。
+  static bool CloudLayoutOk(const sensor_msgs::msg::PointCloud2 & cloud, std::string * why)
+  {
+    if (cloud.point_step == 0) {
+      *why = "point_step == 0";
+      return false;
+    }
+    const std::uint64_t n = static_cast<std::uint64_t>(cloud.width) * cloud.height;
+    if (cloud.data.size() != n * cloud.point_step) {
+      *why = "data.size() != width*height*point_step";
+      return false;
+    }
+    if (cloud.height > 1 && cloud.row_step != cloud.width * cloud.point_step) {
+      *why = "row_step != width*point_step";
+      return false;
+    }
+    for (const char * name : {"x", "y", "z"}) {
+      const sensor_msgs::msg::PointField * field = nullptr;
+      for (const auto & candidate : cloud.fields) {
+        if (candidate.name == name) {
+          field = &candidate;
+        }
+      }
+      if (
+        field == nullptr || field->datatype != sensor_msgs::msg::PointField::FLOAT32 ||
+        field->offset + sizeof(float) > cloud.point_step) {
+        *why = std::string("字段 ") + name + " 缺失/非 FLOAT32/越出 point_step";
+        return false;
+      }
+    }
+    return true;
+  }
+
   void OnCloud(sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
     const auto started = std::chrono::steady_clock::now();
     StageStats stats;
+
+    // ---- 畸形点云直接丢（结构校验先于一切）------------------------------
+    std::string why;
+    if (!CloudLayoutOk(*msg, &why)) {
+      ++dropped_malformed_clouds_;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000, "点云结构非法（%s），丢弃。累计丢 %ld 帧", why.c_str(),
+        dropped_malformed_clouds_);
+      return;
+    }
 
     // ---- 陈旧点云直接丢 -------------------------------------------------
     const double age_s = (now() - rclcpp::Time(msg->header.stamp)).seconds();
@@ -658,6 +710,7 @@ private:
     add("track_ms", stats.track_ms);
     add("total_ms", stats.total_ms);
     add("dropped_stale_clouds", static_cast<double>(dropped_stale_clouds_));
+    add("dropped_malformed_clouds", static_cast<double>(dropped_malformed_clouds_));
     add("frames_without_ground", static_cast<double>(frames_without_ground_));
     add("id_disappearances", static_cast<double>(id_disappearances_));
     array.status.push_back(status);
@@ -699,6 +752,7 @@ private:
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   std::int64_t last_diag_ns_{0};
   std::int64_t dropped_stale_clouds_{0};
+  std::int64_t dropped_malformed_clouds_{0};
   std::int64_t frames_without_ground_{0};
   std::int64_t id_disappearances_{0};
   std::unordered_set<std::uint32_t> previous_ids_;

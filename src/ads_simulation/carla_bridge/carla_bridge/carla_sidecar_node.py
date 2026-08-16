@@ -93,20 +93,33 @@ class CarlaSidecarNode(Node):
         self.declare_parameter('control.brake_per_mps2', 0.185)
         self.declare_parameter('control.throttle_bias', 0.54)
         self.declare_parameter('control.idle_below_mps2', 0.05)
+        # 拉平传动系那一档的油门常数（P9-S5d 表）：由 ego.align_drivetrain **自动选用**，
+        # 不靠人同时改两处（复审：开关翻开、常数没换 ⟹ 零指令下 0.54 的偏置在拉平车上
+        # 是 +2 m/s² 的恒推）。
+        self.declare_parameter('control.aligned_throttle_per_mps2', 0.222)
+        self.declare_parameter('control.aligned_throttle_bias', 0.06)
         self.declare_parameter('limits.max_steer_angle_rad', 0.6)
         self.declare_parameter('limits.max_accel_mps2', 1.5)
         self.declare_parameter('limits.max_decel_mps2', 3.0)
         self.declare_parameter('tick_hz', 50.0)
         self.get_logger().info(f'sidecar 参数就绪 {host_desc}')
 
+        aligned = bool(self.get_parameter('ego.align_drivetrain').value)
+        throttle_k = self.get_parameter(
+            'control.aligned_throttle_per_mps2' if aligned else 'control.throttle_per_mps2').value
+        throttle_bias = self.get_parameter(
+            'control.aligned_throttle_bias' if aligned else 'control.throttle_bias').value
         self._mapping = ControlMapping(
             self.get_parameter('limits.max_steer_angle_rad').value,
             self.get_parameter('limits.max_accel_mps2').value,
             self.get_parameter('limits.max_decel_mps2').value,
-            self.get_parameter('control.throttle_per_mps2').value,
+            throttle_k,
             self.get_parameter('control.brake_per_mps2').value,
-            self.get_parameter('control.throttle_bias').value,
+            throttle_bias,
             self.get_parameter('control.idle_below_mps2').value)
+        self.get_logger().info(
+            f'油门映射：{"拉平传动系" if aligned else "原车"} 档，throttle = {throttle_bias:.3f} + '
+            f'{throttle_k:.3f}·a')
 
         # 传感器外参的单一来源（SPEC §4.1）—— sidecar 直接读 vehicle_params，
         # 不在 carla_bridge_params 里抄一份。

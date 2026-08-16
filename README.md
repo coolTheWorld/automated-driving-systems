@@ -1,266 +1,183 @@
 # automated-driving-systems
 
-园区 / 厂区低速自动驾驶栈，从零手写。ROS 2 Jazzy + C++17。
+[![CI](https://github.com/coolTheWorld/automated-driving-systems/actions/workflows/ci.yml/badge.svg)](https://github.com/coolTheWorld/automated-driving-systems/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E)
+![Gazebo Harmonic](https://img.shields.io/badge/Gazebo-Harmonic-F58113)
+![CARLA 0.9.16](https://img.shields.io/badge/CARLA-0.9.16-black)
 
-目标是**工业级架构**而非车规量产：模块划分、接口契约、测试分层都按真实项目的
-做法来，但不追求功能覆盖度。
+园区 / 厂区**低速自动驾驶栈**，从零手写：地图与路由、定位、感知、预测、行为决策、
+规划、控制，加上一套双仿真环境（本地 Gazebo + 云端 CARLA）和四层测试体系。
+ROS 2 Jazzy + C++17，算法层与 ROS 强制解耦。
 
-- **[SPEC.md](SPEC.md)** —— 唯一事实来源。ODD、架构、接口契约、测试策略都在这里。
-- **[CLAUDE.md](CLAUDE.md)** —— 导航 + 实测踩坑记录。**遇到诡异现象先翻它的陷阱表**。
-- **[tasks/](tasks/)** —— `plan.md` 说明怎么拆任务，`todo.md` 是当前进度。
+目标是**工业级架构**而非车规量产：模块划分、接口契约、判据体系、测试分层都按真实项目
+的做法来，功能覆盖只到 ODD（≤ 30 km/h、结构化园区道路、白天、无信号路口）为止。
 
-当前阶段：**P9 收官（2026-08-16）—— 计划表全部完成**（CP-P9-A/B/C/D/E 全达成）。
-同一套感知栈在两个仿真环境里都过了同一张判据表：Gazebo（本地，CP-P5-B **首次三轮九条全绿**：
-横向 p95 0.15、虚警 0、ID 切换 1）与 CARLA（云端生成的园区世界，CP-P9-A 连续两轮 9/9：
-检测率五档 100%、近边 p95 0.19–0.21、横向 0.12、ID 切换 0、虚警 0）；行为三场景真值层 + 感知层
-6/6；异常注入清单 15 行全有自动化红绿（docs/fault_injection.md）；两环境每拍耗时表全在预算内。
-P9 前半（域移植）感知算法只动了一处（聚类竖向容差），其余全在传感器与真值链路（sidecar 内存
-别名让每帧只剩半个世界、点云 y 反号、actor 原点≠后轴、行人埋地、护栏墙 L 形包围盒、雷达挂高
-2.2 m）；后半（S5c 跟踪鲁棒）bag + 点云窗口逐帧钉死三只鬼影同一个根（车顶远端环碎片航迹 /
-沿视线的车辆先验 / 年轻航迹的噪声速度）—— 过程与教训见 docs/modules/perception.md §6.2b/§6.7/§8.3。
-S01 在 CARLA 上的四条跟踪差异评估后拍板维持入表放行（机理与根治起手式见 plan P9-S5d）。
-
-此前已完成：P0a 本地环境、P1 地图与路由、P2 控制（CP-P2-B 8/8）、P3 规划（CP-P3-B）、
-P4 定位（ESKF + NDT，横向 0.09–0.11 m）、P5 感知（Gazebo 半）、P6 预测（双层协议）、
-P7 行为决策（行为树，CP-P7-A 7/7 + CP-P7-B）、P8 场景测试体系 + CI + CARLA 半区
-（`run_all_scenarios.sh` 一键 9/9、云端 L3-C 全表、两环境一致性差异表）。
-2026-08-12 做过一次全栈对抗性复检（37 个审查/验证子代理），修复 3 high + 11 medium
-缺陷，过程与教训见 tasks/todo.md。
+> **v1.0.0（2026-08-16）**：路线图 P0a → P9 全部完成。同一套栈在两个仿真环境里过了同一张
+> 判据表，全部数字是实测值，不是估计。下面每张表都能用仓库里的脚本复现。
 
 ---
 
-## 它现在能做什么
+## 它能做什么（实测）
 
-一条命令起全栈，键盘开车，RViz 里实时看点云和 TF。
+一条命令起全栈：自车在园区环线上接收目标点，路由 → 规划 → 控制闭环行驶；感知给出
+车辆/行人的框、速度与 ID，预测给出 6 s 轨迹与不确定椭圆，行为层在跟车、行人横穿、
+无信号路口三种情境下选择跟停 / 让行 / 通行；定位在 NDT + ESKF 上给出 map→odom。
+
+**L3 场景表（SPEC §8，`run_all_scenarios.sh` 一键，Gazebo 9/9 进 CI；CARLA 云端同表）**
+
+| 场景 | 判据（节选） | Gazebo（L3-G） | CARLA（L3-C） |
+|---|---|---|---|
+| S01/S02 直道巡航 + 弯道 | 横向 < 0.3 m、a_lat < 2 m/s²、到达 | 8/8 | 安全类 4/4；**跟踪类 4 条入表差异**（见下） |
+| S03 前车减速跟停 | 不碰撞、稳态跟停距 [4,10] m、驶离恢复 | 5/5 ×2 层 | 5/5 ×2 层 |
+| S04 静止障碍物绕行 / 停车 | 侧向间距 > 0.5 m；不可绕则停 | 9/9 + 4/4 | 9/9 + 4/4 |
+| S05 行人横穿 | 完全停止、最近距离 > 1 m、恢复 | 5/5 ×2 层 | 5/5 ×2 层 |
+| S06 红绿灯（仅 CARLA） | 红灯停止线前 0–2 m、绿灯起步 | — | 2/2 |
+| junction 无信号路口让行 | 对车流间距 > 1.5 m、让行后通过 | 4/4 ×2 层 | 4/4 ×2 层 |
+| S07 全局导航 | 到达、零接管、零碰撞 | ✅ | ✅ |
+
+**模块级验收（同一张判据表两个环境）**
+
+| 模块 | 判据（节选） | Gazebo | CARLA |
+|---|---|---|---|
+| 感知 CP-P5-B（9 条） | 车/行人检测率、近边 p95 < 0.5 m、横向 p95 < 0.5 m、速度 p95 < 1 m/s、ID 切换 ≤ 2、车道内虚警 = 0 | **9/9 ×3**（横向 0.15，虚警 0，ID 1） | **9/9 ×2**（近边 0.19–0.21，横向 0.12，ID 0，虚警 0） |
+| 定位 CP-P4-B（7 条） | 横向 < 0.30 m、NDT 锁定、失锁自举 | 六轮全过（横向 0.09–0.11 m） | 待上机（世界与地图不同源，门限要重量） |
+| 预测 CP-P6-B（双层） | FDE@3s、椭圆覆盖率 ≥ 95%、路口多假设 | 真值层 + 感知层全过 | — |
+| 控制 CP-P2-B（8 条） | 横向 / 速度 / a_lat / 转向速率 / 到达 | 8/8 | 4/8（跟踪类差异入表，机理见 ADR-0002） |
+| 异常注入清单 | 15 种故障 × 期望行为 × 自动化红绿 | 15/15 | sidecar 分支代码路径 |
+
+CARLA 侧唯一的已知差距是 S01 的四条**跟踪质量**判据（横向 0.6–0.84 vs 0.3、Δv 0.42 vs 0.2 …）：
+根源是 CARLA 车辆的发动机模型（零油门阻尼 + 扭矩曲线峰）让油门→加速度在中速段增益偏大 78%，
+安全类判据不受影响，评估后决定**入表放行**，机理、实验与被否决的方案在
+[ADR-0002](docs/adr/0002-carla-s01-tracking-gap-not-fixed.md)。
+
+---
+
+## 架构
 
 ```
-Gazebo Harmonic ──┐
-                  ├─ gazebo_bridge ─→ /lidar/points  /imu  /gnss  /odom  /tf
-键盘 teleop ──────→ /vehicle_cmd ──→ vehicle_cmd_bridge ─→ Gazebo
+                 config/*.yaml（唯一手写源头）──gen_*.py──▶ SDF / URDF / .xodr / 点云地图（生成物）
+                                                                        │
+  Gazebo Harmonic ─ gazebo_bridge ─┐                                    ▼
+                                    ├─▶ SPEC §4.1 规范话题 ─▶ ads_localization ─▶ map→odom
+  CARLA 0.9.16 ── carla_bridge ────┘   /lidar/points /imu /gnss         │
+     (sidecar 全中继)                    /odom /ego_pose_gt(仅评测)       ▼
+                                          ads_perception ─▶ ads_prediction ─▶ ads_planning ─▶ ads_control ─▶ /vehicle_cmd
+                                                ▲                (行为树 + Frenet 采样 + 速度剖面)  (Stanley + PI)      │
+                                            ads_map ─▶ /route/path ─────────────────────────────────────────────────────┘
 ```
 
-实测基线（`verify_*.sh` 的输出，不是估计值）：
+- **仿真数据源可插拔**：上游只认话题名，不知道数据来自 Gazebo 还是 CARLA；桥接层做完全相同的翻译。
+- **算法与 ROS 解耦**：每个包 `lib/`（纯 C++17，L1 毫秒级）+ `node/`（ROS 包装）；`libads_map.so` 等零 ROS 依赖由 CTest 机械保证。
+- **单一来源**：车辆参数、地图、障碍物、动态目标全部只手写一份 YAML，其余是生成物，`--check` 进 CI。
+- **判据即契约**：每个模块交付时带可量化判据（plan.md 各检查点），判据不放宽；每条守卫先注入验红再算数。
 
-| 指标 | 实测 |
-|---|---|
-| 实时率 RTF | 1.000 |
-| `/lidar/points` 频率 | 10.00 Hz |
-| 点云坐标系 | `base_link`（自车反射点已滤除） |
-| TF 树 | `map → odom → base_link → {lidar,gnss}_link` 五段连通 |
-| 转角限幅 | 下发 10 rad → 输出 0.600 rad |
-| 看门狗 | 停发指令 6.3 s 后 8.333 → 0.000 m/s |
-
----
-
-## 环境要求
-
-| 项 | 要求 | 说明 |
-|---|---|---|
-| 宿主 | Windows 11 + WSL2 | Linux 原生也行，但 GPU 直通那几步不同 |
-| GPU | 支持 D3D12 的显卡 | 开发机实测 AMD Radeon 780M 核显足够 |
-| Docker | 装在 WSL2 内 | Docker Desktop 也可 |
-| 磁盘 | ≥ 25 GB | 镜像含 ros-jazzy-desktop 和 Gazebo |
-
-**不需要**在宿主装 ROS 或 Gazebo，全在容器里。
+十三个包：`ads_msgs` `ads_common` `ads_map` `ads_localization` `ads_perception` `ads_prediction`
+`ads_planning` `ads_control` `ads_bringup` `ads_teleop` `ads_visualization`
+`ads_simulation/{gazebo_bridge, carla_bridge}`。每个模块的推导、参数含义与实测边界在
+[docs/modules/](docs/modules/)（改模块前先读它）。
 
 ---
 
-## 从零跑起来
+## 从零跑起来（本地 Gazebo）
 
-### 1. 克隆并生成环境配置
+**环境要求**：Windows 11 + WSL2（Linux 原生也可，GPU 直通那几步不同）、支持 D3D12 的显卡
+（开发机 AMD Radeon 780M 核显足够）、WSL2 内的 Docker、≥ 25 GB 磁盘。**宿主不需要装 ROS 或 Gazebo。**
 
 ```bash
 git clone git@github.com:coolTheWorld/automated-driving-systems.git
 cd automated-driving-systems
+export COMPOSE_FILE=docker/docker-compose.local.yml     # ⚠️ 所有 docker compose 命令都在仓库根目录执行
+./scripts/setup_env.sh                                  # 生成 .env（宿主 UID/GID + GPU 设备组），换机器必跑
+docker compose build && docker compose up -d
 
-export COMPOSE_FILE=docker/docker-compose.local.yml
-./scripts/setup_env.sh          # 生成 .env（宿主 UID/GID + GPU 设备组 GID）
+docker compose exec dev /workspace/scripts/verify_gpu.sh   # go/no-go：必须是 D3D12 硬件加速，llvmpipe 就别硬撑
+docker compose exec dev bash -c 'source /opt/ros/jazzy/setup.bash && cd /workspace && \
+  colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release'
+docker compose exec dev /workspace/scripts/verify_sim.sh          # 仿真基线 + RTF
+docker compose exec dev /workspace/scripts/verify_ros_bridge.sh   # SPEC §4.1 话题契约
+docker compose exec dev /workspace/scripts/verify_teleop.sh       # 控制链路 + 限幅 + 看门狗
 ```
 
-> ⚠️ **所有 `docker compose` 命令都要在仓库根目录执行。** `COMPOSE_FILE` 里是相对
-> 路径，`cd docker/` 之后就找不到了，会报 `no configuration file provided`。
->
-> `.env` 是机器相关的，已在 `.gitignore` 里。**换机器必须重跑 `setup_env.sh`。**
-
-### 2. 构建并进入容器
+**自动驾驶一次**（终端 A 起栈，终端 B 发目标点并记录判据）：
 
 ```bash
-docker compose build            # 首次约 10-20 分钟
-docker compose up -d
-docker compose exec dev bash
+docker compose exec dev bash -c 'source /opt/ros/jazzy/setup.bash && source /workspace/install/setup.bash && \
+  ros2 launch ads_bringup stack.launch.py perception:=true prediction:=true dynamic:=follow'
+docker compose exec dev bash -c 'source /opt/ros/jazzy/setup.bash && source /workspace/install/setup.bash && cd /workspace && \
+  python3 scripts/record_behavior_run.py --scenario follow --layer perception --duration-s 90 --out /tmp/follow.csv'
+# 或者一键全表：
+docker compose exec dev /workspace/scripts/run_all_scenarios.sh gazebo
 ```
 
-### 3. 环境自检（**这一步不能跳**）
+键盘开车：`docker compose exec dev /workspace/scripts/drive.sh`（`w/s` 加减速、`a/d` 转向、`空格` 回正、`b` 急刹）。
 
-```bash
-docker compose exec dev /workspace/scripts/verify_gpu.sh
-```
-
-这是整个本地方案的 **go/no-go**。关键是那项渲染器必须是硬件设备：
-
-```
-Device: D3D12 (AMD Radeon 780M Graphics)
-Accelerated: yes
-```
-
-如果显示 `llvmpipe` 就是掉进软件渲染了 —— **不要用软件渲染硬撑**，Gazebo 会慢到
-没法用。先看 CLAUDE.md 的环境陷阱表，八成是 `/dev/dxg` 没映射，或者
-`GALLIUM_DRIVER=d3d12` 没设。
-
-（`screen 0 does not appear to be DRI3 capable` 是**干扰项**，宿主也报，与硬件加速无关。）
-
-### 4. 编译
-
-```bash
-docker compose exec dev bash -c '
-  source /opt/ros/jazzy/setup.bash
-  cd /workspace
-  colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
-'
-```
-
-### 5. 验证全链路
-
-```bash
-docker compose exec dev /workspace/scripts/verify_sim.sh         # 6 项：仿真基线 + RTF
-docker compose exec dev /workspace/scripts/verify_ros_bridge.sh  # 6 项：ROS 话题契约
-docker compose exec dev /workspace/scripts/verify_teleop.sh      # 3 项：控制链路 + 限幅 + 看门狗
-```
-
-三个都要**退出码 0**。
-
-> ⚠️ 跑任何 verify 脚本前先确认没有残留的仿真进程，否则两套仿真同时发 `/clock`
-> 和 `/tf`，所有测量值都是垃圾：
->
-> ```bash
-> docker compose exec dev bash -c 'ps -eo pid,pgid,args | grep -E "gz sim|ros2 launch" | grep -v grep'
-> docker compose exec dev bash -c 'kill -INT -- -<PGID>'   # 按进程组收
-> ```
->
-> **不要用 `pkill -f`** —— 它匹配完整命令行，而执行它的 shell 命令行里就含那个
-> 模式，结果是清理命令把自己杀了。
+> 遇到诡异现象先翻 [CLAUDE.md](CLAUDE.md) 的**陷阱表** —— 七十来条全是实测踩出来的
+> （残留仿真进程、`pkill -f` 自杀、QoS 静默丢帧、NaN 比较恒假、`ros2 topic hz` 管道缓冲……）。
 
 ---
 
-## 开车
+## 云端 CARLA（验收环境）
 
-需要**两个终端**。
-
-终端 A —— 起全栈（Gazebo + 桥接 + TF + RViz）：
-
-```bash
-docker compose exec dev bash -c '
-  source /opt/ros/jazzy/setup.bash
-  source /workspace/install/setup.bash
-  ros2 launch ads_bringup stack.launch.py
-'
-```
-
-终端 B —— 键盘：
+本机没有硬件 Vulkan，CARLA 跑不了 —— 这正是双环境方案的由来。租一台 NVIDIA 实例（实测
+3090 / 4090 / 5090 都跑过），一键开场：
 
 ```bash
-docker compose exec dev /workspace/scripts/drive.sh
+scp -P <port> scripts/cloud_window_open.sh root@<host>:/root/ && rsync -az ... ./ root@<host>:/root/ads/
+ssh -p <port> root@<host> 'setsid nohup bash /root/cloud_window_open.sh > /root/open.out 2>&1 &'
+# 五个里程碑过后：docker exec ads-dev bash /workspace/scripts/l3c_p5_round.sh both   （CP-P9-A）
+#                 docker exec ads-dev bash /workspace/scripts/l3c_behavior_round.sh follow perception 90 91.75 20.0
 ```
 
-| 键 | 作用 |
+上机手册 [docs/p8_carla_bringup.md](docs/p8_carla_bringup.md)（含两环境一致性差异表）；
+亲眼看用 `scripts/carla_view.py`（MJPEG 直播，ssh 隧道到本机浏览器）。
+
+---
+
+## 测试
+
+四层金字塔（SPEC §8）：L1 单元（gtest/pytest，无 ROS，毫秒级）→ L2 模块 → L3-G 场景闭环
+（**不需要 GPU，进 CI**：假车/假传感器 + 真节点接线，判的是接线不是精度）→ L4 回归
+（`metrics/history.csv`）。L3-C（CARLA）与真仿真器的 L3-G 场景表靠人跑。
+
+```bash
+colcon test && colcon test-result --all      # 1202 tests，约 3 min（判定成败只看 test-result）
+./build/ads_perception/test_tracker          # 单个 L1，快一个数量级
+```
+
+CI（GitHub Actions）：构建开发镜像 → 四份生成物 `--check`（车辆 / 地图 / 障碍物 / 动态目标）→
+`colcon build` + `colcon test`（含 L3-G）→ launch 可加载 → `verify_map.sh`（唯一进 CI 的端到端验收）。
+故障注入清单在 [docs/fault_injection.md](docs/fault_injection.md)：改任何守卫前先查它，补守卫先注入验红。
+
+---
+
+## 文档地图
+
+| 文件 | 内容 |
 |---|---|
-| `w` / `s` | 加速 / 减速 |
-| `a` / `d` | 左转 / 右转 |
-| `空格` | 松油门 + 方向回正 |
-| `b` | 紧急制动 |
-| `q` | 退出 |
-
-**先按几下 `w` 让车动起来再打方向。** 静止时打方向车不会转 —— 横摆角速度
-ω = v·tan(δ)/L，v=0 时恒为 0，真车原地打方向也不动。
-
-也**不支持倒车**：`ads_msgs/VehicleCmd` 只有转角和加速度、没有挡位字段，负加速度
-只能理解成"减速"，无法与"倒车"区分。真实栈（如 Autoware）用独立的 GearCommand 解决。
-
-> ⚠️ 键盘驾驶必须走 `drive.sh`（它内部用 `ros2 run`），**不能用 `ros2 launch`** ——
-> launch 会接管子进程的 stdio，键盘输入到不了节点。
+| [SPEC.md](SPEC.md) | **唯一事实来源**：ODD、架构、接口契约、代码规范、测试策略、决策记录（D1–D6）、边界 |
+| [CLAUDE.md](CLAUDE.md) | 导航 + 实测陷阱表 + 常用命令 |
+| [tasks/plan.md](tasks/plan.md) / [todo.md](tasks/todo.md) | 拆片理由、检查点判据与实测数据 / 进度书签 |
+| [docs/modules/](docs/modules/) | 七个模块的推导、参数与边界（map_and_routing / control / planning / localization / perception / prediction / behavior） |
+| [docs/adr/](docs/adr/) | 架构决策记录（双仿真环境；CARLA S01 差异不根治） |
+| [docs/fault_injection.md](docs/fault_injection.md) | 异常注入清单：15 种故障 × 期望 × 守卫 |
+| [docs/p8_carla_bringup.md](docs/p8_carla_bringup.md) | 云端 CARLA 上机手册与一致性差异表 |
 
 ---
 
-## 开发
+## 已知边界
 
-```bash
-# 单个包
-colcon build --packages-select gazebo_bridge
+- **仿真栈**，没有上过实车；ODD 之外的场景（高速、雨雾、无结构化道路）不在范围。
+- **无倒车**：`VehicleCmd` 只有转角 + 加速度，没有挡位；无相机感知（激光雷达单传感器）。
+- CARLA 侧 S01 四条跟踪判据入表放行（ADR-0002）；定位模块尚未在 CARLA 上验收（世界与地图不同源）。
+- 本地 Gazebo 的感知耗时 p95 24 ms 超 SPEC §7 的 10 ms 线，目标硬件（云机）8.9 ms 在线内 —— 拍板暂不改线程模型（SPEC §7 注解）。
 
-# 测试 + lint（提交前跑）
-colcon test && colcon test-result --all
+## 路线图（已全部完成）
 
-# 只跑 L1 单元测试，快一个数量级
-./build/ads_common/test_angles
-
-# 改了 config/vehicle_params.yaml 之后**必须**重新生成 SDF 和 URDF
-python3 scripts/gen_vehicle_model.py
-python3 scripts/gen_vehicle_model.py --check    # CI 用这个卡住"忘了重新生成"
-```
-
-代码风格由根目录的 `.clang-format` 定义，编辑器保存即格式化，CI 会卡。
-
-### 几条不显然的约束
-
-1. **`config/vehicle_params.yaml` 是车辆参数的唯一来源**，SDF 和 URDF 都是生成物，
-   不要手改。手改的症状是 RViz 里点云和车模型对不上，或更隐蔽的：TF 报的外参与
-   Gazebo 里实际安装位置差几厘米，下游全部带着这个偏差却没有任何报错。
-2. **算法与 ROS 解耦**：每个包分 `lib/`（纯 C++17，无 ROS）和 `node/`（ROS 包装层）。
-   这不是风格偏好 —— L1 测试要保持毫秒级，必须能脱离 ROS 跑。
-3. **所有节点 `use_sim_time=true`**，禁止用 `now()` 做算法时序。
-4. **坐标变换一律走 TF2**，禁止手写变换矩阵。
-5. **物理量带单位后缀**：`speed_mps`、`angle_rad`、`dist_m`。单位混淆是本领域
-   最高频的 bug 源。
-
-完整规范见 SPEC.md §7。
-
----
-
-## 目录
-
-```
-├── SPEC.md                      # 唯一事实来源
-├── CLAUDE.md                    # 导航 + 实测踩坑记录
-├── config/                      # **全部手写源头**，生成物一律不手改
-│   ├── vehicle_params.yaml      #   车辆参数（SDF/URDF 都从它生成）
-│   ├── campus_map.yaml          #   地图（.xodr / 路面 SDF / 对账基准 都从它生成）
-│   ├── obstacles.yaml           #   P3 验收场景的障碍物（Gazebo 模型从它生成）
-│   ├── control_params.yaml      #   控制器调参
-│   └── planning_params.yaml     #   规划器调参
-├── docker/                      # 本地与云端共用同一个 Dockerfile
-├── models/  worlds/             # Gazebo 模型与世界（model.sdf 是生成物）
-├── scripts/                     # setup / verify / 单项检查
-├── src/
-│   ├── ads_msgs/                # 消息接口（模块间契约）
-│   ├── ads_common/              # 纯算法工具，**不依赖 ROS**（角度、参考线几何、入参校验）
-│   ├── ads_map/                 # OpenDRIVE 解析 + 车道图 + 路由
-│   ├── ads_planning/            # Frenet 采样 + 碰撞检测 + 速度剖面
-│   ├── ads_control/             # 横向 Stanley + 纵向速度环 PI
-│   ├── ads_bringup/             # 全栈 launch 入口
-│   ├── ads_simulation/
-│   │   └── gazebo_bridge/       # 环境 A：Gazebo → 规范话题（含障碍物真值发布器）
-│   ├── ads_teleop/              # 键盘 / 手柄 → /vehicle_cmd
-│   └── ads_visualization/       # URDF（生成物）+ RViz 配置
-└── tasks/                       # 任务拆解与进度
-```
-
-数据流：`ads_map → /route/path → ads_planning → /planning/trajectory → ads_control → /vehicle_cmd`。
-
-SPEC §5 里还列了 `ads_perception`、`ads_localization`、`ads_prediction` 等包，**尚未创建**。
-
----
-
-## 路线图
-
-P0a 本地环境 ✅ → P0b 云端 CARLA（方案 B 已实测）→ P1 地图与路由 ✅ →
-P2 控制 ✅ → P3 规划 ✅ → **P4 定位** → P5 感知 → P6 预测 → P7 实车。
-
-控制排在感知前面是有意的：先用仿真真值打通「规划→控制→车动起来」的闭环，
-之后每个模块都能立刻看到效果。先做感知的话，你会对着点云调三个月而车一步没动。
-
-架构决策记录见 [docs/adr/](docs/adr/)。
-
----
+P0a 本地环境 → P0b 云端 CARLA 最小对齐 → P1 地图与路由 → P2 控制 → P3 规划 → P4 定位 →
+P5 感知 → P6 预测 → P7 行为决策 → P8 场景测试体系 + CI + CARLA 半区 → P9 感知域移植 + 性能鲁棒。
+控制排在感知前面是有意的：先用仿真真值打通「规划→控制→车动起来」的闭环，之后每个模块都能
+立刻看到效果。2026-08-12 做过一次全栈对抗性复检（37 个审查/验证子代理），修复 3 high + 11 medium。
 
 ## 许可
 

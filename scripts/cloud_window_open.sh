@@ -10,6 +10,7 @@
 #      # 之后 grep -E "里程碑|FATAL" /root/open.out 看进度；全部里程碑过 = 可以派轮
 #
 #  幂等：每一步先查后做，重跑只补缺的。全程不需要交互。
+#  可选：export CARLA_SHA256=<可信下载的 sha256> 后再起 —— 脚本会强校验 tarball；未设时只打印实测值。
 #
 #  ## 它把三个窗口里手工踩过的坑一次焊死（每条都有实测出处）
 #   1. 驱动：580-open × UE4.26 = Xid 32 秒崩（窗口 2，4090）；5090+580-open 却能跑
@@ -58,10 +59,22 @@ else
     M "下载 $URL（7.9 GB，断点续传）"
     curl -fL -C - -sS -o CARLA_0.9.16.tar.gz --connect-timeout 20 "$URL" && break
   done
+  # 完整性：CARLA_SHA256 已知时强校验（不匹配即停），未知时把实测值印出来供下窗口钉住
+  # （2026-08-16 安全复审：8 GB tarball 走镜像/短链无校验就解包运行）。
+  ACTUAL_SHA=$(sha256sum CARLA_0.9.16.tar.gz | awk '{print $1}')
+  M "CARLA_0.9.16.tar.gz sha256 = ${ACTUAL_SHA}"
+  if [ -n "${CARLA_SHA256:-}" ] && [ "${ACTUAL_SHA}" != "${CARLA_SHA256}" ]; then
+    M "FATAL: CARLA tarball sha256 与钉住的值不符（期望 ${CARLA_SHA256}）—— 下载源被换了或文件残缺"
+    exit 6
+  fi
   [ -s CARLA_0.9.16.tar.gz ] || { M "FATAL: CARLA 下载失败"; exit 2; }
   tar -xzf CARLA_0.9.16.tar.gz -C ${CARLA_DIR} && rm -f CARLA_0.9.16.tar.gz
 fi
-chmod -R o+rX /root ${CARLA_DIR} 2>/dev/null || chown -R carla:carla ${CARLA_DIR}
+# carla 用户只需要**穿过** /root 到 ${CARLA_DIR}：只给 /root 加 o+x（不递归、不给读），
+# CARLA 目录整体归 carla 用户。此前的 `chmod -R o+rX /root` 把 /root/.ssh、.docker/config.json、
+# bash_history、/root/ads 全设成其他用户可读（2026-08-16 安全复审 Medium）。
+chmod o+x /root 2>/dev/null || true
+chown -R carla:carla ${CARLA_DIR} 2>/dev/null || chmod -R o+rX ${CARLA_DIR}
 M "里程碑①：CARLA 就绪"
 
 M "══ 4. 容器（docker compose cloud）══"
