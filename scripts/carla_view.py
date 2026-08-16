@@ -16,14 +16,15 @@
 """云机上「亲眼看」CARLA：给自车挂一台追尾相机，MJPEG 通过 HTTP 直播到本机浏览器.
 
 服务端跑在 `-RenderOffScreen`（无头，SPEC §4.1 环境 B 的前提），没有窗口可看；
-本脚本作为**第二个只读客户端**挂一台 RGB 相机（找不到自车时退成路口上空的鸟瞰
-固定机位），把每帧编成 JPEG，用 multipart/x-mixed-replace 直播。
+本脚本作为**第二个只读客户端**挂三台 RGB 相机 —— 追尾、自车正上方 35 m 的跟车俯视、
+环线上空 150 m 的全图（找不到自车时只剩全图），把每帧编成 JPEG，用
+multipart/x-mixed-replace 直播。
 
 用法（云机容器内，栈起不起都行；栈起落之间它会自己重挂）：
     docker exec -d ads-dev python3 /workspace/scripts/carla_view.py          # 默认 :8080
 本机：
     ssh -p <port> -L 8080:127.0.0.1:8080 root@<host>      # 保持这个 ssh 开着
-    浏览器打开 http://localhost:8080                       # 追尾视角；/top 是鸟瞰
+    浏览器打开 http://localhost:8080                       # 追尾；/top 跟车俯视；/map 全图
 然后照常派轮（l3c_*_round.sh），车一 spawn 画面就切到追尾视角。
 
 ⚠️ 只读：不 apply_settings、不重载世界、不 spawn 车 —— 相机是唯一的写操作，
@@ -47,15 +48,19 @@ import numpy as np
 # 追尾视角（相对自车原点 = 包围盒中心，CARLA 左手系：x 前 z 上）
 CHASE_LOCATION = (-7.5, 0.0, 3.2)
 CHASE_PITCH_DEG = -14.0
-# 鸟瞰固定机位：整个环线正上方（环线 180×100 m 以原点为中心，150 m 高 + 90° 视场
-# 罩住 300 m 见方）；车只有十几像素，看的是「谁在哪、往哪走」，细节看追尾视角
-TOP_LOCATION = (0.0, 0.0, 150.0)
-TOP_PITCH_DEG = -89.9
+# 跟车俯视：挂在自车正上方 35 m 竖直向下（90° 视场 ⟹ 70 m 见方，车 ~50 像素、
+# 行人几像素也看得见）—— 看让行/横穿/跟停的相对几何用这个
+TOP_HEIGHT_M = 35.0
+# 全图：整个环线正上方（环线 180×100 m 以原点为中心，150 m 高 + 90° 视场罩住 300 m
+# 见方）。⚠️ 这个高度上一辆车只有 13×6 像素（0.31 m/px），JPEG 一压就是个白点 ——
+# 它是看「谁在哪」的示意图，不是看车的；实测 150 m 时车没被剔除，只是小
+MAP_LOCATION = (0.0, 0.0, 150.0)
+MAP_PITCH_DEG = -89.9
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>CARLA</title>
 <style>body{margin:0;background:#111;color:#ccc;font:14px sans-serif}
 .bar{padding:6px 10px}.bar a{color:#8cf;margin-right:14px}img{display:block;max-width:100vw}</style>
-</head><body><div class="bar"><a href="/">追尾</a><a href="/top">鸟瞰</a>
+</head><body><div class="bar"><a href="/">追尾</a><a href="/top">跟车俯视</a><a href="/map">全图</a>
 <span id="s"></span></div><img id="v" src="/stream?view=VIEW"><script>
 setInterval(()=>fetch('/status').then(r=>r.text()).then(t=>{document.getElementById('s').textContent=t}),1000)
 </script></body></html>""".encode('utf-8')
@@ -66,8 +71,8 @@ class Frames:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.jpeg = {'chase': None, 'top': None}
-        self.stamp = {'chase': 0.0, 'top': 0.0}
+        self.jpeg = {'chase': None, 'top': None, 'map': None}
+        self.stamp = {'chase': 0.0, 'top': 0.0, 'map': 0.0}
         self.status = '连接中…'
 
     def put(self, view, data):
@@ -101,8 +106,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         path, _, query = self.path.partition('?')
-        view = 'top' if 'view=top' in query or path == '/top' else 'chase'
-        if path in ('/', '/top'):
+        view = 'chase'
+        for name in ('top', 'map'):
+            if f'view={name}' in query or path == f'/{name}':
+                view = name
+        if path in ('/', '/top', '/map'):
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
@@ -173,31 +181,36 @@ def run_cameras(args):
             time.sleep(1.0)  # 同步模式下新客户端的第一份 episode state 要等一拍
             ego = find_ego(world)
             bp = camera_blueprint(world, args.width, args.height, args.fov)
-            # 鸟瞰机位总是有（栈没起时至少能看见地图）
-            top = world.spawn_actor(bp, carla.Transform(
-                carla.Location(*TOP_LOCATION), carla.Rotation(pitch=TOP_PITCH_DEG, yaw=0.0)))
-            cameras.append(top)
-            top.listen(lambda img: FRAMES.put('top', encode_jpeg(img, quality)))
+            # 全图机位总是有（栈没起时至少能看见地图）
+            overview = world.spawn_actor(bp, carla.Transform(
+                carla.Location(*MAP_LOCATION), carla.Rotation(pitch=MAP_PITCH_DEG, yaw=0.0)))
+            cameras.append(overview)
+            overview.listen(lambda img: FRAMES.put('map', encode_jpeg(img, quality)))
             if ego is not None:
                 chase = world.spawn_actor(bp, carla.Transform(
                     carla.Location(*CHASE_LOCATION), carla.Rotation(pitch=CHASE_PITCH_DEG)),
                     attach_to=ego)
                 cameras.append(chase)
                 chase.listen(lambda img: FRAMES.put('chase', encode_jpeg(img, quality)))
-                FRAMES.status = f'追尾相机已挂到自车 id={ego.id}（{ego.type_id}）'
+                top = world.spawn_actor(bp, carla.Transform(
+                    carla.Location(z=TOP_HEIGHT_M), carla.Rotation(pitch=-89.9)),
+                    attach_to=ego)
+                cameras.append(top)
+                top.listen(lambda img: FRAMES.put('top', encode_jpeg(img, quality)))
+                FRAMES.status = f'追尾/俯视相机已挂到自车 id={ego.id}（{ego.type_id}）'
             else:
-                FRAMES.status = '没找到自车（栈没起？）—— 只有鸟瞰；栈起后自动重挂'
+                FRAMES.status = '没找到自车（栈没起？）—— 只有全图；栈起后自动重挂'
             # 守望：帧不再更新（世界重载 / 栈收了 / 自车没了）→ 重来
             last_check = time.monotonic()
             while True:
                 time.sleep(1.0)
-                _, top_stamp = FRAMES.get('top')
+                _, top_stamp = FRAMES.get('map')
                 stale = time.monotonic() - top_stamp > 5.0
                 if ego is None and find_ego(world) is not None:
                     FRAMES.status = '自车出现了，重挂追尾相机'
                     break
                 if ego is not None and not ego.is_alive:
-                    FRAMES.status = '自车没了，退回鸟瞰'
+                    FRAMES.status = '自车没了，退回全图'
                     break
                 if stale and time.monotonic() - last_check > 5.0:
                     FRAMES.status = '5 s 没有新帧（世界没在 tick 或已重载）—— 重连'

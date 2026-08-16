@@ -116,7 +116,7 @@ BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
 ## 7. 亲眼看：MJPEG 直播（`scripts/carla_view.py`，2026-08-16）
 
 服务端是 `-RenderOffScreen` 无头跑的，没有窗口。看效果用一个**只读的第二客户端**给自车挂
-追尾相机（找不到自车时是环线正上方 150 m 的鸟瞰机位），JPEG 帧走 HTTP
+追尾相机 + 正上方 35 m 的跟车俯视相机（另有环线上空 150 m 的全图；找不到自车时只剩全图），JPEG 帧走 HTTP
 `multipart/x-mixed-replace` 直播，浏览器原生就能放：
 
 ```bash
@@ -124,7 +124,8 @@ BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
 docker exec -d ads-dev python3 /workspace/scripts/carla_view.py        # 默认 :8080
 # 本机：把 8080 隧道过来（保持这个 ssh 开着），然后浏览器开 http://localhost:8080
 ssh -p <port> -L 8080:127.0.0.1:8080 root@<host>
-# 页面：/ 追尾视角、/top 鸟瞰、/frame.jpg 单帧、/status 状态；派轮照旧：
+# 页面：/ 追尾、/top 跟车俯视（自车正上方 35 m）、/map 全图（150 m，车只是个白点）、
+#       /frame.jpg?view=… 单帧、/status 状态；派轮照旧：
 docker exec ads-dev bash /workspace/scripts/l3c_behavior_round.sh crossing perception 75 91.75 20.0
 # 看完停掉（多一台 960×540 相机吃 GPU；4090 上 RTF 不受影响，但别一直挂着）
 docker exec ads-dev pkill -f carla_view
