@@ -17,10 +17,12 @@
 
 ## 🔖 下次从这里继续
 
-**当前位置**：**P9-S5 进行中（2026-08-16 本地）—— S5 拆成 S5a–S5d（plan P9-5）；S5a RANSAC 100 A/B
-落地（Gazebo 零劣化、ground_ms 8.1→3.1）、耗时表待拍板「WSL2 感知 p95 24 ms 要不要移出回调」；
-S5b **✅ 完成【CP-P9-D 达成】**（15 行全有自动化红绿，八条新守卫各注入验红，1164 tests 绿）。
-云实例已销毁；S5a-② 的 CARLA 复核与 S5c/S5d 需要下一个云窗口。** 下面是按时间顺序的窗口战报（不重排）：
+**当前位置**：**P9-S5 进行中（2026-08-16 本地）—— ⚠️ 下个云窗口第一件事：S5c 五刀共享感知代码的
+CARLA 回归（CP-P9-A ×2 + `p9_lidar_probe.py`）+ S5a-② RANSAC 100 复核 —— 两环境回归欠账。**
+S5a RANSAC 100 A/B 落地（Gazebo 零劣化、ground_ms 8.1→3.1）、耗时表待拍板「WSL2 感知 p95 24 ms
+要不要移出回调」；S5b **✅【CP-P9-D】**（15 行全有自动化红绿）；S5c **✅ Gazebo 半区【CP-P9-E 半】**
+（五刀 + 7 条 L1 各注入验红，Gazebo CP-P5-B **首次 9/9 ×3**：横向 0.15、虚警 0/0/0、ID 切换 1/1/1、
+1170 tests 绿）。云实例已销毁。** 下面是按时间顺序的窗口战报（不重排）：
 P8 租机窗口 1 已收官（2026-08-14，RTX 3090）。
 S1–S4 ✅；S5 ✅（桥六项全绿、τ=0.140 复现、油门/刹车标定、七项会话加固）；
 **S6 大半达成**：S01_S02_S07 功能通过 + 4 条跟踪差异入表（拍板），
@@ -92,8 +94,13 @@ plan P9-5 拆片；S5a-② RANSAC 100（Gazebo ×3 零劣化，ground_ms 3.1）�
 #11 `test_localization_sensor_timeout`（假传感器 `fault.*_stop_after_s` 开关）/ #13+#15 `test_route_faults`），
 每条注入验红；**1164 tests 绿，CP-P9-D 达成**。**待拍板**：S5a-③（WSL2 感知 p95 24 ms，SPEC §7 字面要求挪线程
 vs 10 Hz 下功能无碍）。
-**接着做**：S5c 跟踪鲁棒（U 转鬼影/贴边摆，本地 Gazebo 先，L1 注入 + CP-P5-B ×3）→ 下个云窗口：
-S5a-② CARLA 复核 + CP-P9-A 复测【CP-P9-E】+ S5d 评估。
+**S5c 同日完成 Gazebo 半区**（真凶不是附记写的旧航迹而是车顶远端环碎片航迹 —— bag + 点云窗口逐帧
+钉死；五刀：浮空碎片门 / 先验沿车头补 4.4×1.8 / 成熟门槛 mature_hits 三处 / 重锚取代 / 回放仪器；
+perception.md §6.2b §6.5b §7）。**残余**：U 转那帧 ID 切换每轮 1 次 = 道具原地 300°/s 转身的
+运动学，判据 ≤2 容得下，记录不改。`run_all_scenarios.sh gazebo` **9/9 全过**（S01_S02_S07 / avoid /
+block / follow·crossing·junction 真值层+感知层；junction 感知层 ⑨ 5 次照印条款照旧）。
+**接着做**：下个云窗口 —— S5c CARLA 半区（CP-P9-A ×2、裸测）→【CP-P9-E】→ S5a-② 复核 → S5d 评估；
+本地可做的：S5a-③ 拍板后的线程模型（若拍板要挪）。
 交接全文在 plan.md **P9-4**（数据、推导、候选、守卫、影响面逐条），现场产物在 `.p9w4/`
 （不入库，README 有读法）。原冷启动命令（已执行 ①②，留作记录）：
   ① S3b：改 `config/vehicle_params.yaml` `sensors.lidar.mount_z_m` 1.6→拟 2.2 →

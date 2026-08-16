@@ -296,3 +296,50 @@ utc,git_sha,scenario,layer,criterion,value,limit,passed
 2026-08-16T03:13:50Z,0903b29,follow,perception,③ 驶离后恢复,0.82 s,≤ 3 s,PASS
 2026-08-16T03:13:50Z,0903b29,follow,perception,⑧ 零碰撞（真值最小间距）,4.37 m,> 0.3 m,PASS
 2026-08-16T03:13:50Z,0903b29,follow,perception,⑨ 行为状态切换次数,3（FOLLOW→CRUISE→YIELD→CRUISE）,≤ 4 次,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,max_lateral_error_m,0.269537,0.3,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,rms_lateral_error_m,0.0896964,0.1,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,steady_speed_error_mps,0.0625757,0.2,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,max_lateral_accel_mps2,1.90308,2.0,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,max_steer_rate_rad_s,0.5,0.5,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,goal_position_error_m,0.285787,1.0,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,goal_residual_speed_mps,0,0.05,PASS
+2026-08-16T06:54:28Z,da995f4,S01_S02_S07,-,max_cycle_time_ms,3,10.0,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,碰撞次数,0,0,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,最小侧向间距 (m),0.698,> 0.50,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,规划器最大横向偏移 (m),0.800,> 0.10,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,不越车道边线：最小余量 (m),0.162,> 0,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,回中心稳态 |d| (m),0.018,<= 0.15,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,绕完规划器偏移归零 (m),0.000,< 0.10,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,绕障段最大横向加速度 (m/s²),0.760,<= 1.5,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,绕障段跟踪误差 (m),0.092,<= 0.15,PASS
+2026-08-16T06:55:21Z,da995f4,S04_avoid,-,规划周期耗时 (ms),3.9,<= 50,PASS
+2026-08-16T06:55:57Z,da995f4,S04_block,-,碰撞次数,0,0,PASS
+2026-08-16T06:55:57Z,da995f4,S04_block,-,规划器报告不可行的拍数,444,> 0,PASS
+2026-08-16T06:55:57Z,da995f4,S04_block,-,终速 (m/s),0.000,< 0.10,PASS
+2026-08-16T06:55:57Z,da995f4,S04_block,-,停车点到障碍物间距 (m),4.044,>= 0.50,PASS
+2026-08-16T06:57:50Z,da995f4,follow,truth,① TTC 最小值（v_rel≥1.5）,2.46 s @t=48.040000000000006,> 2 s,PASS
+2026-08-16T06:57:50Z,da995f4,follow,truth,② 跟停稳态间距,4.41 m（498 拍）,"[4, 10] m",PASS
+2026-08-16T06:57:50Z,da995f4,follow,truth,③ 驶离后恢复,0.70 s,≤ 3 s,PASS
+2026-08-16T06:57:50Z,da995f4,follow,truth,⑧ 零碰撞（真值最小间距）,4.41 m,> 0.3 m,PASS
+2026-08-16T06:57:50Z,da995f4,follow,truth,⑨ 行为状态切换次数,1（FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-16T06:59:45Z,da995f4,follow,perception,① TTC 最小值（v_rel≥1.5）,2.35 s @t=48.14,> 2 s,PASS
+2026-08-16T06:59:45Z,da995f4,follow,perception,② 跟停稳态间距,4.32 m（500 拍）,"[4, 10] m",PASS
+2026-08-16T06:59:45Z,da995f4,follow,perception,③ 驶离后恢复,0.92 s,≤ 3 s,PASS
+2026-08-16T06:59:45Z,da995f4,follow,perception,⑧ 零碰撞（真值最小间距）,4.32 m,> 0.3 m,PASS
+2026-08-16T06:59:45Z,da995f4,follow,perception,⑨ 行为状态切换次数,3（FOLLOW→CRUISE→YIELD→CRUISE）,≤ 4 次,PASS
+2026-08-16T07:01:23Z,da995f4,crossing,truth,④ 占道期间完全停止,停于 t=43.1，距 4.13 m,v<0.05 且距离>3 m,PASS
+2026-08-16T07:01:23Z,da995f4,crossing,truth,⑤ 全程真值最近距离,1.60 m @t=53.3,> 1 m,PASS
+2026-08-16T07:01:23Z,da995f4,crossing,truth,⑥ 离开车道后恢复,0.86 s,≤ 3 s,PASS
+2026-08-16T07:01:23Z,da995f4,crossing,truth,⑧ 零碰撞（真值最小间距）,1.60 m,> 0.3 m,PASS
+2026-08-16T07:01:23Z,da995f4,crossing,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-16T07:03:04Z,da995f4,crossing,perception,④ 占道期间完全停止,停于 t=43.1，距 4.11 m,v<0.05 且距离>3 m,PASS
+2026-08-16T07:03:04Z,da995f4,crossing,perception,⑤ 全程真值最近距离,1.64 m @t=53.4,> 1 m,PASS
+2026-08-16T07:03:04Z,da995f4,crossing,perception,⑥ 离开车道后恢复,0.76 s,≤ 3 s,PASS
+2026-08-16T07:03:04Z,da995f4,crossing,perception,⑧ 零碰撞（真值最小间距）,1.64 m,> 0.3 m,PASS
+2026-08-16T07:06:03Z,da995f4,junction,truth,⑦ 对车流的真值最小间距,4.25 m @t=96.7 vs cross_car_c,> 1.5 m,PASS
+2026-08-16T07:06:03Z,da995f4,junction,truth,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-16T07:06:03Z,da995f4,junction,truth,⑧ 零碰撞（真值最小间距）,4.25 m,> 0.3 m,PASS
+2026-08-16T07:06:03Z,da995f4,junction,truth,⑨ 行为状态切换次数,3（CRUISE→YIELD→FOLLOW→CRUISE）,≤ 4 次,PASS
+2026-08-16T07:09:08Z,da995f4,junction,perception,⑦ 对车流的真值最小间距,3.74 m @t=96.7 vs cross_car_c,> 1.5 m,PASS
+2026-08-16T07:09:08Z,da995f4,junction,perception,⑦b 让行后恢复通过,让行停车 True，南行过路口 20 m True,恢复行驶且驶入横穿路,PASS
+2026-08-16T07:09:08Z,da995f4,junction,perception,⑧ 零碰撞（真值最小间距）,3.74 m,> 0.3 m,PASS

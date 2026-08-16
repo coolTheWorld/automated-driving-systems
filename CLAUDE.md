@@ -233,6 +233,12 @@ CP-P6-B 是**双层协议**：`--layer truth` 全过再跑 `--layer perception` 
 其中 §0 那张表最要紧：**P5 的五个根因没有一个在最初怀疑的地方**
 （第五个是 P6-S0 钉死的车道内幻影 —— 台账写的「欠分割污染尺寸记忆」也错了，
 真身是「补全/重锚虫洞焊出假速度航迹 × 遮挡滑行」，见 perception.md §6.1）。
+**P9-S5c（2026-08-16）加了两道物理先验准入门与一个成熟门槛**（perception.md §6.2b/§6.5b/§7）：
+浮空碎片门（底离地 ≥1.0 且延展 <0.3 的簇 = 车顶远端环碎片，不成检测 —— U 转鬼影的真身）、
+车辆先验改沿**车头方向**补 4.4×1.8 先验盒（旧版沿视线推 + 深度 <1.0 才推 = 每次由远及近在
+18–19 m 处稳定换 ID）、`mature_hits` 10（年轻航迹只按距离并 / 不滑行 / 未命中帧钉在最近观测发）。
+跟踪层排错的仪器：落 bag + `test_tracker --gtest_also_run_disabled_tests --gtest_filter='*ReplayFromCsv*'`
+（框级数据能看出「有鬼影」，看不出「谁是主角」）。
 ⚠️ `tracker` 里三条实测结论极反直觉，改它之前先读 `tracker.hpp` 的文件头：
 **滤包围盒中心是错的**（中心不是目标身上的固定点，随观测几何漂移 2.2 m，
 卡尔曼会把它读成 8.8 m/s 的假速度）、**L-Shape 的「长/宽」命名与目标无关**
@@ -373,7 +379,7 @@ ros2 run ads_map map_node                                           # 只起地�
 docker compose exec dev /workspace/scripts/drive.sh
 
 # ---------- 测试与 lint（提交前跑） ----------
-colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 1164 tests，约 3 min）
+colcon test && colcon test-result --all      # 全量：lint + L1 + L3-G 闭环（当前 1170 tests，约 3 min）
 colcon test --packages-select ads_common     # 单个包
 ./build/ads_common/test_angles               # 直接跑 gtest，快一个数量级，日常改代码用
 ./build/ads_map/test_geometry                # 参考线几何 vs 解析解
