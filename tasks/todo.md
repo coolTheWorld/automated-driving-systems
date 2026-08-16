@@ -100,7 +100,7 @@ plan P9-5 拆片；S5a-② RANSAC 100（Gazebo ×3 零劣化，ground_ms 3.1）�
 vs 10 Hz 下功能无碍）。
 **S5c 同日完成 Gazebo 半区**（真凶不是附记写的旧航迹而是车顶远端环碎片航迹 —— bag + 点云窗口逐帧
 钉死；五刀：浮空碎片门 / 先验沿车头补 4.4×1.8 / 成熟门槛 mature_hits 三处 / 重锚取代 / 回放仪器；
-perception.md §6.2b §6.5b §7）。**残余**：U 转那帧 ID 切换每轮 1 次 = 道具原地 300°/s 转身的
+perception.md §6.2b §6.7 §7）。**残余**：U 转那帧 ID 切换每轮 1 次 = 道具原地 300°/s 转身的
 运动学，判据 ≤2 容得下，记录不改。`run_all_scenarios.sh gazebo` **9/9 全过**（S01_S02_S07 / avoid /
 block / follow·crossing·junction 真值层+感知层；junction 感知层 ⑨ 5 次照印条款照旧）。
 **窗口 6 已做**：S5c CARLA 半区 → CP-P9-E ✅；S5a-② 复核 ✅；S5d 评估 ✅（报告在 plan P9-5 S5d 行）。

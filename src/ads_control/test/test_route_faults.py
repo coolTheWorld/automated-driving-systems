@@ -25,8 +25,8 @@ Route-layer faults must leave the car parked, and a good goal afterwards must st
   #13：launch 里**没有** map→odom 的静态 TF ⟹ map_node「拿不到 TF … 没有起点就无法规划」
        ⟹ 同上不动；测试再把静态 TF 发出来 + 重发目标 ⟹ 车动起来。
   ⚠️ 静态 TF 一旦发出就永不过期（tf2 对 /tf_static 的语义，陷阱表），所以「拿不到 TF」
-     只能在**一开始就不发**时测 —— #13 必须排在 #15 前面，同一个 launch 里按方法名字母序跑
-     （unittest 默认顺序），方法名前缀 a_/b_ 就是为这个。
+     只能在**一开始就不发**时测 —— #13 必须排在 #15 前面。三段写在**同一个测试方法**里
+     （复审 #9：原来拆成 a_/b_ 两个方法靠 unittest 的字母序，顺序耦合藏在方法名里）。
 
 链路：假车（/clock 来源）+ map_node + planning_node + control_node；**不含**静态 TF。
 判「不动」用控制诊断：状态从未 TRACKING 且 measured_speed 恒 < 0.05。
@@ -162,8 +162,12 @@ class TestRouteFaultsKeepTheCarParked(unittest.TestCase):
                   f'末拍 {self.control_samples[-1] if self.control_samples else None}；'
                   f'规划最后一条：{self.planning_messages[-1] if self.planning_messages else None}')
 
-    def test_a_no_tf_then_tf(self):
-        """No map->odom: goal rejected, car parked; TF appears + goal resent: car drives (#13)."""
+    def test_no_tf_then_tf_then_unroutable_goal(self):
+        """Three phases in one method: no TF (#13), TF arrives, unroutable goal (#15)."""
+        # 三段必须按这个顺序、在同一个 launch 里跑：静态 TF 一旦发出永不过期（陷阱表），
+        # 所以「没有 TF」只能是第一段；「无路由目标」要在车停稳之后才量得出「不动」。
+        # 原来拆成两个方法靠 a_/b_ 前缀排序 —— 顺序耦合藏在方法名里（复审 #9），合成一段。
+        # ---- ① 没有 map→odom：合法目标被拒、车不动 ----
         self._spin(3.0)
         self._send_goal(GOAL_X_M, GOAL_Y_M)
         self._assert_parked(4.0, '没有 map→odom TF、发了合法目标')
@@ -178,13 +182,12 @@ class TestRouteFaultsKeepTheCarParked(unittest.TestCase):
         transform.transform.rotation.w = 1.0
         self.static_tf.sendTransform(transform)
         self._spin(1.0)
+        # ---- ② TF 到位：重发合法目标，车动起来（守卫没有把链路锁死）----
         self._send_goal(GOAL_X_M, GOAL_Y_M)
         self._assert_drives(30.0, 'TF 到位后重发合法目标')
 
-    def test_b_unroutable_goal_keeps_last_route_out(self):
-        """Goal far from any lane: empty Path ignored, no new route, car parked (#15)."""
-        # ⚠️ 前一个方法已经让车开向合法目标；这里等它到达/停稳后再注入，
-        #    否则「不动」量的是上一条路线。GOAL_REACHED 或速度归零即算稳。
+        # ---- ③ 无路由目标：空 Path 被忽略、没有新路线，车不动 ----
+        # 等它到达/停稳后再注入，否则「不动」量的是上一条路线。GOAL_REACHED 且速度归零即算稳。
         deadline = time.monotonic() + 40.0
         while time.monotonic() < deadline:
             self._spin(0.5)

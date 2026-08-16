@@ -161,8 +161,8 @@ if(BUILD_TESTING)
       #    的两个闭环同时在跑，默认 domain 0 下话题和 TF 全是共享的。
       #    实测：不隔离时本测试的「/tf_static 上不许有 map→odom」会读到
       #    ads_control 那个测试起的 static_transform_publisher，两边一起红。
-      #    分配表：ads_control 41/42/46/48/49/50/52/53，ads_localization 43/54，
-      #    ads_perception 44，gazebo_bridge 45，ads_prediction 47。
+      #    分配表（与 ads_control/CMakeLists.txt 那份同步维护）：ads_control 41/42/46/48/49/50/52/53，
+      #    ads_localization 43/54，ads_perception 44，gazebo_bridge 45/51，ads_prediction 47。
       ROS_DOMAIN_ID=43)
 
   # 传感器超时降级（清单 #11）：雷达断流 ⟹ 降出 NDT_AIDED；GNSS 也断 ⟹ DEAD_RECKONING；

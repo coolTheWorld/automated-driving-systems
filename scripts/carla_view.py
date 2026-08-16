@@ -230,6 +230,8 @@ def run_cameras(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--bind', default='127.0.0.1',
+                        help='HTTP 监听地址（默认回环；ssh -L 转发用不着别的）')
     parser.add_argument('--port', type=int, default=2000)
     parser.add_argument('--http-port', type=int, default=8080)
     parser.add_argument('--width', type=int, default=960)
@@ -243,7 +245,9 @@ def main():
         print('carla PythonAPI 不可用：本脚本只在云机上跑', file=sys.stderr)
         return 2
     threading.Thread(target=run_cameras, args=(args,), daemon=True).start()
-    server = ThreadingHTTPServer(('0.0.0.0', args.http_port), Handler)
+    # 只绑回环：访问路径就是 ssh -L 隧道（脚本头），云机 compose 是 host 网络，绑 0.0.0.0
+    # 等于把无鉴权的直播暴露到实例网卡上（复审 #3）。要给别的机器看就显式 --bind 0.0.0.0。
+    server = ThreadingHTTPServer((args.bind, args.http_port), Handler)
     print(f'直播就绪：http://127.0.0.1:{args.http_port}/（本机 ssh -L 转发后打开）', flush=True)
     try:
         server.serve_forever()

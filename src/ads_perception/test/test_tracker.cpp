@@ -47,6 +47,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -979,6 +980,148 @@ TEST(Tracker, KeepsTheIdWhenTheSideOfAnApproachingCarComesIntoView)
     ids_seen.size(), id_at_12s, worst_center_error_m);
   EXPECT_EQ(ids_seen.size(), 1U) << "侧面露出来那几帧换了 ID —— 先验补全在深度过 1 m 时跳变了？";
   EXPECT_LT(worst_center_error_m, 0.6) << "先验补全的中心离真值太远（沿视线推 vs 沿车头推？）";
+}
+
+// ---------------------------------------------------------------------------
+//  U 转实测序列：掉头前后不许有鬼影（P9-S5c 收口的回归夹具，2026-08-16 复审时加）
+//
+//  Gazebo both 场景 bag（浮空碎片门已开的那一轮），20.6–23.0 s 车周 14–28 m 内的全部
+//  检测框 + 真值中心原样内嵌。道具在 x≈19.5 处原地 ~300°/s 转身，真值中心每帧跳 0.5–0.7 m。
+//  修前的病理：旧航迹配不上跳变检测 ⟹ 新航迹三帧确认 ⟹ 旧航迹躲在新盒子后面按 −4 m/s
+//  滑行 1.4 s（对向车道里 3–5 m 外的鬼影）。修后：重锚取代 + 成熟门槛，旧航迹 0.5 s 内消失。
+//  判据：每一帧每条确认航迹的发布位置离真值中心 ≤ 2.5 m（鬼影是 3–5 m 且越漂越远）；
+//  整段出现的确认 ID ≤ 2（残余那一次切换是道具运动学，plan/§6.7 记录）。
+//
+//  ## 故障注入实测（2026-08-16）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 重锚取代关掉（superseded 恒 false） | 红：最远 8.71 m @22.4（旧航迹躲在新盒子后滑行、
+//    越漂越远）；另红 DoesNotCoastAGhostBehindItsOwnReanchoredTrack |
+//  基线：确认 ID 2 个，最远 2.24 m @21.5 —— 那是**成熟旧航迹丢第 2 帧时的普通预测**（道具那两帧
+//  真值中心跳了 1.2 m），不是鬼影；鬼影从 3.7 m 起且越漂越远。2.5 的门就卡在两者之间。
+// ---------------------------------------------------------------------------
+TEST(Tracker, UTurnSequenceLeavesNoGhostBehind)
+{
+  struct Row
+  {
+    double t, x, y, yaw, l, w, h;
+  };
+  static const Row kDetections[] = {
+    {20.6, 21.78, -48.27, 0.000, 4.43, 1.80, 1.31}, {20.7, 21.47, -48.26, 0.000, 4.25, 1.82, 1.30},
+    {20.8, 21.04, -48.26, 0.000, 4.29, 1.82, 1.30}, {20.9, 20.60, -48.27, 0.000, 4.38, 1.81, 1.30},
+    {21.0, 20.28, -48.27, 3.141, 4.24, 1.81, 1.29}, {21.1, 19.80, -48.27, 0.000, 4.37, 1.80, 1.30},
+    {21.2, 19.46, -48.27, 0.000, 4.27, 1.81, 1.30}, {21.3, 19.51, -48.92, 0.523, 4.40, 1.83, 1.31},
+    {21.4, 19.99, -49.42, 1.030, 4.39, 1.81, 1.31}, {21.5, 21.12, -49.67, 1.448, 4.35, 0.56, 1.25},
+    {21.6, 20.98, -49.59, 1.780, 4.41, 1.74, 1.31}, {21.7, 21.35, -49.56, 2.042, 4.38, 1.77, 1.31},
+    {21.8, 21.67, -49.56, 2.269, 4.40, 1.84, 1.31}, {21.9, 22.06, -49.56, 2.443, 4.33, 1.81, 1.31},
+    {22.0, 22.43, -49.56, 2.600, 4.29, 1.81, 1.31}, {22.1, 23.79, -49.97, 2.740, 2.10, 1.79, 1.31},
+    {22.1, 22.69, -48.53, 0.000, 0.03, 0.01, 1.12}, {22.1, 21.20, -47.89, 0.000, 0.01, 0.00, 1.09},
+    {22.1, 21.99, -48.23, 0.000, 0.02, 0.01, 1.00}, {22.2, 24.90, -50.02, 1.274, 1.81, 0.66, 1.30},
+    {22.3, 25.61, -49.85, 1.379, 1.79, 0.06, 1.26}, {22.4, 24.26, -49.44, 3.037, 3.58, 1.81, 1.31},
+    {22.4, 21.88, -50.08, 0.000, 0.04, 0.01, 1.16}, {22.5, 24.22, -49.33, 3.106, 4.45, 1.81, 1.31},
+    {22.6, 24.64, -49.26, 0.017, 4.36, 1.82, 1.31}, {22.7, 25.04, -49.17, 0.070, 4.35, 1.83, 1.31},
+    {22.8, 25.39, -49.11, 0.105, 4.42, 1.84, 1.31}, {22.9, 25.80, -49.01, 0.122, 4.37, 1.84, 1.31},
+    {23.0, 26.18, -48.94, 0.140, 4.40, 1.82, 1.31},
+  };
+  struct Truth
+  {
+    double t, x, y;
+  };
+  static const Truth kTruth[] = {
+    {20.6, 21.84, -48.25}, {20.7, 21.44, -48.25}, {20.8, 21.04, -48.25}, {20.9, 20.64, -48.25},
+    {21.0, 20.24, -48.25}, {21.1, 19.84, -48.25}, {21.2, 19.44, -48.25}, {21.3, 19.41, -48.78},
+    {21.4, 19.85, -49.34}, {21.5, 20.38, -49.58}, {21.6, 20.84, -49.59}, {21.7, 21.22, -49.56},
+    {21.8, 21.57, -49.54}, {21.9, 21.92, -49.54}, {22.0, 22.27, -49.53}, {22.1, 22.63, -49.51},
+    {22.2, 23.00, -49.48}, {22.3, 23.38, -49.44}, {22.4, 23.75, -49.39}, {22.5, 24.14, -49.33},
+    {22.6, 24.52, -49.26}, {22.7, 24.91, -49.18}, {22.8, 25.30, -49.11}, {22.9, 25.69, -49.03},
+    {23.0, 26.08, -48.95},
+  };
+  const Eigen::Vector2d sensor(30.0, -51.75);  // 自车静止在起点，与实测一致
+  Tracker tracker;
+  // 前滚 12 帧直行（把航迹养成熟 —— 实测里它在掉头前已被跟了好几秒）。
+  for (int frame = 0; frame < 12; ++frame) {
+    Detection d;
+    d.position = {26.6 - 0.4 * frame, -48.26};
+    d.yaw_rad = 0.0;
+    d.length_m = 4.4;
+    d.width_m = 1.8;
+    d.height_m = 1.3;
+    tracker.Update({d}, kDt, sensor);
+  }
+  std::map<double, std::vector<Detection>> frames;
+  for (const Row & row : kDetections) {
+    Detection d;
+    d.position = {row.x, row.y};
+    d.yaw_rad = row.yaw;
+    d.length_m = row.l;
+    d.width_m = row.w;
+    d.height_m = row.h;
+    frames[row.t].push_back(d);
+  }
+  std::set<std::uint32_t> ids;
+  double worst_offset_m = 0.0;
+  double worst_t = 0.0;
+  for (const auto & [t, dets] : frames) {
+    tracker.Update(dets, kDt, sensor);
+    const Truth * truth = nullptr;
+    for (const Truth & candidate : kTruth) {
+      if (std::abs(candidate.t - t) < 0.01) {
+        truth = &candidate;
+      }
+    }
+    ASSERT_NE(truth, nullptr);
+    const std::vector<Track> published = tracker.ConfirmedTracks();  // 按值返回，先落地
+    for (const Track & track : published) {
+      ids.insert(track.id);
+      const double offset_m =
+        (track.published_position(10) - Eigen::Vector2d(truth->x, truth->y)).norm();
+      if (offset_m > worst_offset_m) {
+        worst_offset_m = offset_m;
+        worst_t = t;
+      }
+    }
+  }
+  printf(
+    "[          ] U 转序列：确认 ID %zu 个，发布位置离真值最远 %.2f m @t=%.1f\n", ids.size(),
+    worst_offset_m, worst_t);
+  EXPECT_LE(ids.size(), 2U) << "U 转前后 ID 数超过 2 —— 航迹在碎裂";
+  EXPECT_LT(worst_offset_m, 2.5) << "有确认航迹离真值 ≥2.5 m 还在发 —— 掉头鬼影回来了";
+}
+
+TEST(Tracker, ConfirmHitsOfOneDoesNotBreakTheReanchorScan)
+{
+  // 复审（2026-08-16）发现的潜伏越界：confirm_hits=1 时新航迹出生即确认，同一帧后建的
+  // 新航迹扫描重锚候选时若拿 tracks_.size() 做上界，会读 assignment[t] 越界。
+  // 用例：一帧里两个互不关联的检测同时出生 —— 修前是 UB，修后各起一条、互不为候选。
+  TrackerParams params;
+  params.confirm_hits = 1;
+  params.mature_hits = 1;
+  Tracker tracker(params);
+  tracker.Update({MakeDetection(10.0, 0.0), MakeDetection(10.0, 6.0)}, kDt, kSensor);
+  ASSERT_EQ(tracker.tracks().size(), 2U);
+  for (const Track & track : tracker.tracks()) {
+    EXPECT_TRUE(track.confirmed);
+    EXPECT_EQ(track.reanchor_of_id, 0U) << "同帧出生的航迹不该互为重锚候选";
+  }
+  // 再喂几帧，两条都该稳定存在（没有被彼此"取代"）。
+  for (int frame = 1; frame < 6; ++frame) {
+    tracker.Update(
+      {MakeDetection(10.0 + 0.1 * frame, 0.0), MakeDetection(10.0 + 0.1 * frame, 6.0)}, kDt,
+      kSensor);
+  }
+  EXPECT_EQ(tracker.ConfirmedTracks().size(), 2U);
+}
+
+TEST(Tracker, RejectsMatureHitsBelowConfirmHits)
+{
+  // 三条规则都假定 成熟 ⟹ 已确认；反着配会让年轻/成熟的分野与确认门槛交叉。
+  TrackerParams params;
+  params.confirm_hits = 5;
+  params.mature_hits = 3;
+  EXPECT_THROW(Tracker{params}, std::invalid_argument);
+  params.mature_hits = 5;
+  EXPECT_NO_THROW(Tracker{params});
 }
 
 // ---------------------------------------------------------------------------

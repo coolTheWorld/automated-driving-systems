@@ -24,6 +24,7 @@ add_library(${PROJECT_NAME} SHARED
   src/ground_segmentation.cpp
   src/euclidean_cluster.cpp
   src/lshape_fit.cpp
+  src/detection_gates.cpp
   src/size_classifier.cpp
   src/hungarian.cpp
   src/tracker.cpp)
@@ -103,6 +104,10 @@ if(BUILD_TESTING)
   #    （比水平点间距大 5.6 倍），**那才是 tolerance 被顶住的地方**。
   ament_add_gtest(test_euclidean_cluster test/test_euclidean_cluster.cpp)
   target_link_libraries(test_euclidean_cluster ${PROJECT_NAME} ads_common::ads_common)
+
+  # L1：检测准入门（剃刀条 / 浮空碎片，两道都是双条件门）。每个阈值两侧各一个实测形态。
+  ament_add_gtest(test_detection_gates test/test_detection_gates.cpp)
+  target_link_libraries(test_detection_gates ${PROJECT_NAME} ads_common::ads_common)
 
   # L1：L-Shape 朝向拟合 + 尺寸分类。
   #

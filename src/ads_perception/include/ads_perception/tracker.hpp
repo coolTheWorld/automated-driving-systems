@@ -399,6 +399,9 @@ struct Track
   Eigen::Vector2d last_observed_position{Eigen::Vector2d::Zero()};
 
   Eigen::Vector2d position() const { return state.head<2>(); }
+  /// 成熟 = 累计命中 ≥ mature_hits（TrackerParams::mature_hits 的推导）。三条规则共用
+  /// 同一个谓词：合并的速度判据 / 遮挡滑行 / 未命中帧发布 —— 别各写各的比较。
+  bool is_mature(int mature_hits) const { return hits >= mature_hits; }
   /// 发布出口该用的位置：成熟航迹 = KF 状态（未命中帧照发预测，下游要连续性）；
   /// **年轻航迹（hits < mature_hits）的未命中帧 = 最近观测位置，不外推** ——
   /// 它的速度还是噪声，外推噪声就是发鬼影（P9-S5c Gazebo 实测：车身碎片 3 帧确认后
@@ -407,7 +410,8 @@ struct Track
   /// 的碎片上（试过：ID 切换 +2、检测率 −2%）。
   Eigen::Vector2d published_position(int mature_hits) const
   {
-    return (hits < mature_hits && consecutive_misses > 0) ? last_observed_position : position();
+    return (!is_mature(mature_hits) && consecutive_misses > 0) ? last_observed_position
+                                                               : position();
   }
   /// KF 内部速度。⚠️ **发布出口不要用它**，用 reported_velocity() ——
   /// 结构物的内部速度是可见面滑移（真实测量位移，关联要用它跟框），

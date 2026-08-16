@@ -209,6 +209,10 @@ if(BUILD_TESTING)
 
   # 感知静默链路（P9-S5b 异常注入清单）：障碍物流中途断掉 → 规划过期检查停发
   # → 控制轨迹静默刹停。两段守卫各有各的测试，这条守它们**接得上**。
+  # ⚠️ 每个 launch 测试独占一个 ROS_DOMAIN_ID（colcon 按包并行，默认 domain 0 下话题/TF 全共享，
+  #    P4-S5 实测两个包的闭环互相污染）。分配表（与 ads_localization/CMakeLists.txt 那份同步维护）：
+  #    ads_control 41/42/46/48/49/50/52/53，ads_localization 43/54，ads_perception 44，
+  #    gazebo_bridge 45/51，ads_prediction 47。加新 launch 测试先在两处表里登记再取号。
   add_launch_test(test/test_perception_silence.py
     TIMEOUT 120
     ENV

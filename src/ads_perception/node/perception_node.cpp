@@ -69,6 +69,7 @@
 
 #include "ads_msgs/msg/obstacle.hpp"
 #include "ads_msgs/msg/obstacle_array.hpp"
+#include "ads_perception/detection_gates.hpp"
 #include "ads_perception/euclidean_cluster.hpp"
 #include "ads_perception/ground_segmentation.hpp"
 #include "ads_perception/lshape_fit.hpp"
@@ -134,10 +135,14 @@ public:
     // ---- L-Shape --------------------------------------------------------
     fit_params_.angle_step_rad = declare_parameter<double>("lshape.angle_step_rad", 0.01745);
     fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
-    min_extent_m_ = declare_parameter<double>("cluster.min_extent_m", 0.1);
-    razor_max_height_m_ = declare_parameter<double>("cluster.razor_max_height_m", 0.3);
-    floating_min_bottom_m_ = declare_parameter<double>("cluster.floating_min_bottom_m", 1.0);
-    floating_max_height_m_ = declare_parameter<double>("cluster.floating_max_height_m", 0.3);
+    // 准入门（剃刀条 / 浮空碎片）：判定在 lib（detection_gates.hpp），参数推导在 yaml。
+    admission_params_.razor_min_extent_m = declare_parameter<double>("cluster.min_extent_m", 0.1);
+    admission_params_.razor_max_height_m =
+      declare_parameter<double>("cluster.razor_max_height_m", 0.3);
+    admission_params_.floating_min_bottom_m =
+      declare_parameter<double>("cluster.floating_min_bottom_m", 1.0);
+    admission_params_.floating_max_height_m =
+      declare_parameter<double>("cluster.floating_max_height_m", 0.3);
 
     // ---- 跟踪 -----------------------------------------------------------
     tracker_params_.process_accel_stddev_mps2 =
@@ -366,62 +371,32 @@ private:
       if (!box.valid) {
         continue;
       }
-      // ---- 剃刀条门（P9-S2，物理先验准入）--------------------------------
-      // CARLA 生成路面的接缝/边线几何在 RANSAC 阈值上骑线，漏成 0.03 m 宽、
-      // 1–2.5 m 长的**单环弧段**簇（P5 实测 374 帧车道内虚警的主体），
-      // 并以短命航迹打碎跟踪器（ID 切换 47、速度误差 6.0 的上游）。
-      // ODD（SPEC §2）里不存在最小水平尺寸 < 0.1 m 的目标 —— 行人 0.4、
-      // 锥桶 0.5、车 1.8；这是按**物理**收的准入门，不是按场景调的补丁。
-      // ⚠️ P9 Gazebo 回归案（2026-08-15）推翻了「合法目标远在门上」：L-Shape
-      //    量的是**可见剖面**不是物体 —— 正对的盒状目标只露一个面，深度
-      //    方向剩下的是雷达噪声（σ=1 cm），min(l,w) 实测 p50 0.047 / max
-      //    0.097，**每一帧**都被 0.1 门吞掉（A/B：门 0.1 跟停 −5.19 m 撞车；
-      //    门 0 全绿）。CARLA 网格有曲面所以从没露过马脚。
-      //    真正的物理先验是「剃刀条是**一维**的」：既薄**又矮**（地面接缝
-      //    残留一环点，竖向延展 ≈ 0）；而正对目标薄但**高**（车尾面 1.3 m、
-      //    行人 1.5 m）。两个条件缺一不可 —— 只按薄收门等于把所有正对的
-      //    盒子当剃刀条。
-      if (
-        std::min(box.length_m, box.width_m) < min_extent_m_ && box.height_m < razor_max_height_m_) {
+      // ---- 准入门：剃刀条 / 浮空碎片（物理先验，两道都是双条件门）----------------
+      // 判定本体在 lib（detection_gates.hpp，L1 守着每个阈值的两侧）；这里只算离地高度、
+      // 记诊断。推导与实测都在 hpp / yaml 的注释里，不在此复述。
+      // 离地高度按拟合平面算（n·p + d，n 朝上），坡道上比裸 z 准。
+      double bottom_m = 1e9;
+      double top_m = -1e9;
+      for (const auto & pt : cluster_points) {
+        const double above_m = ground.found ? (ground.normal.dot(pt) + ground.offset_m) : pt.z();
+        bottom_m = std::min(bottom_m, above_m);
+        top_m = std::max(top_m, pt.z());
+      }
+      const ads_perception::Admission admission = ads_perception::AdmitDetection(
+        box.length_m, box.width_m, box.height_m, bottom_m, admission_params_);
+      if (admission == ads_perception::Admission::kRazorStrip) {
         ++stats.razor_dropped;
         stats.razor_min_extent_m =
           std::min(stats.razor_min_extent_m, std::min(box.length_m, box.width_m));
         // 被吞框的距离与簇顶离地高度（观察用：吞到的是地面残留还是远处目标的单环）
-        double top_m = -1e9;
-        for (const auto & pt : cluster_points) {
-          top_m = std::max(top_m, pt.z());
-        }
         stats.razor_max_range_m = std::max(stats.razor_max_range_m, box.center.norm());
         stats.razor_max_top_m = std::max(stats.razor_max_top_m, top_m);
         continue;
       }
-      // ---- 浮空碎片门（P9-S5c，物理先验准入的第二条）-------------------------
-      // 32 线雷达打在**车顶**上的线间距 = 顶面高差 / 相邻线仰角差 —— 挂高 2.2、
-      // 车顶 1.5，10 m 处相邻两线落在车顶上相距 ~2 m，远大于聚类容差 0.5：车顶
-      // 远端那一环于是自成一簇（Gazebo 实测 0.9×0.5×0.03，底离地 1.48）。它随车
-      // 以 4 m/s 移动、三帧就确认成 STATIC 航迹、借遮挡滑行躲在本车框后面免死，
-      // 掉头时再靠重锚补全（尺寸差 → 位移 ≤ 2.2）把整车的检测偷走 —— 真车航迹
-      // 反过来变成向西滑行的鬼影，偷到车的碎片航迹丢检测后按陈旧速度滑进自车
-      // 车道（CP-P5-B 车道内虚警 2–11 帧、ID 切换 +2 的上游，perception.md §6.5b）。
-      // ODD 里没有悬空的目标：一个**底离地 ≥ 1.0 m 且竖向延展 < 0.3 m** 的簇只能
-      // 是某个更高物体的水平表面碎片（车顶/顶盖），不是独立目标 —— 剃掉。
-      // 两条件缺一不可：只按「高」收门会吞掉墙后只露上半身的行人（底 1.0、延展
-      // 0.7）；只按「扁」收门就是剃刀门（薄矮）的重复。落地目标在 30 m 内最低
-      // 一环离地 ≤ 地面阈值 0.2 + 线间距 0.59 = 0.8 < 1.0，够不着这道门。
-      // 代价（记录在案）：只露头顶 < 0.3 m 的被遮挡目标（行人在 1.5 m 墙后只见头）
-      // 不成检测 —— 它本来也只会是一个 STATIC 小框。
-      {
-        double bottom_m = 1e9;
-        for (const auto & pt : cluster_points) {
-          // 离地高度按拟合平面算（n·p + d，n 朝上），坡道上比裸 z 准。
-          const double above_m = ground.found ? (ground.normal.dot(pt) + ground.offset_m) : pt.z();
-          bottom_m = std::min(bottom_m, above_m);
-        }
-        if (bottom_m > floating_min_bottom_m_ && box.height_m < floating_max_height_m_) {
-          ++stats.floating_dropped;
-          stats.floating_min_bottom_m = std::min(stats.floating_min_bottom_m, bottom_m);
-          continue;
-        }
+      if (admission == ads_perception::Admission::kFloatingFragment) {
+        ++stats.floating_dropped;
+        stats.floating_min_bottom_m = std::min(stats.floating_min_bottom_m, bottom_m);
+        continue;
       }
 
       // base_link → map。目标都在地面上，所以只需要平面旋转 + 平移。
@@ -714,10 +689,7 @@ private:
   std::string map_frame_;
   double max_cloud_age_s_{0.15};
   double diagnostics_period_s_{1.0};
-  double min_extent_m_{0.0};
-  double razor_max_height_m_{0.0};
-  double floating_min_bottom_m_{1.0};
-  double floating_max_height_m_{0.3};
+  ads_perception::AdmissionParams admission_params_;
   // 平面时间一致性门的状态（见回调内注释）
   bool last_plane_valid_{false};
   Eigen::Vector3d last_plane_normal_{Eigen::Vector3d::UnitZ()};

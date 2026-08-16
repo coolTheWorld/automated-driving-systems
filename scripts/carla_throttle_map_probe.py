@@ -54,7 +54,13 @@ def main():
         settings.synchronous_mode = False
         settings.fixed_delta_seconds = None
         world.apply_settings(settings)
-    # 清掉遗留车辆（上一轮栈的自车/NPC 可能还在）
+    # ⚠️ 栈在跑时禁止运行：下面会清掉世界里所有车辆。sidecar 的自车 role_name 是
+    #    ego_vehicle —— 见到它就拒跑，别把正在验收的自车销毁掉（复审 #8）。
+    for actor in world.get_actors().filter('vehicle.*'):
+        if actor.attributes.get('role_name', '') == 'ego_vehicle':
+            raise SystemExit('检测到 role_name=ego_vehicle 的车辆 —— 栈还在跑，拒绝执行'
+                             '（本脚本会清掉世界里所有车辆）。先收栈再来。')
+    # 清掉遗留车辆（上一轮栈收了之后残留的自车/NPC）
     for actor in world.get_actors().filter('vehicle.*'):
         actor.destroy()
     time.sleep(0.5)

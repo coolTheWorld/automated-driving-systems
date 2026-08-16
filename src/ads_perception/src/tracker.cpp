@@ -46,6 +46,12 @@ Tracker::Tracker(const TrackerParams & params) : params_(params)
   if (params_.confirm_hits <= 0 || params_.max_misses <= 0) {
     throw std::invalid_argument("TrackerParams: confirm_hits 与 max_misses 必须为正");
   }
+  // 「成熟」必须晚于「确认」：三条规则（合并的速度判据 / 遮挡滑行 / 未命中帧发布）
+  // 都假定 mature ⟹ confirmed。反过来配（mature_hits < confirm_hits）时年轻/成熟的
+  // 分野与确认门槛交叉，规则各说各话 —— 静默地给出一个"看起来能跑"的跟踪器。
+  if (params_.mature_hits < params_.confirm_hits) {
+    throw std::invalid_argument("TrackerParams: mature_hits 必须 ≥ confirm_hits");
+  }
 }
 
 void Tracker::Predict(double dt_s)
@@ -521,7 +527,8 @@ bool Tracker::IsOccludedByAnotherTrack(
   // 会让噪点间接续命别的航迹。
   const Eigen::Vector2d target = track.position();
   for (const Track & other : tracks_) {
-    if (other.id == track.id || !other.confirmed) {
+    // 被取代的旧航迹不当遮挡者：它的盒子就是取代它的新航迹那个盒子，新航迹已经在算。
+    if (other.id == track.id || !other.confirmed || other.superseded) {
       continue;
     }
     // 线段-OBB 相交（slab 法，精确）：转到盒子自身坐标系做 2D AABB 裁剪。
@@ -587,7 +594,7 @@ void Tracker::MergeDuplicateTracks()
       //    1–2 帧、评测在两者间摆 ⟹ 每次记 2 次 ID 切换。年轻的那条只按距离
       //    并：ODD 里两个目标中心最近 1.75 m（车与行人），1.0 m 内的年轻航迹
       //    只能是重复。理由见 merge_speed_mps / mature_hits 的注释。
-      if (tracks_[a].hits >= params_.mature_hits && tracks_[b].hits >= params_.mature_hits) {
+      if (tracks_[a].is_mature(params_.mature_hits) && tracks_[b].is_mature(params_.mature_hits)) {
         if ((tracks_[a].velocity() - tracks_[b].velocity()).norm() > params_.merge_speed_mps) {
           continue;  // 位置近但速度截然不同 ⟹ 是擦身而过的两个目标
         }
@@ -651,7 +658,7 @@ void Tracker::Update(
         SupersedeReanchoredTrack(tracks_[t]);
       }
     } else if (
-      tracks_[t].confirmed && tracks_[t].hits >= params_.mature_hits && !tracks_[t].superseded &&
+      tracks_[t].confirmed && tracks_[t].is_mature(params_.mature_hits) && !tracks_[t].superseded &&
       tracks_[t].velocity().norm() <= params_.coast_max_speed_mps &&
       IsOccludedByAnotherTrack(tracks_[t], sensor_position) &&
       tracks_[t].occluded_misses < params_.max_occluded_misses) {
@@ -686,6 +693,11 @@ void Tracker::Update(
     tracks_.end());
 
   // 没配上的检测各起一条新航迹（未确认）。
+  // ⚠️ 下面的重锚候选扫描只许看**本帧已存在**的航迹：assignment 的长度就是这一帧
+  //    Predict 时的航迹数，而循环里每建一条新航迹 tracks_ 就长一格 —— 拿 tracks_.size()
+  //    做上界会在 confirm_hits ≤ 1（新航迹出生即确认）时越界读 assignment（2026-08-16 复审
+  //    发现的潜伏越界；默认 confirm_hits=3 时被 `!confirmed` 短路掩住）。
+  const std::size_t n_existing = tracks_.size();
   for (std::size_t d = 0; d < detections.size(); ++d) {
     if (detection_used[d] != 0) {
       continue;
@@ -715,7 +727,7 @@ void Tracker::Update(
     // ≤ anchor_shift_max（同一目标换个框能造成的最大中心位移）**。这一帧只记
     // 候选，兑现放在新航迹**确认**那一帧（噪点簇活不到确认，不许它替别人判死刑）。
     double nearest_m = params_.anchor_shift_max_m;
-    for (std::size_t t = 0; t < tracks_.size(); ++t) {
+    for (std::size_t t = 0; t < n_existing; ++t) {
       if (!tracks_[t].confirmed || assignment[t] >= 0) {
         continue;
       }
@@ -739,6 +751,13 @@ std::vector<Track> Tracker::ConfirmedTracks() const
   std::vector<Track> confirmed;
   for (const Track & track : tracks_) {
     if (!track.confirmed) {
+      continue;
+    }
+    // 被自己的重锚航迹取代的旧航迹不发：它已经被判定为「同一个目标的旧框」，新框
+    // 正在发；它留在 tracks_ 里只是给 0.5 s 内可能的重新命中一个保 ID 的机会（命中即
+    // 清 superseded、恢复发布）。不加这条时它按普通未命中窗口再发 4 帧外推位置 ——
+    // 实测 U 转序列里离真值 3.7 m 的鬼影正是这 4 帧（复审夹具 UTurnSequenceLeavesNoGhostBehind）。
+    if (track.superseded) {
       continue;
     }
     // ⚠️ 年轻航迹的未命中帧**照发**，但位置用 Track::published_position()（钉在最近
