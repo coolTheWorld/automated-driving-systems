@@ -105,7 +105,7 @@ perception.md §6.2b §6.5b §7）。**残余**：U 转那帧 ID 切换每轮 1 
 block / follow·crossing·junction 真值层+感知层；junction 感知层 ⑨ 5 次照印条款照旧）。
 **窗口 6 已做**：S5c CARLA 半区 → CP-P9-E ✅；S5a-② 复核 ✅；S5d 评估 ✅（报告在 plan P9-5 S5d 行）。
 **S5d 已拍板不做**（维持 P8 入表放行；根治的起手式留档：`carla_throttle_map_probe.py --align` + `ego.align_drivetrain`
-+ S01 四条判据）。**计划表到此全部完成** —— 没有下一片。若开新阶段，先在 plan.md 立第十部分（拆片 + 检查点）再动手；
++ S01 四条判据；决策记录 **ADR-0002** + SPEC §9 D6）。**计划表到此全部完成** —— 没有下一片。若开新阶段，先在 plan.md 立第十部分（拆片 + 检查点）再动手；
 候选（都不是欠账，只是记着）：S5d 战役、P4 定位上 CARLA（世界与地图不同源，NDT 门限要重量，bringup §4.4）、
 run_all 的 CI 长程统计（P4 那 14.3% 间歇失败的统计学收口）。
 交接全文在 plan.md **P9-4**（数据、推导、候选、守卫、影响面逐条），现场产物在 `.p9w4/`

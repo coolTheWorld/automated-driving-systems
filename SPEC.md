@@ -858,6 +858,18 @@ sidecar 中继。** 原方案（§4.1 旧版）是「高频走原生、低频走
 **反向条件**（哪天可以重新评估原生层）：上述 1、2 在 CARLA 上游修复
 且有 release note 背书时。届时也只值得迁传感器流，/clock 主权不还。
 
+### ✅ D6 CARLA 侧 S01 跟踪差异不根治，维持入表放行（已决定 2026-08-16）
+
+S01 的四条跟踪类判据在 CARLA 上稳定红（横向 max 0.6–0.84 / rms 0.13–0.17 /
+Δv 0.42 / a_lat 3.0–3.3 vs 0.3 / 0.1 / 0.2 / 2.0），安全类判据全绿。P9-S5d 评估
+（云窗口 6）量清了机理 —— PhysX 发动机零油门阻尼 2.0 vs 全油门 0.15 + 扭矩曲线峰
+在 1 挡 4.8 m/s，使 4–5 m/s 速段增益比 2–3 m/s 高 78%、油门偏置随速度 0.48–0.55；
+拉平传动系（同 steering_curve 拉平的法理）后静态图变直，但闭环首轮只赢 Δv、
+蠕动死区让车停在目标前 3.96 m —— 「静态准≠闭环好」第二次应验。**用户拍板：不根治**，
+维持 P8 的入表放行（`docs/p8_carla_bringup.md` §6 #8），机制留档
+（sidecar `ego.align_drivetrain` 默认关 + `scripts/carla_throttle_map_probe.py`）。
+前因后果、被否决的方案与反向条件见 **`docs/adr/0002-carla-s01-tracking-gap-not-fixed.md`**。
+
 ### ✅ Q1 本地显卡（已查明，问题关闭）
 
 Windows 宿主为 **AMD Radeon 780M**（RDNA3 核显，UMA 共享内存，无 CUDA）。
