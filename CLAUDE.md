@@ -483,6 +483,8 @@ ros2 launch ads_bringup stack.launch.py sim:=carla  # P8-S4 起有：起 carla_b
 python3 scripts/p9_lidar_probe.py            # --lidar-z / --ego-x / --dump（整圈落盘）见脚本头
 python3 scripts/p9_mirror_probe.py           # 栈内 y 符号回归（只数离地点）
 P9_INSTRUMENTS=1 scripts/l3c_p5_round.sh both  # 随轮起 actor 普查 + 检测/确认逐帧时间线
+# 亲眼看 CARLA（无头服务端没有窗口）：容器里起 carla_view.py，本机 ssh -L 8080 后浏览器开
+#   http://localhost:8080（追尾）/top（鸟瞰）—— 用法在 docs/p8_carla_bringup.md §7
 ```
 
 ### 模型生成与单项检查

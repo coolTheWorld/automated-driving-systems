@@ -112,3 +112,25 @@ BRIDGE_NODES="/lidar_preprocessor /carla_sidecar /robot_state_publisher" \
 
 **判据与协议差异**：仿真钟由 sidecar 自发（原生层弃用，D5）；IMU 上限 20 Hz
 （同步步长 0.05）—— 定位（P4-CARLA）上机时要重估步长与 NDT 门限。
+
+## 7. 亲眼看：MJPEG 直播（`scripts/carla_view.py`，2026-08-16）
+
+服务端是 `-RenderOffScreen` 无头跑的，没有窗口。看效果用一个**只读的第二客户端**给自车挂
+追尾相机（找不到自车时是环线正上方 150 m 的鸟瞰机位），JPEG 帧走 HTTP
+`multipart/x-mixed-replace` 直播，浏览器原生就能放：
+
+```bash
+# 云机（容器内，栈起不起都行；栈起落之间它自己重挂相机）
+docker exec -d ads-dev python3 /workspace/scripts/carla_view.py        # 默认 :8080
+# 本机：把 8080 隧道过来（保持这个 ssh 开着），然后浏览器开 http://localhost:8080
+ssh -p <port> -L 8080:127.0.0.1:8080 root@<host>
+# 页面：/ 追尾视角、/top 鸟瞰、/frame.jpg 单帧、/status 状态；派轮照旧：
+docker exec ads-dev bash /workspace/scripts/l3c_behavior_round.sh crossing perception 75 91.75 20.0
+# 看完停掉（多一台 960×540 相机吃 GPU；4090 上 RTF 不受影响，但别一直挂着）
+docker exec ads-dev pkill -f carla_view
+```
+
+它不 apply_settings、不重载世界 —— 唯一的写操作是 spawn 一台 sensor（不参与碰撞检查、
+不占物理场景）。同步模式下相机跟 sidecar 的 tick 出帧（20 FPS）；栈收了之后世界回异步，
+相机照样出帧（看的是遗留 actor 的最后姿势）。
+
