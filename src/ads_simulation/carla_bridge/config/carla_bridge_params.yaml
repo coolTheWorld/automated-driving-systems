@@ -23,6 +23,17 @@ carla_sidecar:
     # apply_physics_control 改不了轴距，而它直接进 Stanley 前轴换算）。
     ego:
       blueprint: vehicle.citroen.c3
+      # 传动系拉平（P9-S5d 评估，2026-08-16 云窗口 6）：发动机零油门阻尼 = 全油门阻尼、
+      # 扭矩曲线恒定 350 Nm。原车 a(throttle, v) 在 4–5 m/s 箱增益比 2–3 箱高 78%
+      # （扭矩峰 1700 rpm ≈ 4.8 m/s）、偏置随速度 0.48–0.55 —— S01「冲宽-急刹」四条跟踪
+      # 差异的机理本体。拉平后各箱斜率 4.5–4.7、偏置 ≈0.06（scripts/carla_throttle_map_probe.py
+      # --align 的表）。⚠️ **默认关**：拉平 + 重标（k 0.222 / bias 0.06）的首轮 S01：Δv 0.42→0.25
+      # 变好，但低速起步/蠕动死区（th 0.10 从静止只给 ≈0 加速）让车停在目标前 3.96 m、
+      # 弯道 a_lat 未改善 —— 「静态准≠闭环好」第二次应验，闭环还差蠕动偏置 / 制动-滑行
+      # 配平 / PI 复调三件事，是一个独立的标定战役（plan P9-S5d 评估报告），待拍板。
+      # 打开时把下面 control 的常数换成 0.222 / 0.06。
+      align_drivetrain: false
+      flat_torque_nm: 350.0
 
     control:
       # 与 gazebo 侧 vehicle_cmd_bridge 的看门狗同值同语义。
@@ -41,6 +52,10 @@ carla_sidecar:
       # 主导项（20 FPS 下 PI 降频 + 档位/换挡动态才是），闭环表现优先。
       # 五点数据留档：0.45→0.029 / 0.55→0.293 / 0.65→1.112 /
       # 0.75→1.894 / 0.85→2.667。
+      # ---- P9-S5d 评估留档（2026-08-16，传动系拉平后重标，5090 / Town10 / c3）----
+      # align_drivetrain: true 时的常数：拉平后 a(th) 各速度箱（2–5 m/s）斜率 4.49–4.67 m/s²
+      # 每单位油门 ⟹ k ≈ 1/4.5 = 0.222；偏置 th 0.10 → a 0.11–0.29 ⟹ bias ≈ 0.06。
+      # 现值仍是原车两点粗标（0.113 / 0.54，上面那段的推导）—— 与 align_drivetrain: false 配套。
       throttle_per_mps2: 0.113
       brake_per_mps2: 0.185
       throttle_bias: 0.54

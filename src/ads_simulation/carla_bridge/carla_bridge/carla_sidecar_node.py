@@ -83,6 +83,9 @@ class CarlaSidecarNode(Node):
         # ⚠️ 不要换 tesla.model3（3.005，差 11.3%）—— 轴距 apply_physics_control
         #    改不了，只能换蓝图，而它直接进 Stanley 的前轴换算（P0b 实测结论）。
         self.declare_parameter('ego.blueprint', 'vehicle.citroen.c3')
+        # 传动系拉平（P9-S5d，对齐哲学 —— 与 steering_curve 同法理，见 _spawn_ego）
+        self.declare_parameter('ego.align_drivetrain', False)
+        self.declare_parameter('ego.flat_torque_nm', 350.0)
         self.declare_parameter('control.watchdog_timeout_s', 0.5)
         # throttle/brake 标定常数：⚠️ 上机重标（P0b：τ、稳态达成率都与 Gazebo
         # 不同）。初值取「1.5 m/s² 满油门的 40%、3.0 m/s² 满刹车」量级的保守猜测。
@@ -294,6 +297,27 @@ class CarlaSidecarNode(Node):
         physics.steering_curve = [
             self._carla.Vector2D(x=0.0, y=1.0),
             self._carla.Vector2D(x=50.0, y=1.0)]
+        # ---- 传动系拉平（P9-S5d，2026-08-16 云窗口 6 定案）-----------------------
+        # PhysX 车辆发动机：净扭矩 = th·T(rpm) − [d0 − (d0 − d1)·th]·ω，d0 零油门阻尼
+        # 2.0、d1 全油门阻尼 0.15。两个后果都实测到了（scripts/carla_throttle_map_probe）：
+        #   · 「顶住阻尼」的油门偏置随 ω 走（v 2–6 m/s：0.48–0.55；≈0.54 正是 P8 标出的
+        #     bias），单一 bias 在巡航速段偏 +0.04 ⟹ 恒推 +0.37 m/s²，稳态误差 0.42；
+        #   · T(rpm) 峰在 1700 rpm（1 挡 ≈ 4.8 m/s）⟹ 4–5 m/s 箱增益比 2–3 箱高 78%，
+        #     同一 a 指令在弯道入口给出 +40% 的实际加速度 —— S01「冲宽-急刹」的机理本体。
+        # Gazebo 的 AckermannSteering 是线性力模型，没有这两样。按对齐哲学把 CARLA
+        # 拉平：阻尼与油门无关（d0 = d1）、扭矩曲线恒定 —— 拉平后 a(th) 在 2–5 m/s 各箱
+        # 斜率 4.5–4.7 m/s²/单位油门、偏置 ≈0.06，一条直线通吃（表在 plan P9-S5d）。
+        # ⚠️ 默认**关**（yaml）：首轮闭环 S01 只赢了 Δv（0.42→0.25），低速蠕动死区让车停在
+        #    目标前 3.96 m、弯道 a_lat 没变 —— 闭环还差三件事（蠕动偏置 / 制动-滑行配平 /
+        #    PI 复调），是独立战役，待拍板。打开时 yaml 的 control 常数要一起换（0.222 / 0.06）。
+        if self.get_parameter('ego.align_drivetrain').value:
+            flat_torque_nm = float(self.get_parameter('ego.flat_torque_nm').value)
+            physics.damping_rate_zero_throttle_clutch_engaged = physics.damping_rate_full_throttle
+            physics.damping_rate_zero_throttle_clutch_disengaged = (
+                physics.damping_rate_full_throttle)
+            physics.torque_curve = [
+                self._carla.Vector2D(x=point.x, y=flat_torque_nm)
+                for point in physics.torque_curve]
         ego.apply_physics_control(physics)
         # 物理对齐的完整映射在 scripts/carla_align_vehicle.py（P0b 验证过一次）；
         # S5 上机时按它重跑一遍再把结果固化到这里 —— 现在不抄一份过来，
