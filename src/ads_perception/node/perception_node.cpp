@@ -93,6 +93,8 @@ struct StageStats
   double razor_min_extent_m{1e9};  // 本帧被吞框里最大的那个 min(l,w)：门与目标剖面的距离
   double razor_max_range_m{0.0};  // 本帧被吞框里最远的距离：远距单环回波被吞的哨兵
   double razor_max_top_m{0.0};  // 本帧被吞框里最高的簇顶（离地）：吞到的是地面残留还是目标
+  int floating_dropped{0};            // 浮空碎片门吞掉的框数（车顶远端环等）
+  double floating_min_bottom_m{1e9};  // 本帧被吞浮空框里最低的底离地：门与目标的距离
   int clusters{0};
   int largest_cluster{0};
   int detections{0};
@@ -134,6 +136,8 @@ public:
     fit_params_.min_points = declare_parameter<int>("lshape.min_points", 4);
     min_extent_m_ = declare_parameter<double>("cluster.min_extent_m", 0.1);
     razor_max_height_m_ = declare_parameter<double>("cluster.razor_max_height_m", 0.3);
+    floating_min_bottom_m_ = declare_parameter<double>("cluster.floating_min_bottom_m", 1.0);
+    floating_max_height_m_ = declare_parameter<double>("cluster.floating_max_height_m", 0.3);
 
     // ---- 跟踪 -----------------------------------------------------------
     tracker_params_.process_accel_stddev_mps2 =
@@ -391,6 +395,34 @@ private:
         stats.razor_max_top_m = std::max(stats.razor_max_top_m, top_m);
         continue;
       }
+      // ---- 浮空碎片门（P9-S5c，物理先验准入的第二条）-------------------------
+      // 32 线雷达打在**车顶**上的线间距 = 顶面高差 / 相邻线仰角差 —— 挂高 2.2、
+      // 车顶 1.5，10 m 处相邻两线落在车顶上相距 ~2 m，远大于聚类容差 0.5：车顶
+      // 远端那一环于是自成一簇（Gazebo 实测 0.9×0.5×0.03，底离地 1.48）。它随车
+      // 以 4 m/s 移动、三帧就确认成 STATIC 航迹、借遮挡滑行躲在本车框后面免死，
+      // 掉头时再靠重锚补全（尺寸差 → 位移 ≤ 2.2）把整车的检测偷走 —— 真车航迹
+      // 反过来变成向西滑行的鬼影，偷到车的碎片航迹丢检测后按陈旧速度滑进自车
+      // 车道（CP-P5-B 车道内虚警 2–11 帧、ID 切换 +2 的上游，perception.md §6.5b）。
+      // ODD 里没有悬空的目标：一个**底离地 ≥ 1.0 m 且竖向延展 < 0.3 m** 的簇只能
+      // 是某个更高物体的水平表面碎片（车顶/顶盖），不是独立目标 —— 剃掉。
+      // 两条件缺一不可：只按「高」收门会吞掉墙后只露上半身的行人（底 1.0、延展
+      // 0.7）；只按「扁」收门就是剃刀门（薄矮）的重复。落地目标在 30 m 内最低
+      // 一环离地 ≤ 地面阈值 0.2 + 线间距 0.59 = 0.8 < 1.0，够不着这道门。
+      // 代价（记录在案）：只露头顶 < 0.3 m 的被遮挡目标（行人在 1.5 m 墙后只见头）
+      // 不成检测 —— 它本来也只会是一个 STATIC 小框。
+      {
+        double bottom_m = 1e9;
+        for (const auto & pt : cluster_points) {
+          // 离地高度按拟合平面算（n·p + d，n 朝上），坡道上比裸 z 准。
+          const double above_m = ground.found ? (ground.normal.dot(pt) + ground.offset_m) : pt.z();
+          bottom_m = std::min(bottom_m, above_m);
+        }
+        if (bottom_m > floating_min_bottom_m_ && box.height_m < floating_max_height_m_) {
+          ++stats.floating_dropped;
+          stats.floating_min_bottom_m = std::min(stats.floating_min_bottom_m, bottom_m);
+          continue;
+        }
+      }
 
       // base_link → map。目标都在地面上，所以只需要平面旋转 + 平移。
       ads_perception::Detection detection;
@@ -468,11 +500,11 @@ private:
       ads_msgs::msg::Obstacle obstacle;
       obstacle.header = array.header;
       obstacle.id = track.id;
-      obstacle.classification = static_cast<std::uint8_t>(ads_perception::ClassifyBySize(
-        track.length_m, track.width_m, track.height_m, classifier_params_));
 
-      obstacle.pose.position.x = track.position().x();
-      obstacle.pose.position.y = track.position().y();
+      // 年轻航迹的未命中帧钉在最近观测位置、不外推（Track::published_position 的说明）。
+      const Eigen::Vector2d published = track.published_position(tracker_params_.mature_hits);
+      obstacle.pose.position.x = published.x();
+      obstacle.pose.position.y = published.y();
       obstacle.pose.position.z = 0.5 * track.height_m;
 
       // ⚠️ 朝向：消歧成功就用车头朝向，否则**退回轴向**。
@@ -505,12 +537,26 @@ private:
         obstacle.size_m.x = track.last_observed_length_m;
         obstacle.size_m.y = track.last_observed_width_m;
       } else if (track.vehicle_prior_anchored) {
-        obstacle.size_m.x = std::max(track.length_m, tracker_params_.vehicle_prior_length_m);
-        obstacle.size_m.y = track.width_m;
+        // ⚠️ 记忆的「长/宽」沿的是**记忆轴向**（正对时轴向是车宽向），发布框
+        //    沿的是车头方向 —— 要把记忆投影到车头方向再取（P9-S5c 修：此前
+        //    直接拿记忆 width 当车宽，正对时发的是 4.40×0.88，被分类成 BICYCLE）。
+        //    长、宽都用先验垫底：中心已按 4.4×1.8 推到几何中心，尺寸若报小了
+        //    下游算出的近边/侧边就与中心撕裂（P8-S2b 那条实测的同一个理由）。
+        const double relative_rad = track.yaw_rad - track.prior_heading_rad;
+        const double along_m = track.length_m * std::abs(std::cos(relative_rad)) +
+                               track.width_m * std::abs(std::sin(relative_rad));
+        const double across_m = track.length_m * std::abs(std::sin(relative_rad)) +
+                                track.width_m * std::abs(std::cos(relative_rad));
+        obstacle.size_m.x = std::max(along_m, tracker_params_.vehicle_prior_length_m);
+        obstacle.size_m.y = std::max(across_m, tracker_params_.vehicle_prior_width_m);
       } else {
         obstacle.size_m.x = track.length_m;
         obstacle.size_m.y = track.width_m;
       }
+      // 分类按**发布出去的**尺寸算，与框一致：先验锚定的车不该因为记忆里
+      // 只有尾面而被分类成 BICYCLE/UNKNOWN。
+      obstacle.classification = static_cast<std::uint8_t>(ads_perception::ClassifyBySize(
+        obstacle.size_m.x, obstacle.size_m.y, track.height_m, classifier_params_));
       obstacle.size_m.z = track.height_m;
       // 出口用 reported_velocity：结构物的内部速度是可见面滑移，不许出门
       // （P8-S2b，理由见 tracker.hpp）。
@@ -622,6 +668,8 @@ private:
     add("razor_min_extent_m", stats.razor_dropped > 0 ? stats.razor_min_extent_m : 0.0);
     add("razor_max_range_m", stats.razor_max_range_m);
     add("razor_max_top_m", stats.razor_dropped > 0 ? stats.razor_max_top_m : 0.0);
+    add("floating_dropped", stats.floating_dropped);
+    add("floating_min_bottom_m", stats.floating_dropped > 0 ? stats.floating_min_bottom_m : 0.0);
     add("clusters", stats.clusters);
     add("largest_cluster", stats.largest_cluster);
     add("detections", stats.detections);
@@ -668,6 +716,8 @@ private:
   double diagnostics_period_s_{1.0};
   double min_extent_m_{0.0};
   double razor_max_height_m_{0.0};
+  double floating_min_bottom_m_{1.0};
+  double floating_max_height_m_{0.3};
   // 平面时间一致性门的状态（见回调内注释）
   bool last_plane_valid_{false};
   Eigen::Vector3d last_plane_normal_{Eigen::Vector3d::UnitZ()};

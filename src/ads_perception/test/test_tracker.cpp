@@ -39,8 +39,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
+#include <map>
 #include <random>
+#include <set>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "ads_perception/tracker.hpp"
@@ -649,6 +656,37 @@ TEST(Tracker, KeepsTheOlderIdWhenTwoDuplicatesHaveTheSameHitCount)
   EXPECT_EQ(tracker.tracks()[0].id, 1U) << "打平时没留更老（id 更小）的那条";
 }
 
+TEST(Tracker, MergesAYoungDuplicateBeforeItsVelocityConverges)
+{
+  // P9-S5c 实测：车身碎片在正主 0.15–0.5 m 外起一条新航迹，凑够 3 帧确认那一刻
+  // 它的 KF 速度还差正主 2 m/s —— 按「都已确认就比速度」永远合不掉，两条并存
+  // 1–2 帧，评测在两者间摆 ⟹ 每次记 2 次 ID 切换。年轻的重复要只按距离并。
+  Tracker tracker;
+  double x = 30.0;
+  for (int frame = 0; frame < 15; ++frame, x -= 0.4) {
+    tracker.Update({MakeDetection(x, 0.0)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 1U);
+  const std::uint32_t main_id = tracker.ConfirmedTracks()[0].id;
+  // 复刻实测形态：碎片航迹出生在正主中心 1.5 m 外（合并半径之外 —— 实测里是
+  // 「年轻航迹锚在车头面、正主锚在整车中心」差出来的 2 m），第 3 帧（确认那帧）
+  // 检测跳到正主 0.3 m 内（实测里是它自己被先验锚定、中心一步推回整车中心）。
+  // 跳变让它的 KF 速度瞬间偏离正主好几 m/s —— 按「已确认就比速度」永远不并。
+  std::size_t max_confirmed = 0;
+  for (int frame = 0; frame < 5; ++frame, x -= 0.4) {
+    const double fragment_y = frame < 2 ? 1.5 : 0.3;
+    tracker.Update({MakeDetection(x, 0.0), MakePartial(x, fragment_y, 0.6, 0.4)}, kDt, kSensor);
+    max_confirmed = std::max(max_confirmed, tracker.ConfirmedTracks().size());
+  }
+  const std::vector<Track> confirmed = tracker.ConfirmedTracks();
+  printf(
+    "[          ] 碎片伴行 5 帧内确认航迹峰值 %zu 条，最后 %zu 条，正主 ID %s\n", max_confirmed,
+    confirmed.size(), FindById(confirmed, main_id) ? "保持" : "丢失");
+  EXPECT_EQ(max_confirmed, 1U) << "年轻的重复航迹确认后与正主并存了 —— 速度门限把它挡在合并之外";
+  ASSERT_EQ(confirmed.size(), 1U);
+  EXPECT_NE(FindById(confirmed, main_id), nullptr) << "合并留下了年轻的那条 —— 该留命中多的";
+}
+
 TEST(Tracker, DoesNotMergeTwoTargetsThatMerelyPassCloseBy)
 {
   // ⚠️ 合并的反面风险比重复更严重：把车和行人并成一个目标 = **漏掉一个人**。
@@ -722,8 +760,11 @@ TEST(Tracker, SurvivesAnOcclusionLongerThanMaxMisses)
   // 行人：在车后面 (20, 0)，以 1.2 m/s 沿 +y 走。
   auto ped = [](double y) { return MakePartial(20.0, y, 0.4, 0.4); };
 
+  // ⚠️ 遮挡前先跟 12 帧（≥ mature_hits 10）：滑行只给速度已收敛的成熟航迹
+  //    （P9-S5c，见 TrackerParams::mature_hits）；真实场景里行人被车挡住之前
+  //    已被跟踪好几秒。
   double y = 0.0;
-  for (int frame = 0; frame < 5; ++frame, y += 0.12) {
+  for (int frame = 0; frame < 12; ++frame, y += 0.12) {
     tracker.Update({car, ped(y)}, kDt, kSensor);
   }
   ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);
@@ -743,12 +784,18 @@ TEST(Tracker, SurvivesAnOcclusionLongerThanMaxMisses)
     << "遮挡 1.5 s 后行人航迹被删了 —— 遮挡滑行没生效";
 
   // 重现：行人从车后走出来（滑行预测的位置附近）。
-  const Track * coasted = FindById(tracker.ConfirmedTracks(), ped_id);
+  // ⚠️ ConfirmedTracks() **按值返回**：先落成本地副本再取指针（2026-08-16 修：此前
+  //    指针指着已析构的临时 vector，printf 出对的数只是运气）。
+  const std::vector<Track> before_reappear = tracker.ConfirmedTracks();
+  const Track * coasted = FindById(before_reappear, ped_id);
+  ASSERT_NE(coasted, nullptr);
+  const double coasted_y = coasted->position().y();
   tracker.Update({car, ped(y)}, kDt, kSensor);
-  const Track * after = FindById(tracker.ConfirmedTracks(), ped_id);
+  const std::vector<Track> after_reappear = tracker.ConfirmedTracks();
+  const Track * after = FindById(after_reappear, ped_id);
   printf(
-    "[          ] 遮挡 15 帧后滑行位置 y=%.2f（真值 %.2f），重现后 ID %s\n",
-    coasted->position().y(), y, after ? "保持" : "丢失");
+    "[          ] 遮挡 15 帧后滑行位置 y=%.2f（真值 %.2f），重现后 ID %s\n", coasted_y, y,
+    after ? "保持" : "丢失");
   ASSERT_NE(after, nullptr) << "重现后配不上滑行航迹 —— ID 换了";
   EXPECT_EQ(tracker.ConfirmedTracks().size(), 2U);
 }
@@ -766,7 +813,7 @@ TEST(Tracker, OcclusionCoastingHasACap)
   car.length_m = 4.4;
   car.width_m = 1.8;
   car.height_m = 1.5;
-  for (int frame = 0; frame < 5; ++frame) {
+  for (int frame = 0; frame < 12; ++frame) {  // ≥ mature_hits，否则根本不滑行、测不到上限
     tracker.Update({car, MakePartial(20.0, 0.0, 0.4, 0.4)}, kDt, kSensor);
   }
   ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);
@@ -800,6 +847,275 @@ TEST(Tracker, OcclusionCoastingHasACap)
 //  |   | （幽灵靠滑行存活）；对照用例 `SurvivesAnOcclusion…` 保持绿 ——
 //  |   | 证明红的是速度准入，不是遮挡判定 |
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  U 转鬼影：遮挡滑行 × 重锚跳变（P9-S3 Gazebo 实测，P9-S5c 修）
+//
+//  Gazebo `both` 场景 NPC 车在航点原地掉头：L-Shape 轴向翻转 + 车辆先验锚定让
+//  框中心一步跳 ~2 m ⟹ 旧航迹配不上（卡方门 9.21，2 m 跳变 d² ≈ 40）⟹ 新航迹；
+//  旧航迹按恒速继续外推，预测位置恰在新航迹盒子**后面**⟹ §6.5 判"被已确认
+//  航迹遮挡"⟹ 滑行最多 3 s —— 一个 4.4×1.8 的鬼影贴车道带边走，记成车道内虚警。
+//
+//  区分"重锚"与"真遮挡"的签名：遮挡者是**刚出生**（≤ reanchor_max_age_frames）
+//  且出生时离**正在丢失的**旧航迹预测位置 ≤ anchor_shift_max（同一目标露出
+//  另一面能造成的最大中心位移）—— 那是同一个目标换了个框，不是另一个目标挡住了它。
+//  判定生效后旧航迹按普通未命中倒计时（0.5 s 内消失），不给 3 s。
+//
+//  ## 故障注入实测（2026-08-16）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 去掉重锚判定（superseded 恒 false） | 见文件尾记录 |
+// ---------------------------------------------------------------------------
+TEST(Tracker, DoesNotCoastAGhostBehindItsOwnReanchoredTrack)
+{
+  // 车沿 +x 远离传感器，2 m/s，10 帧确认并收敛速度。
+  Tracker tracker;
+  auto car = [](double x) { return MakeDetection(x, 0.0); };
+  double x = 10.0;
+  for (int frame = 0; frame < 10; ++frame, x += 0.2) {
+    tracker.Update({car(x)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 1U);
+  const std::uint32_t old_id = tracker.ConfirmedTracks()[0].id;
+
+  // 掉头：框中心一步跳回 2.0 m（轴向翻转 + 先验锚定的实测量级），随后以 2 m/s
+  // 朝传感器回来。旧航迹的预测位置（继续 +x）落在新盒子后面 —— 鬼影配方。
+  x -= 2.0;
+  for (int frame = 0; frame < 8; ++frame, x -= 0.2) {
+    tracker.Update({car(x)}, kDt, kSensor);
+  }
+  // 跳变后 0.8 s：新航迹早已确认；旧航迹若被当成"被遮挡"会滑行 3 s。
+  // 没有滑行的话它在 max_misses（0.5 s）内就该消失。
+  // ⚠️ ConfirmedTracks() **按值返回**：指针/引用要绑在本地副本上，绑临时量就是悬空。
+  const std::vector<Track> confirmed = tracker.ConfirmedTracks();
+  const Track * ghost = FindById(confirmed, old_id);
+  printf(
+    "[          ] 掉头 0.8 s 后确认航迹 %zu 条，旧航迹 %s%s\n", confirmed.size(),
+    ghost ? "还在（鬼影）@x=" : "已删除",
+    ghost ? std::to_string(ghost->position().x()).c_str() : "");
+  EXPECT_EQ(ghost, nullptr) << "旧航迹借新航迹的盒子当遮挡在滑行 —— 那是它自己的重锚，不是遮挡";
+  ASSERT_EQ(confirmed.size(), 1U) << "掉头后应只剩一条航迹（新的那条）";
+  EXPECT_NEAR(confirmed[0].position().x(), x + 0.2, 0.6);
+}
+
+// ---------------------------------------------------------------------------
+//  由远及近、侧面刚露出来那几帧不许换 ID（P9-S5c，bag 回放钉死的缺陷）
+//
+//  实测序列（Gazebo both 场景，2026-08-16 bag，自车静止 (30,−51.75)，NPC 车沿
+//  邻车道 y=−48.25 以 4 m/s 驶来）：11.0–13.3 s 只见车头（1.8 × 0.05–0.85，
+//  轴向 90°），13.4 s 起侧面露出（深度 1.77 → 2.05 → 2.97 → 3.4 → 4.15，
+//  轴向翻到 0°/180°）。旧版先验只在深度 < 1.0 时沿视线推 (4.4 − 深度)/2 ——
+//  13.4 s 那帧推量从 1.7 m 跳到 0，加上按记忆宽度增量的横向重锚 0.46 m，
+//  新息 1.3 m 判不进门 ⟹ 8 → 30 → 31 换两次 ID。**每轮都在 18–19 m 处复现**。
+//  修法：先验沿**车头方向**把观测框补到 4.4 × 1.8 的先验盒（推量随侧面露出
+//  连续收缩），已锚定的航迹不再按记忆重锚。
+//
+//  ## 故障注入实测（2026-08-16）
+//
+//  | 注入 | 结果 |
+//  |---|---|
+//  | 已锚定的航迹也按「观测深度 ≥ 1.0 不推」（复原旧版的跳变） | 见文件尾记录 |
+// ---------------------------------------------------------------------------
+TEST(Tracker, KeepsTheIdWhenTheSideOfAnApproachingCarComesIntoView)
+{
+  struct Row
+  {
+    double t, x, y, yaw, l, w, h;
+  };
+  // 原样照抄 bag（perception/detections 里那辆车的框，map 系）。
+  static const Row kRows[] = {
+    {11.0, 57.96, -48.24, 1.571, 1.70, 0.05, 0.54}, {11.1, 57.56, -48.25, 1.571, 1.77, 0.04, 0.54},
+    {11.2, 57.29, -48.24, 1.588, 1.81, 0.30, 0.53}, {11.3, 56.76, -48.26, 1.571, 1.72, 0.04, 0.52},
+    {11.4, 56.40, -48.27, 1.588, 1.77, 0.12, 0.51}, {11.5, 55.96, -48.24, 1.571, 1.76, 0.05, 0.50},
+    {11.6, 55.57, -48.25, 1.570, 1.82, 0.05, 0.50}, {11.7, 55.35, -48.29, 1.570, 1.75, 0.41, 0.98},
+    {11.8, 54.76, -48.28, 1.571, 1.76, 0.05, 0.95}, {11.9, 54.52, -48.28, 1.570, 1.77, 0.36, 0.94},
+    {12.0, 53.96, -48.28, 1.570, 1.79, 0.06, 0.92}, {12.1, 53.73, -48.28, 1.571, 1.79, 0.38, 0.91},
+    {12.2, 53.17, -48.29, 1.571, 1.80, 0.05, 0.89}, {12.3, 52.96, -48.29, 1.571, 1.80, 0.43, 0.89},
+    {12.4, 52.41, -48.22, 1.571, 1.80, 0.14, 0.86}, {12.5, 52.21, -48.22, 1.571, 1.80, 0.54, 0.86},
+    {12.6, 51.69, -48.23, 1.571, 1.78, 0.30, 0.83}, {12.7, 51.17, -48.24, 1.606, 1.78, 0.08, 0.82},
+    {12.8, 50.97, -48.25, 1.588, 1.77, 0.47, 0.81}, {12.9, 50.50, -48.27, 1.571, 1.75, 0.31, 1.17},
+    {13.0, 50.03, -48.25, 1.571, 1.80, 0.18, 1.15}, {13.1, 49.56, -48.27, 1.571, 1.78, 0.05, 1.13},
+    {13.2, 49.37, -48.28, 1.570, 1.75, 0.47, 1.11}, {13.3, 49.15, -48.26, 1.588, 1.80, 0.85, 1.13},
+    {13.4, 49.22, -48.28, 1.588, 1.77, 1.77, 1.20}, {13.5, 48.78, -48.29, 1.553, 1.78, 1.68, 1.16},
+    {13.6, 48.57, -48.30, 0.000, 2.05, 1.75, 1.18}, {13.7, 48.63, -48.30, 3.141, 2.97, 1.76, 1.31},
+    {13.8, 48.43, -48.27, 0.000, 3.37, 1.82, 1.31}, {13.9, 48.22, -48.27, 3.141, 3.77, 1.82, 1.31},
+    {14.0, 48.01, -48.26, 0.017, 4.15, 1.86, 1.31}, {14.1, 47.56, -48.26, 0.017, 4.06, 1.85, 1.31},
+    {14.2, 47.12, -48.26, 3.141, 3.96, 1.84, 1.31}, {14.3, 46.93, -48.27, 0.000, 4.38, 1.82, 1.32},
+    {14.4, 46.49, -48.26, 0.017, 4.30, 1.90, 1.31}, {14.5, 46.08, -48.28, 3.141, 4.29, 1.80, 1.31},
+    {14.6, 45.67, -48.27, 3.141, 4.28, 1.81, 1.31}, {14.7, 45.27, -48.28, 3.141, 4.27, 1.80, 1.32},
+    {14.8, 44.88, -48.26, 0.000, 4.28, 1.83, 1.32}, {14.9, 44.50, -48.27, 3.141, 4.33, 1.81, 1.29},
+    {15.0, 44.12, -48.26, 0.017, 4.38, 1.83, 1.30},
+  };
+  const Eigen::Vector2d sensor(30.0, -51.75);
+  Tracker tracker;
+  std::uint32_t id_at_12s = 0;
+  std::set<std::uint32_t> ids_seen;
+  double worst_center_error_m = 0.0;
+  for (const Row & row : kRows) {
+    Detection d;
+    d.position = {row.x, row.y};
+    d.yaw_rad = row.yaw;
+    d.length_m = row.l;
+    d.width_m = row.w;
+    d.height_m = row.h;
+    tracker.Update({d}, kDt, sensor);
+    if (row.t < 12.0) {
+      continue;  // 头几帧在确认 + 先验锚定
+    }
+    // ⚠️ ConfirmedTracks() **按值返回**：引用要绑在本地副本上，绑临时量就是悬空。
+    const std::vector<Track> confirmed = tracker.ConfirmedTracks();
+    ASSERT_EQ(confirmed.size(), 1U) << "t=" << row.t << " 确认航迹不是 1 条";
+    const Track & track = confirmed[0];
+    if (id_at_12s == 0) {
+      id_at_12s = track.id;
+    }
+    ids_seen.insert(track.id);
+    // 真值：13.4 s 时中心 (50.64, −48.25)，沿 −x 4 m/s。
+    const Eigen::Vector2d truth(50.64 - 4.0 * (row.t - 13.4), -48.25);
+    worst_center_error_m = std::max(worst_center_error_m, (track.position() - truth).norm());
+  }
+  printf(
+    "[          ] 12–15 s 见到的 ID 集合大小 %zu（首个 %u），中心误差最大 %.3f m\n",
+    ids_seen.size(), id_at_12s, worst_center_error_m);
+  EXPECT_EQ(ids_seen.size(), 1U) << "侧面露出来那几帧换了 ID —— 先验补全在深度过 1 m 时跳变了？";
+  EXPECT_LT(worst_center_error_m, 0.6) << "先验补全的中心离真值太远（沿视线推 vs 沿车头推？）";
+}
+
+// ---------------------------------------------------------------------------
+//  回放仪器（默认不跑）：把 bag 里抠出来的逐帧检测喂给 Tracker，逐帧打印每条
+//  航迹的内部状态（记忆尺寸 / 先验锚定 / 命中未命中 / 速度）。
+//  用法：ADS_TRACKER_REPLAY_CSV=<csv> ADS_TRACKER_REPLAY_SENSOR="30,-51.75" \
+//        ./build/ads_perception/test_tracker --gtest_also_run_disabled_tests \
+//        --gtest_filter='*ReplayFromCsv*'
+//  csv 列：t,x,y,yaw,l,w,h（map 系）。只打印 |x-sx|<25 且 |y-sy|<10 的航迹。
+// ---------------------------------------------------------------------------
+TEST(Tracker, DISABLED_ReplayFromCsv)
+{
+  const char * path = std::getenv("ADS_TRACKER_REPLAY_CSV");
+  ASSERT_NE(path, nullptr) << "设 ADS_TRACKER_REPLAY_CSV";
+  Eigen::Vector2d sensor(30.0, -51.75);
+  if (const char * s = std::getenv("ADS_TRACKER_REPLAY_SENSOR")) {
+    std::sscanf(s, "%lf,%lf", &sensor.x(), &sensor.y());
+  }
+  std::ifstream in(path);
+  ASSERT_TRUE(in.is_open());
+  std::string line;
+  std::getline(in, line);  // header
+  std::map<double, std::vector<Detection>> frames;
+  while (std::getline(in, line)) {
+    std::replace(line.begin(), line.end(), ',', ' ');
+    std::istringstream ss(line);
+    double t = 0.0;
+    Detection d;
+    ss >> t >> d.position.x() >> d.position.y() >> d.yaw_rad >> d.length_m >> d.width_m >>
+      d.height_m;
+    frames[std::round(t * 100.0) / 100.0].push_back(d);
+  }
+  Tracker tracker;
+  double last_t = -1.0;
+  for (const auto & [t, dets] : frames) {
+    const double dt = last_t < 0.0 ? kDt : t - last_t;
+    last_t = t;
+    tracker.Update(dets, dt, sensor);
+    printf("--- t=%.2f  %zu dets\n", t, dets.size());
+    for (const Detection & d : dets) {
+      if (
+        std::abs(d.position.x() - sensor.x()) < 25.0 &&
+        std::abs(d.position.y() - sensor.y()) < 10.0 && d.height_m < 3.0) {
+        printf(
+          "   det (%6.2f,%6.2f) yaw %6.1f  %.2fx%.2fx%.2f\n", d.position.x(), d.position.y(),
+          d.yaw_rad * 180.0 / M_PI, d.length_m, d.width_m, d.height_m);
+      }
+    }
+    for (const Track & tr : tracker.tracks()) {
+      if (
+        std::abs(tr.position().x() - sensor.x()) < 25.0 &&
+        std::abs(tr.position().y() - sensor.y()) < 10.0 && tr.height_m < 3.0) {
+        printf(
+          "   trk %3u %s (%6.2f,%6.2f) v=(%5.2f,%5.2f) yaw %6.1f mem %.2fx%.2f hits %d miss %d/%d "
+          "prior %d sup %d P=%.3f\n",
+          tr.id, tr.confirmed ? "C" : "-", tr.position().x(), tr.position().y(), tr.velocity().x(),
+          tr.velocity().y(), tr.yaw_rad * 180.0 / M_PI, tr.length_m, tr.width_m, tr.hits,
+          tr.consecutive_misses, tr.occluded_misses, tr.vehicle_prior_anchored ? 1 : 0,
+          tr.superseded ? 1 : 0, tr.covariance(0, 0));
+      }
+    }
+  }
+}
+
+TEST(Tracker, DoesNotCoastAYoungTrackBehindAnOccluder)
+{
+  // P9-S5c 实测：车身碎片 3 帧确认，KF 速度还是噪声（5.5 m/s 朝向自车车道），
+  // 躲在本车框后面按 §6.5 滑行 —— 3 帧虚警滑进车道。滑行是**外推速度**，
+  // 只准给速度已收敛的成熟航迹（hits ≥ mature_hits）；年轻的按普通未命中倒计时。
+  Tracker tracker;
+  Detection car;
+  car.position = {10.0, 0.0};
+  car.yaw_rad = M_PI / 2.0;
+  car.length_m = 4.4;
+  car.width_m = 1.8;
+  car.height_m = 1.5;
+  for (int frame = 0; frame < 12; ++frame) {
+    tracker.Update({car}, kDt, kSensor);
+  }
+  // 车后 3 帧冒出一个碎片（位置每帧跳 0.5 m —— 碎片的典型形态），刚够确认。
+  for (int frame = 0; frame < 3; ++frame) {
+    tracker.Update({car, MakePartial(20.0, 0.5 * frame, 0.6, 0.4)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U) << "碎片没确认 —— 用例前提没建立起来";
+  // 碎片消失（被车挡住的几何成立）。年轻航迹不许滑行：max_misses 5 帧内必须删掉。
+  for (int frame = 0; frame < 6; ++frame) {
+    tracker.Update({car}, kDt, kSensor);
+  }
+  const std::vector<Track> confirmed = tracker.ConfirmedTracks();
+  printf("[          ] 年轻碎片航迹消失 0.6 s 后确认航迹 %zu 条（应只剩车）\n", confirmed.size());
+  EXPECT_EQ(confirmed.size(), 1U) << "3 帧确认的年轻航迹在车后滑行了 —— 在外推一个还没收敛的速度";
+}
+
+TEST(Tracker, HoldsAYoungTrackAtItsLastObservationOnMissedFrames)
+{
+  // P9-S5c：年轻航迹（hits < mature_hits）的未命中帧照发（连续性），但发布位置钉在
+  // 最近一次观测、不外推 —— Gazebo 实测那只碎片 3 帧确认后连丢 3 帧，预测位置按
+  // 5 m/s 的噪声速度滑进自车车道。成熟航迹的未命中帧照发预测。
+  Tracker tracker;
+  double x = 20.0;
+  for (int frame = 0; frame < 12; ++frame, x -= 0.4) {  // 成熟目标
+    tracker.Update({MakeDetection(x, 0.0)}, kDt, kSensor);
+  }
+  // 年轻目标：3 帧刚确认，位置每帧跳 0.5 m（碎片形态 ⟹ KF 速度是 5 m/s 的噪声）。
+  for (int frame = 0; frame < 3; ++frame, x -= 0.4) {
+    tracker.Update(
+      {MakeDetection(x, 0.0), MakePartial(30.0, 5.0 + 0.5 * frame, 0.6, 0.4)}, kDt, kSensor);
+  }
+  ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U) << "年轻目标没确认 —— 用例前提没建立起来";
+  const double last_seen_y = 6.0;
+  const double last_hit_x = x + 0.4;  // 循环末尾多减了一次
+  // 两个都丢三帧：都照发；成熟的按预测走，年轻的钉在最近观测。
+  for (int frame = 0; frame < 3; ++frame) {
+    tracker.Update({}, kDt, kSensor);
+  }
+  x = last_hit_x - 3 * 0.4;  // 成熟目标丢帧期间的真值位置
+  const std::vector<Track> published = tracker.ConfirmedTracks();
+  ASSERT_EQ(published.size(), 2U) << "未命中帧不该把航迹从发布里拿掉（连续性）";
+  const Track * young = nullptr;
+  const Track * mature = nullptr;
+  for (const Track & track : published) {
+    (track.hits < 10 ? young : mature) = &track;
+  }
+  ASSERT_NE(young, nullptr);
+  ASSERT_NE(mature, nullptr);
+  const Eigen::Vector2d young_pub = young->published_position(10);
+  const Eigen::Vector2d mature_pub = mature->published_position(10);
+  printf(
+    "[          ] 丢 3 帧后：年轻航迹 KF 位置 y=%.2f、发布位置 y=%.2f（最近观测 %.1f）；"
+    "成熟航迹发布位置 x=%.2f（真值 %.2f）\n",
+    young->position().y(), young_pub.y(), last_seen_y, mature_pub.x(), x);
+  // 0.15：最近观测位置是 KF **更新后**的状态（滤波值落后原始量测一点），不是量测本身。
+  EXPECT_NEAR(young_pub.y(), last_seen_y, 0.15) << "年轻航迹的未命中帧被外推了 —— 那是噪声速度";
+  EXPECT_GT(young->position().y(), last_seen_y + 0.8) << "用例前提：KF 内部确实在按噪声速度外推";
+  EXPECT_NEAR(mature_pub.x(), x, 0.3) << "成熟航迹的未命中帧该按预测发";
+}
+
 TEST(Tracker, RejectsTheAnchorWormholeBetweenStructureFragments)
 {
   // 复刻实测工况：帧 1 一个微小碎片（0.03×0.01，L-Shape 对杆件/墙沿的
@@ -841,7 +1157,7 @@ TEST(Tracker, DoesNotCoastAnImplausiblyFastTrack)
   car.length_m = 4.4;
   car.width_m = 1.8;
   car.height_m = 1.5;
-  for (int frame = 0; frame < 5; ++frame) {
+  for (int frame = 0; frame < 12; ++frame) {  // ≥ mature_hits，否则是「年轻」不是「太快」在拦
     tracker.Update({car, MakePartial(20.0 + frame, 0.0, 4.4, 1.8)}, kDt, kSensor);
   }
   ASSERT_EQ(tracker.ConfirmedTracks().size(), 2U);

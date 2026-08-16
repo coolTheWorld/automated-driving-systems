@@ -50,6 +50,9 @@ Tracker::Tracker(const TrackerParams & params) : params_(params)
 
 void Tracker::Predict(double dt_s)
 {
+  for (Track & track : tracks_) {
+    ++track.age_frames;
+  }
   Eigen::Matrix4d transition = Eigen::Matrix4d::Identity();
   transition(0, 2) = dt_s;
   transition(1, 3) = dt_s;
@@ -149,22 +152,26 @@ Eigen::Vector2d Tracker::AnchorOffset(
 std::optional<Eigen::Vector2d> Tracker::VehiclePriorPush(
   const Detection & detection, const Track & track, const Eigen::Vector2d & sensor_position) const
 {
-  // ---- 车辆形状先验（P8-S2b，只修正对/背对情形）----------------------------
+  // ---- 车辆形状先验（P8-S2b 立，P9-S5c 改成沿车头方向补先验盒）------------
   // 正对驶来的车从头到尾只露尾面：记忆里没有「长」（实测停在 1.9，正对
   // 中心沿视线偏 1.3–2.1 m —— P6 台账那条 2.2），而轴向记忆是**横向**
   // （L-Shape 的长轴在正对时是车宽）—— 既有的沿轴补全在这个情形连方向
-  // 都是错的。先验沿**视线**把中心推到「按 ODD 车长该在的地方」：
-  //   push = (ODD 车长 − 观测沿视线深度)/2，方向背离传感器（看不见的
-  //   车身在远侧）。
+  // 都是错的。观测与记忆都不知道的量，只能由先验给：把观测框补成
+  // 4.4 × 1.8 的先验盒，缺口补在**背离传感器**的一侧（AnchorOffset 的几何）。
   //
   // 三层门控，各挡一类误用：
   //   未锚定时 —— 速度像车（≥2.5）×正对/背对（速度与视线 |cos|≥0.8）×
-  //   展宽像车（记忆长边 ≥1.4）×记忆还不知道全长（< 先验）：
-  //   园区 ODD 里满足前三条的只有车；
-  //   已锚定后 —— **不再看速度**（永久，见 Track::vehicle_prior_anchored），
-  //   只看观测形态；
-  //   任何时候 —— 观测深度 < 1.0 才推（正对形态的签名：尾面进深 0.3–0.5；
-  //   侧视观测 1.8，中心不缺沿视线的量，推了反而错）。
+  //   展宽像车（记忆长边 ≥1.4）×记忆还不知道全长（< 先验）×观测深度 < 1.0
+  //   （正对形态的签名）：园区 ODD 里满足这些的只有车；车头方向取速度方向；
+  //   已锚定后 —— **不再看速度、不再看深度**（永久，见 Track::vehicle_prior_anchored），
+  //   车头方向取 prior_heading_rad，推量随侧面露出连续收缩；
+  //   任何时候 —— 推量 ≤ anchor_shift_max（先验盒最大缺口 2.05 在内）。
+  //
+  // ⚠️ 旧版沿**视线**推、且只在深度 < 1.0 时推，两个后果都实测到了（P9-S5c
+  //    bag 回放）：斜视 10–20° 时中心横向偏 0.35–0.7 m；侧面刚露出（深度
+  //    1.0→1.8）那帧推量从 1.7 跳到 0，新息一跳 1.3 m 判不进门 —— 每次由远
+  //    及近在 18–19 m 处稳定换一次 ID。沿车头方向按「沿/横」延展各自补缺
+  //    之后，13.3→13.4→13.6→14.0 s 四帧的补全中心与真值差 0.1 m 以内、连续。
   if (track.is_structure) {
     return std::nullopt;
   }
@@ -173,11 +180,12 @@ std::optional<Eigen::Vector2d> Tracker::VehiclePriorPush(
   if (range_m < 1e-6) {
     return std::nullopt;
   }
-  const double depth_m = std::min(detection.length_m, detection.width_m);
-  if (depth_m >= 1.0) {
-    return std::nullopt;
-  }
+  double heading_rad = track.prior_heading_rad;
   if (!track.vehicle_prior_anchored) {
+    const double depth_m = std::min(detection.length_m, detection.width_m);
+    if (depth_m >= 1.0) {
+      return std::nullopt;
+    }
     const double speed_mps = track.velocity().norm();
     const double memory_long_edge_m = std::max(track.length_m, track.width_m);
     if (
@@ -190,12 +198,22 @@ std::optional<Eigen::Vector2d> Tracker::VehiclePriorPush(
     if (cos_angle < 0.8) {
       return std::nullopt;
     }
+    heading_rad = std::atan2(track.velocity().y(), track.velocity().x());
   }
-  const double push_m = 0.5 * (params_.vehicle_prior_length_m - depth_m);
-  if (push_m <= 0.0 || push_m > params_.anchor_shift_max_m) {
+  // 观测框在车头方向上的「沿 / 横」延展（框轴向与车头方向可以差任意角）。
+  const double relative_rad = detection.yaw_rad - heading_rad;
+  const double along_m = detection.length_m * std::abs(std::cos(relative_rad)) +
+                         detection.width_m * std::abs(std::sin(relative_rad));
+  const double across_m = detection.length_m * std::abs(std::sin(relative_rad)) +
+                          detection.width_m * std::abs(std::cos(relative_rad));
+  const Eigen::Vector2d push = AnchorOffset(
+    heading_rad, params_.vehicle_prior_length_m - along_m, params_.vehicle_prior_width_m - across_m,
+    detection.position, sensor_position);
+  const double push_m = push.norm();
+  if (push_m <= 1e-9 || push_m > params_.anchor_shift_max_m) {
     return std::nullopt;
   }
-  return Eigen::Vector2d(line_of_sight / range_m * push_m);
+  return push;
 }
 
 Eigen::Vector2d Tracker::CompletedCenter(
@@ -234,6 +252,12 @@ Eigen::Vector2d Tracker::TrackAnchorShift(
 {
   // 结构物：不重锚（理由同 CompletedCenter 的旁路）。
   if (track.is_structure) {
+    return Eigen::Vector2d::Zero();
+  }
+  // 先验锚定的车：中心已经是 4.4 × 1.8 先验盒的几何中心，观测露出更多不是
+  // 「此前按更小的盒子锚定」—— 不重锚。（P9-S5c：旧版在侧面刚露出那帧按记忆
+  // 宽度增量把航迹横向再挪 0.46 m，与先验补全叠加，正是判不进门的另一半。）
+  if (track.vehicle_prior_anchored) {
     return Eigen::Vector2d::Zero();
   }
   const Detection aligned = AlignedDetection(detection, track);
@@ -431,10 +455,39 @@ void Tracker::ApplyUpdate(
   ++track->hits;
   track->consecutive_misses = 0;
   track->occluded_misses = 0;
+  track->last_observed_position = track->position();
+  // 命中即解除"被取代"：能配上检测就说明它不是鬼影（或者鬼影判错了），
+  // 恢复遮挡滑行的资格。
+  track->superseded = false;
   if (track->hits >= params_.confirm_hits) {
     track->confirmed = true;
   }
   ResolveHeading(track);
+}
+
+void Tracker::SupersedeReanchoredTrack(const Track & newborn)
+{
+  // 兑现出生时记下的候选：新航迹刚确认，而它出生时旁边那条旧航迹**从那时起
+  // 一直丢失** ⟹ 两者是同一个目标的前后两个框，旧的那条不许再按"被遮挡"滑行。
+  // 三个条件缺一不可：
+  //   · 旧航迹还活着且这一帧仍未命中（命中过的话 superseded 早被清掉/根本不该判）；
+  //   · 旧航迹丢失的帧数 ≥ 新航迹的年龄（丢失从新航迹出生前就开始，中途没接上）；
+  //   · 新航迹在 max_misses 内确认 —— 更晚确认的话旧航迹早该被普通未命中删掉，
+  //     它还活着只能是**别的**遮挡者在给它续命，那是真遮挡，不归这条管。
+  if (newborn.reanchor_of_id == 0 || newborn.age_frames >= params_.max_misses) {
+    return;
+  }
+  for (Track & old : tracks_) {
+    if (old.id != newborn.reanchor_of_id || old.id == newborn.id) {
+      continue;
+    }
+    if (
+      old.consecutive_misses + old.occluded_misses >= newborn.age_frames &&
+      old.consecutive_misses + old.occluded_misses > 0) {
+      old.superseded = true;
+    }
+    return;
+  }
 }
 
 void Tracker::ResolveHeading(Track * track) const
@@ -526,10 +579,15 @@ void Tracker::MergeDuplicateTracks()
       if ((tracks_[a].position() - tracks_[b].position()).norm() > params_.merge_distance_m) {
         continue;
       }
-      // ⚠️ 速度一致性**只在两条都已确认时**才判。新建的航迹初速恒为 0，
-      //    拿它去比一条 −4 m/s 的确认航迹必然超门限 ⟹ 重复永远合不掉，
-      //    而"新建的那条"正是重复最常见的来源。理由见 merge_speed_mps 的注释。
-      if (tracks_[a].confirmed && tracks_[b].confirmed) {
+      // ⚠️ 速度一致性**只在两条都成熟时**才判（hits ≥ mature_hits）。
+      //    新建的航迹初速恒为 0，拿它去比一条 −4 m/s 的确认航迹必然超门限 ⟹
+      //    重复永远合不掉，而"新建的那条"正是重复最常见的来源。P9-S5c 把
+      //    「已确认」改成「成熟」：刚凑够 3 帧确认的航迹速度还没收敛（实测差
+      //    2 m/s），一条 0.15–0.5 m 外的车身碎片航迹确认那一帧起与正主并存
+      //    1–2 帧、评测在两者间摆 ⟹ 每次记 2 次 ID 切换。年轻的那条只按距离
+      //    并：ODD 里两个目标中心最近 1.75 m（车与行人），1.0 m 内的年轻航迹
+      //    只能是重复。理由见 merge_speed_mps / mature_hits 的注释。
+      if (tracks_[a].hits >= params_.mature_hits && tracks_[b].hits >= params_.mature_hits) {
         if ((tracks_[a].velocity() - tracks_[b].velocity()).norm() > params_.merge_speed_mps) {
           continue;  // 位置近但速度截然不同 ⟹ 是擦身而过的两个目标
         }
@@ -585,19 +643,31 @@ void Tracker::Update(
   std::vector<char> detection_used(detections.size(), 0);
   for (std::size_t t = 0; t < tracks_.size(); ++t) {
     if (assignment[t] >= 0) {
+      const bool was_confirmed = tracks_[t].confirmed;
       ApplyUpdate(detections[assignment[t]], sensor_position, &tracks_[t]);
       detection_used[assignment[t]] = 1;
+      if (!was_confirmed && tracks_[t].confirmed) {
+        // 刚确认：若它出生时是某条正在丢失的旧航迹的重锚候选，此刻兑现。
+        SupersedeReanchoredTrack(tracks_[t]);
+      }
     } else if (
-      tracks_[t].confirmed && tracks_[t].velocity().norm() <= params_.coast_max_speed_mps &&
+      tracks_[t].confirmed && tracks_[t].hits >= params_.mature_hits && !tracks_[t].superseded &&
+      tracks_[t].velocity().norm() <= params_.coast_max_speed_mps &&
       IsOccludedByAnotherTrack(tracks_[t], sensor_position) &&
       tracks_[t].occluded_misses < params_.max_occluded_misses) {
       // 被别的已确认航迹挡住视线：未命中**不计入删除计数**，按恒速滑行。
       // 看不见 ≠ 消失 —— 这一条解决「遮挡 0.5–1.8 s vs 删除窗口 0.5 s」的
       // 设计冲突，见 TrackerParams::max_occluded_misses 的推导。
-      // 只对已确认的航迹滑行：未确认的本来就还不算"存在"。
+      // 只对已确认**且成熟**（hits ≥ mature_hits）的航迹滑行：未确认的本来就还
+      // 不算"存在"；刚确认的速度还是噪声，滑行是按速度外推 3 s —— 外推噪声就是
+      // 制造鬼影（Gazebo 实测：车身碎片 3 帧确认后躲在车框后按 5.5 m/s 的假速度
+      // 滑进自车车道）。见 TrackerParams::mature_hits。
       // ⚠️ 还要速度在 ODD 物理上限之内：滑行是在**外推**状态，外推一个
       //    物理上不可能的状态就是在制造幽灵（实测 11.9 m/s 的假航迹
       //    靠滑行飞越 35 m 横穿车道）。见 TrackerParams::coast_max_speed_mps。
+      // ⚠️ 还不能是**被自己的重锚航迹取代**的航迹（superseded，见下面
+      //    "U 转鬼影"那段）：挡住它视线的"另一条航迹"就是它自己换了个框，
+      //    给它 3 s 滑行等于放出一个 4.4×1.8 的鬼影贴车道带走。
       ++tracks_[t].occluded_misses;
     } else {
       ++tracks_[t].consecutive_misses;
@@ -637,6 +707,24 @@ void Tracker::Update(
     track.height_m = detections[d].height_m;
     track.hits = 1;
     track.confirmed = params_.confirm_hits <= 1;
+    // ---- U 转鬼影（P9-S3 Gazebo 实测，P9-S5c 修）：记下"我可能是谁的重锚" ----
+    // 目标原地掉头 / 露出另一面时，L-Shape 轴向翻转 + 先验锚定能让框中心一步
+    // 跳 ~2 m：旧航迹配不上（卡方门）、这里起一条新航迹；旧航迹继续外推，
+    // 预测位置落在新盒子后面 ⟹ 被 §6.5 判"遮挡"⟹ 滑行 3 s ⟹ 鬼影。
+    // 真遮挡与重锚的可分签名：**遮挡者是刚出生的，且出生时离正在丢失的旧航迹
+    // ≤ anchor_shift_max（同一目标换个框能造成的最大中心位移）**。这一帧只记
+    // 候选，兑现放在新航迹**确认**那一帧（噪点簇活不到确认，不许它替别人判死刑）。
+    double nearest_m = params_.anchor_shift_max_m;
+    for (std::size_t t = 0; t < tracks_.size(); ++t) {
+      if (!tracks_[t].confirmed || assignment[t] >= 0) {
+        continue;
+      }
+      const double dist_m = (tracks_[t].position() - detections[d].position).norm();
+      if (dist_m <= nearest_m) {
+        nearest_m = dist_m;
+        track.reanchor_of_id = tracks_[t].id;
+      }
+    }
     tracks_.push_back(track);
   }
 
@@ -650,9 +738,14 @@ std::vector<Track> Tracker::ConfirmedTracks() const
 {
   std::vector<Track> confirmed;
   for (const Track & track : tracks_) {
-    if (track.confirmed) {
-      confirmed.push_back(track);
+    if (!track.confirmed) {
+      continue;
     }
+    // ⚠️ 年轻航迹的未命中帧**照发**，但位置用 Track::published_position()（钉在最近
+    //    一次观测的位置，不外推）—— 见那里的说明。曾试过"年轻航迹未命中帧不发"：
+    //    鬼影是没了，但 U 转后那条年轻的正主丢一两帧就从发布里消失，评测配到旁边的
+    //    碎片航迹上 ⟹ ID 切换 +2、检测率 −2%。连续性要保，外推不能给。
+    confirmed.push_back(track);
   }
   return confirmed;
 }

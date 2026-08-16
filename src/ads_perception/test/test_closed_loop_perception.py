@@ -90,6 +90,9 @@ TARGET_Y_M = 3.5
 TARGET_LENGTH_M = 4.4
 TARGET_WIDTH_M = 1.8
 TARGET_HEIGHT_M = 1.5
+# 浮空碎片（车顶远端环）：目标远端之外 3 m、车顶高度、竖向延展 0。
+FLOATING_X_M = TARGET_X_M + 0.5 * TARGET_LENGTH_M + 3.0
+FLOATING_Z_M = TARGET_HEIGHT_M
 # 车身底面离地 0.16 m（与 models/npc_car 的车身盒一致）。
 TARGET_BOTTOM_M = 0.16
 
@@ -146,6 +149,18 @@ def build_cloud_points():
             points.append((x, near_y, z))
             x += 0.06
         z += 0.08
+
+    # ---- 浮空碎片：目标前方 3 m 处一片车顶高度的水平点片（P9-S5c）--------------
+    # 复刻 Gazebo 实测：雷达 2.2 m 打车顶时相邻两线在车顶上相距 ~2 m > 聚类容差，
+    # 车顶远端那一环自成一簇（0.9×0.5×0.03，底 1.48）。它不是目标，浮空碎片门
+    # 必须把它剃掉；否则它会成为第二个（STATIC）障碍物 —— 断言 ⑧ 守着。
+    x = FLOATING_X_M
+    while x <= FLOATING_X_M + 0.5:
+        y = TARGET_Y_M - 0.45
+        while y <= TARGET_Y_M + 0.45:
+            points.append((x, y, FLOATING_Z_M))
+            y += 0.06
+        x += 0.06
     return points
 
 
@@ -265,6 +280,26 @@ class TestPerceptionClosedLoop(unittest.TestCase):
         ids = {msg.obstacles[0].id for msg in with_obstacles[-10:]}
         print(f'[test] 最后 10 帧的 ID 集合：{sorted(ids)}')
         self.assertEqual(len(ids), 1, 'ID 在静止场景里都在跳 —— 关联或生命周期断了')
+
+        # ---- ⑧ 浮空碎片不成目标（P9-S5c）----------------------------------
+        # 合成云里有一片车顶高度的水平点片（见 build_cloud_points）。它离目标 3 m、
+        # 0.9×0.5、底离地 1.5、延展 0 —— 是车顶远端环的复刻。浮空碎片门该把它剃掉：
+        # 最后 10 帧里除目标外不许有别的确认航迹，诊断 floating_dropped 必须 ≥ 1。
+        extras = [
+            o for msg in with_obstacles[-10:] for o in msg.obstacles
+            if math.hypot(o.pose.position.x - expected_x, o.pose.position.y - expected_y) > 1.0]
+        floating_dropped = [
+            float(value.value) for msg in self.diagnostics for status in msg.status
+            for value in status.values if value.key == 'floating_dropped']
+        print(f'[test] 目标之外的确认航迹 {len(extras)} 个（最后 10 帧），'
+              f'floating_dropped 最近一拍 {floating_dropped[-1] if floating_dropped else None}')
+        extras_desc = [
+            (round(o.pose.position.x, 1), round(o.pose.position.y, 1),
+             round(o.size_m.x, 2), round(o.size_m.y, 2), round(o.size_m.z, 2))
+            for o in extras[:3]]
+        self.assertEqual(len(extras), 0, f'浮空碎片成了目标：{extras_desc}')
+        self.assertTrue(floating_dropped and floating_dropped[-1] >= 1,
+                        '浮空碎片门一个都没剃 —— 门没接上或合成碎片没进流水线')
 
         # ---- ⑦ 单帧耗时（CP-P5-B 第 8 条的 CI 版）----------------------
         # ⚠️ 这里的点数（约 3.5k）远小于真实的 57.6k，所以**只能抓数量级回归**，
